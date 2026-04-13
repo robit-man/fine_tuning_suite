@@ -52,6 +52,33 @@ Produces: `data/splits/r7_additive_{train,val,test}.jsonl`
 
 ### Key Datasets on HuggingFace
 
+All datasets used in this pipeline with direct links:
+
+| Dataset | HuggingFace Link | Load Command |
+|---------|-----------------|--------------|
+| Bespoke-Stratos-17k | [bespokelabs/Bespoke-Stratos-17k](https://huggingface.co/datasets/bespokelabs/Bespoke-Stratos-17k) | `load_dataset("bespokelabs/Bespoke-Stratos-17k")` |
+| Tulu 3 SFT Mixture | [allenai/tulu-3-sft-mixture](https://huggingface.co/datasets/allenai/tulu-3-sft-mixture) | `load_dataset("allenai/tulu-3-sft-mixture", streaming=True)` |
+| SlimOrca | [Open-Orca/SlimOrca](https://huggingface.co/datasets/Open-Orca/SlimOrca) | `load_dataset("Open-Orca/SlimOrca", streaming=True)` |
+| PrimeIntellect SYNTHETIC-1 | [PrimeIntellect/SYNTHETIC-1-SFT-Data](https://huggingface.co/datasets/PrimeIntellect/SYNTHETIC-1-SFT-Data) | `load_dataset("PrimeIntellect/SYNTHETIC-1-SFT-Data", streaming=True)` |
+| Mixture-of-Thoughts | [open-r1/Mixture-of-Thoughts](https://huggingface.co/datasets/open-r1/Mixture-of-Thoughts) | `load_dataset("open-r1/Mixture-of-Thoughts", "all", streaming=True)` |
+| OpenThoughts-114k | [open-thoughts/OpenThoughts-114k](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k) | `load_dataset("open-thoughts/OpenThoughts-114k", streaming=True)` |
+| Alpaca-cleaned | [yahma/alpaca-cleaned](https://huggingface.co/datasets/yahma/alpaca-cleaned) | `load_dataset("yahma/alpaca-cleaned")` |
+| GSM8K (eval) | [openai/gsm8k](https://huggingface.co/datasets/openai/gsm8k) | `load_dataset("openai/gsm8k", "main", split="test")` |
+| MMLU (eval) | [cais/mmlu](https://huggingface.co/datasets/cais/mmlu) | `load_dataset("cais/mmlu", "all", split="test")` |
+
+Additional datasets referenced in research but not directly used in training:
+
+| Dataset | Link |
+|---------|------|
+| PrimeIntellect SYNTHETIC-2-SFT-verified | [PrimeIntellect/SYNTHETIC-2-SFT-verified](https://huggingface.co/datasets/PrimeIntellect/SYNTHETIC-2-SFT-verified) |
+| INTELLECT-MATH-SFT-Data | [PrimeIntellect/INTELLECT-MATH-SFT-Data](https://huggingface.co/datasets/PrimeIntellect/INTELLECT-MATH-SFT-Data) |
+| NuminaMath-CoT | [AI-MO/NuminaMath-CoT](https://huggingface.co/datasets/AI-MO/NuminaMath-CoT) |
+| OpenHermes-2.5 | [teknium/OpenHermes-2.5](https://huggingface.co/datasets/teknium/OpenHermes-2.5) |
+| WildChat-1M | [allenai/WildChat-1M](https://huggingface.co/datasets/allenai/WildChat-1M) |
+| INTELLECT-1 Collection | [PrimeIntellect/intellect-1-dataset](https://huggingface.co/collections/PrimeIntellect/intellect-1-dataset) |
+
+Base model: [Qwen/Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B) (Apache 2.0)
+
 ```python
 from datasets import load_dataset
 

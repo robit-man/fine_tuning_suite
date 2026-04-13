@@ -106,15 +106,47 @@ This preserves all 883 tensors (427 text + 441 vision + 15 MTP) with vision byte
 | Max seq length | 5120 | 5120 |
 | Early stopping | patience=3 | patience=3 |
 
-## Key Datasets (HuggingFace)
+## Datasets (HuggingFace)
 
-| Dataset | Size | Use |
-|---------|------|-----|
-| `bespokelabs/Bespoke-Stratos-17k` | 17k | Reasoning distillation (DeepSeek-R1 traces) |
-| `allenai/tulu-3-sft-mixture` | 939k | Instruction following diversity |
-| `Open-Orca/SlimOrca` | 518k | Curated GPT-4 instructions |
-| `PrimeIntellect/SYNTHETIC-1-SFT-Data` | 894k | Verified math/code/STEM reasoning |
-| `open-r1/Mixture-of-Thoughts` | 350k | Anti-repetition reasoning traces |
+### Primary Training Data
+
+| Dataset | Size | Use | License | Link |
+|---------|------|-----|---------|------|
+| Bespoke-Stratos-17k | 17k | Reasoning distillation (DeepSeek-R1 traces, Qwen-native) | Apache 2.0 | [bespokelabs/Bespoke-Stratos-17k](https://huggingface.co/datasets/bespokelabs/Bespoke-Stratos-17k) |
+| Tulu 3 SFT Mixture | 939k | Production instruction following diversity (18 sources) | ODC-BY 1.0 | [allenai/tulu-3-sft-mixture](https://huggingface.co/datasets/allenai/tulu-3-sft-mixture) |
+| SlimOrca | 518k | Curated GPT-4 instruction data (Orca-style) | MIT | [Open-Orca/SlimOrca](https://huggingface.co/datasets/Open-Orca/SlimOrca) |
+| PrimeIntellect SYNTHETIC-1 | 894k | Verified math/code/STEM reasoning (DeepSeek-R1, filtered) | Apache 2.0 | [PrimeIntellect/SYNTHETIC-1-SFT-Data](https://huggingface.co/datasets/PrimeIntellect/SYNTHETIC-1-SFT-Data) |
+
+### Anti-Repetition & Supplementary
+
+| Dataset | Size | Use | License | Link |
+|---------|------|-----|---------|------|
+| Mixture-of-Thoughts | 350k | Verified reasoning traces (math, code, science) | Apache 2.0 | [open-r1/Mixture-of-Thoughts](https://huggingface.co/datasets/open-r1/Mixture-of-Thoughts) |
+| OpenThoughts-114k | 114k | DeepSeek-R1 curated reasoning traces | Apache 2.0 | [open-thoughts/OpenThoughts-114k](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k) |
+| Alpaca-cleaned | 52k | General instruction following (used in R5) | CC-BY-4.0 | [yahma/alpaca-cleaned](https://huggingface.co/datasets/yahma/alpaca-cleaned) |
+
+### Evaluation Benchmarks
+
+| Dataset | Use | Link |
+|---------|-----|------|
+| GSM8K | Math reasoning holdout (100 locked samples) | [openai/gsm8k](https://huggingface.co/datasets/openai/gsm8k) |
+| MMLU | Multi-subject knowledge evaluation | [cais/mmlu](https://huggingface.co/datasets/cais/mmlu) |
+
+### Other PrimeIntellect Datasets (Referenced)
+
+| Dataset | Size | Use | Link |
+|---------|------|-----|------|
+| SYNTHETIC-2-SFT-verified | 105k | Highest-quality verified (DeepSeek-R1-0528) | [PrimeIntellect/SYNTHETIC-2-SFT-verified](https://huggingface.co/datasets/PrimeIntellect/SYNTHETIC-2-SFT-verified) |
+| INTELLECT-MATH-SFT-Data | 733k | Math-specific (QwQ-generated, NuminaMath) | [PrimeIntellect/INTELLECT-MATH-SFT-Data](https://huggingface.co/datasets/PrimeIntellect/INTELLECT-MATH-SFT-Data) |
+| NuminaMath-CoT | 860k | Math with chain-of-thought (K12 to olympiad) | [AI-MO/NuminaMath-CoT](https://huggingface.co/datasets/AI-MO/NuminaMath-CoT) |
+| OpenHermes-2.5 | 1M | General instruction mix (14 sources) | — | [teknium/OpenHermes-2.5](https://huggingface.co/datasets/teknium/OpenHermes-2.5) |
+| WildChat-1M | 838k | Real ChatGPT user conversations | ODC-BY 1.0 | [allenai/WildChat-1M](https://huggingface.co/datasets/allenai/WildChat-1M) |
+
+### Base Model
+
+| Model | Link |
+|-------|------|
+| Qwen3.5-9B | [Qwen/Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B) |
 
 ## Evaluation Results
 

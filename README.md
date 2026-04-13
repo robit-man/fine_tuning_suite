@@ -70,7 +70,7 @@ python eval_repetition.py <model_name>
 
 ## Instruction Document
 
-See **[INSTRUCTIONS.md](INSTRUCTIONS.md)** for the complete step-by-step guide covering:
+See **[INSTRUCTIONS.md](training_suite/INSTRUCTIONS.md)** for the complete step-by-step guide covering:
 
 1. Environment setup
 2. Dataset selection and curation

@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Compare Models - Training Suite{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="card full-width">
+    <div class="card-header">
+      <h3>Compare Models</h3>
+      <span class="badge badge-blue">{{ models|length }} selected</span>
+    </div>
+    <div class="card-body">
+      <form method="get" class="form-grid compact">
+        <label>Models
+          <select name="id" multiple size="6">
+            {% for m in all_models %}
+              <option value="{{ m.id }}" {{ 'selected' if m.id in selected_ids }}>{{ m.name }} ({{ m.architecture or '?' }})</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Show
+          <select name="section">
+            <option value="all" {{ 'selected' if section=='all' }}>All fields</option>
+            <option value="capabilities" {{ 'selected' if section=='capabilities' }}>Capabilities only</option>
+            <option value="repair" {{ 'selected' if section=='repair' }}>Repair plan only</option>
+          </select>
+        </label>
+        <div class="form-actions" style="align-self:end">
+          <button class="primary" type="submit">Compare</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {% if models %}
+    {% for m in models %}
+    <div class="card">
+      <div class="card-header">
+        <h3><a href="{{ url_for('model_detail', model_id=m.id) }}">{{ m.name }}</a></h3>
+        <span class="status status-{{ m.status }}">{{ m.status }}</span>
+      </div>
+      <div class="card-body">
+        {% if section in ('all', 'capabilities') %}
+        <h2>Capabilities</h2>
+        <div class="compare-cap-grid">
+          {% for cap in ['vision', 'tools', 'thinking', 'completion'] %}
+          <div class="compare-cap-row">
+            <span class="metric-label">{{ cap }}</span>
+            {% if cap in m.detected_capabilities %}
+            <span class="cap cap-{{ cap }}">present</span>
+            {% elif cap in (m.target_capabilities or []) %}
+            <span class="cap" style="color:var(--accent-yellow);border-color:rgba(210,153,34,0.3);background:rgba(210,153,34,0.08)">target</span>
+            {% else %}
+            <span class="cap" style="color:var(--text-secondary)">—</span>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if section in ('all',) %}
+        <h2>Details</h2>
+        <div class="summary-grid">
+          <div><span class="metric-label">Source</span><span class="metric-value">{{ m.source_type }}</span></div>
+          <div><span class="metric-label">Architecture</span><span class="metric-value">{{ m.architecture or '-' }}</span></div>
+          <div><span class="metric-label">Quantization</span><span class="metric-value">{{ m.quantization or '-' }}</span></div>
+          <div><span class="metric-label">Context</span><span class="metric-value">{{ m.context_length or '-' }}</span></div>
+        </div>
+        {% endif %}
+
+        {% if section in ('all', 'repair') and m.repair_plan %}
+        <h2>Repair Plan</h2>
+        <div class="summary-grid">
+          <div><span class="metric-label">Mode</span><span class="metric-value">{{ m.repair_plan.mode }}</span></div>
+          <div><span class="metric-label">Missing</span><span class="metric-value">{{ m.repair_plan.delta.missing|join(', ') or 'none' }}</span></div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  {% elif all_models %}
+    <div class="card full-width"><div class="card-body"><p class="empty">Select models above and click Compare.</p></div></div>
+  {% else %}
+    <div class="card full-width"><div class="card-body"><p class="empty">No models registered yet.</p></div></div>
+  {% endif %}
+</div>
+{% endblock %}

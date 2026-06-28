@@ -512,6 +512,87 @@ def create_app(
             show_model(model, verbose=True, include_modelfile=True).to_dict()
         )
 
+    # -----------------------------------------------------------------------
+    # Compare API endpoints
+    # -----------------------------------------------------------------------
+
+    @app.get("/api/compare/models")
+    def api_compare_models() -> Response:
+        store: StateStore = app.config["STORE"]
+        ids = request.args.getlist("id")
+        all_models = store.list_models()
+        selected = [m for m in all_models if str(m.get("id")) in ids]
+        return jsonify(selected)
+
+    @app.get("/api/compare/evals")
+    def api_compare_evals() -> Response:
+        store: StateStore = app.config["STORE"]
+        ids = request.args.getlist("id")
+        all_evals = store.list_eval_runs(200)
+        selected = [e for e in all_evals if str(e.get("id")) in ids]
+        return jsonify(selected)
+
+    # -----------------------------------------------------------------------
+    # Comparison views
+    # -----------------------------------------------------------------------
+
+    @app.get("/compare/models")
+    def compare_models() -> str:
+        store: StateStore = app.config["STORE"]
+        all_models = store.list_models()
+        selected_ids = set()
+        for raw in request.args.getlist("id"):
+            try:
+                selected_ids.add(int(raw))
+            except (ValueError, TypeError):
+                pass
+        section = request.args.get("section", "all")
+        models = (
+            [m for m in all_models if m.get("id") in selected_ids]
+            if selected_ids
+            else []
+        )
+        return render_template(
+            "compare_models.html",
+            all_models=all_models,
+            models=models,
+            selected_ids=selected_ids,
+            section=section,
+        )
+
+    @app.route("/compare/evals", methods=["GET", "POST"])
+    def compare_evals() -> str:
+        store: StateStore = app.config["STORE"]
+        selected = request.args.getlist("selected") or []
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            run_id = request.form.get("run_id")
+            if action == "select" and run_id:
+                selected = list(set(selected) | {run_id})
+            elif action == "clear":
+                selected = []
+        selected_runs = []
+        all_evals = store.list_eval_runs(200)
+        for sid in selected:
+            for run in all_evals:
+                if str(run.get("id")) == sid:
+                    selected_runs.append(run)
+                    break
+        metric_keys: list[str] = []
+        if selected_runs:
+            seen = set()
+            for run in selected_runs:
+                for k in (run.get("metrics") or {}).keys():
+                    if k not in seen:
+                        seen.add(k)
+                        metric_keys.append(k)
+        return render_template(
+            "compare_evals.html",
+            eval_runs=all_evals,
+            selected=selected_runs,
+            metric_keys=metric_keys,
+        )
+
     return app
 
 

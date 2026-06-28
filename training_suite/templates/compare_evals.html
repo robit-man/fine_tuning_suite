@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Compare Evals - Training Suite{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="card full-width">
+    <div class="card-header">
+      <h3>Compare Evaluations</h3>
+      <span class="badge badge-purple">{{ eval_runs|length }} runs</span>
+    </div>
+    <div class="card-body">
+      <p style="color:var(--text-secondary);margin-bottom:12px">
+        Select eval runs to compare side-by-side.
+      </p>
+      {% if eval_runs %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:32px">#</th>
+              <th>Model</th>
+              <th>Eval</th>
+              <th>Status</th>
+              <th>Report</th>
+              <th style="width:80px"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for run in eval_runs %}
+            <tr>
+              <td>#{{ run.id }}</td>
+              <td class="mono">{{ run.model_name }}</td>
+              <td>{{ run.eval_type }}</td>
+              <td><span class="status status-{{ run.status }}">{{ run.status }}</span></td>
+              <td class="mono" style="font-size:12px;color:var(--text-secondary)">{{ run.report_path or '-' }}</td>
+              <td>
+                <form method="post" style="display:inline">
+                  <input type="hidden" name="run_id" value="{{ run.id }}">
+                  <input type="hidden" name="action" value="select">
+                  <button type="submit" class="button primary" style="font-size:11px;min-height:28px;padding:2px 10px">Compare</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="empty">No eval runs yet.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if selected %}
+  <div class="card full-width">
+    <div class="card-header">
+      <h3>Comparison: {{ selected|map(attribute='eval_type')|join(' vs ') }}</h3>
+      <form method="post" style="display:inline">
+        <input type="hidden" name="action" value="clear">
+        <button type="submit" class="button danger" style="font-size:11px;min-height:28px;padding:2px 10px">Clear</button>
+      </form>
+    </div>
+    <div class="card-body">
+      <div class="compare-table-wrap">
+        <table class="compare-table">
+          <thead>
+            <tr>
+              <th>Metric</th>
+              {% for run in selected %}
+              <th class="mono">{{ run.model_name }}<br><span style="font-weight:400;color:var(--text-secondary)">{{ run.eval_type }}</span></th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for key in metric_keys %}
+            <tr>
+              <td class="metric-label">{{ key }}</td>
+              {% for run in selected %}
+              <td class="metric-value">
+                {% set val = (run.metrics or {}).get(key) %}
+                {% if val is mapping %}
+                  {% if val.get('ok') is not none %}
+                    <span class="status status-{{ 'succeeded' if val.ok else 'failed' }}">{{ 'PASS' if val.ok else 'FAIL' }}</span>
+                  {% elif val.get('passed') is not none %}
+                    <span class="status status-{{ 'succeeded' if val.passed else 'failed' }}">{{ 'PASS' if val.passed else 'FAIL' }}</span>
+                  {% else %}
+                    <pre class="code" style="max-height:120px;font-size:11px">{{ val|pretty_json }}</pre>
+                  {% endif %}
+                {% elif val is boolean %}
+                  <span class="status status-{{ 'succeeded' if val else 'failed' }}">{{ 'true' if val else 'false' }}</span>
+                {% else %}
+                  {{ val }}
+                {% endif %}
+              </td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

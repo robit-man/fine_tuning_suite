@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
 """
-Splice tool use into Ornith models from deepreinforce-ai and upload to Ollama.
+Splice tool use into any HuggingFace GGUF model and register in Ollama.
 
-Pulls GGUF models (or downloads raw weights and converts), creates Ollama
+Pulls GGUF models via Ollama's HuggingFace integration, creates Ollama
 Modelfiles with proper tool-calling configuration (RENDERER/PARSER), and
 registers them for agentic use.
 
 Usage:
-  python tool_splice.py 9b        # Splice & upload Ornith-1.0-9B
-  python tool_splice.py 35b       # Splice & upload Ornith-1.0-35B
-  python tool_splice.py both      # Do both 9b and 35b
-  python tool_splice.py eval 9b   # Evaluate only
+  python tool_splice.py 9b                          # Ornith-1.0-9B (preset)
+  python tool_splice.py 35b                         # Ornith-1.0-35B (preset)
+  python tool_splice.py both                        # Both Ornith presets
+  python tool_splice.py --model org/model --tag my-model:tag  # Any HF GGUF
+  python tool_splice.py eval 9b                     # Evaluate only
+  python tool_splice.py --no-eval --model org/model  # Pull+create only
+
+Examples:
+  python tool_splice.py --model Qwen/Qwen3.5-9B-GGUF --tag qwen3.5-9b-tools:q4km \\
+    --gguf qwen3.5-9b-q4_k_m.gguf
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -27,13 +35,14 @@ ROOT = Path(__file__).resolve().parent
 OLLAMA_OUT = ROOT / "outputs" / "ollama"
 LOGS = ROOT / "logs"
 
-MODELS = {
+# Ornith presets for quick access
+ORNITH_PRESETS = {
     "9b": {
         "hf_repo": "deepreinforce-ai/Ornith-1.0-9B-GGUF",
         "tag": "ornith-1.0-9b-tools:q4km",
         "raw_hf": "deepreinforce-ai/Ornith-1.0-9B",
         "ollama_pull": "hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:latest",
-        "gguf_file": None,  # auto-detect from repo
+        "gguf_file": None,
         "out_name": "ornith-1.0-9b-tools-q4km",
     },
     "35b": {
@@ -45,6 +54,24 @@ MODELS = {
         "out_name": "ornith-1.0-35b-tools-q4km",
     },
 }
+
+
+def make_cfg(hf_repo: str, tag: str | None, gguf_file: str | None) -> dict:
+    """Build a model config dict from CLI arguments."""
+    repo_short = hf_repo.split("/")[-1].lower().replace(" ", "-")
+    if tag is None:
+        tag = f"{repo_short}-tools:latest"
+    if ":" not in tag:
+        tag = f"{tag}:latest"
+    out_name = tag.replace("/", "-").replace(":", "-")
+    return {
+        "hf_repo": hf_repo,
+        "tag": tag,
+        "raw_hf": hf_repo.replace("-GGUF", "").replace("-gguf", ""),
+        "ollama_pull": f"hf.co/{hf_repo}:latest",
+        "gguf_file": gguf_file,
+        "out_name": out_name,
+    }
 
 
 def log(msg: str) -> None:
@@ -178,30 +205,83 @@ def run_eval(tag: str, label: str) -> dict:
 
 
 def splice_model(size: str, do_eval: bool = True) -> bool:
-    """Full splice pipeline for a given model size."""
-    cfg = MODELS[size]
+    """Full splice pipeline for a given Ornith preset size."""
+    cfg = ORNITH_PRESETS[size]
+    return splice_model_cfg(cfg, do_eval=do_eval)
+
+
+def main() -> None:
+    if not check_ollama():
+        log("ERROR: ollama CLI not found on PATH")
+        sys.exit(1)
+
+    parser = argparse.ArgumentParser(
+        description="Splice tool use into HF GGUF models for Ollama.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument("presets", nargs="*", help="Ornith presets: 9b, 35b, both")
+    parser.add_argument("--model", help="HF repo ID (e.g. Qwen/Qwen3.5-9B-GGUF)")
+    parser.add_argument("--tag", help="Ollama tag for the output model")
+    parser.add_argument("--gguf", help="Specific GGUF filename in the HF repo")
+    parser.add_argument("--no-eval", action="store_true", help="Skip evaluation")
+    args = parser.parse_args()
+
+    do_eval = not args.no_eval
+    ok = True
+
+    # Collect configs from presets
+    configs: list[dict] = []
+    presets = args.presets or (["both"] if not args.model else [])
+    for p in presets:
+        if p in ("9b", "35b", "both"):
+            keys = ["9b", "35b"] if p == "both" else [p]
+            for k in keys:
+                configs.append(ORNITH_PRESETS[k])
+        elif p.startswith("eval"):
+            # Just eval an existing model
+            tag_key = p.replace("eval-", "").replace("eval", "9b")
+            cfg = ORNITH_PRESETS.get(tag_key, ORNITH_PRESETS["9b"])
+            run_eval(cfg["tag"], cfg["out_name"])
+        else:
+            log(f"Unknown preset: {p}. Available: 9b, 35b, both")
+
+    # Add custom model from CLI
+    if args.model:
+        configs.append(make_cfg(args.model, args.tag, args.gguf))
+
+    if not configs:
+        parser.print_help()
+        sys.exit(1)
+
+    for cfg in configs:
+        if not splice_model_cfg(cfg, do_eval=do_eval):
+            ok = False
+
+    if not ok:
+        sys.exit(1)
+
+
+def splice_model_cfg(cfg: dict, do_eval: bool = True) -> bool:
+    """Full splice pipeline from a model config dict."""
     log(f"{'=' * 60}")
-    log(f"Splicing {cfg['tag']}")
+    log(f"Splicing {cfg['tag']} from {cfg['hf_repo']}")
     log(f"{'=' * 60}")
 
-    # Step 1: Pull GGUF from HuggingFace via Ollama
     log("Step 1: Pulling GGUF model...")
     pull_tag = pull_gguf_from_hf(cfg)
     if not pull_tag:
         log("FAILED: Could not pull model.")
         return False
 
-    # Step 2: Create Modelfile with tool-calling
     log("Step 2: Creating tool-calling Modelfile...")
     modelfile = create_tools_modelfile(cfg, pull_tag)
 
-    # Step 3: Create Ollama model
     log("Step 3: Creating Ollama model...")
     if not create_ollama_model(cfg["tag"], modelfile):
         log("FAILED: Could not create Ollama model.")
         return False
 
-    # Step 4: Evaluate
     if do_eval:
         log("Step 4: Running evaluations...")
         run_eval(cfg["tag"], cfg["out_name"])
@@ -210,40 +290,6 @@ def splice_model(size: str, do_eval: bool = True) -> bool:
 
     log(f"DONE: {cfg['tag']} ready for agentic use!")
     return True
-
-
-def main() -> None:
-    if not check_ollama():
-        log("ERROR: ollama CLI not found on PATH")
-        sys.exit(1)
-
-    args = sys.argv[1:]
-    do_eval = "--no-eval" not in args
-    args = [a for a in args if a != "--no-eval"]
-
-    if not args or "both" in args:
-        sizes = ["9b", "35b"]
-    else:
-        sizes = args
-
-    ok = True
-    for size in sizes:
-        if size == "eval":
-            continue
-        if size.startswith("eval"):
-            # Just eval an existing model
-            tag_key = size.replace("eval-", "").replace("eval", "9b")
-            cfg = MODELS.get(tag_key, MODELS["9b"])
-            run_eval(cfg["tag"], cfg["out_name"])
-            continue
-        if size in MODELS:
-            if not splice_model(size, do_eval=do_eval):
-                ok = False
-        else:
-            log(f"Unknown size: {size}. Options: 9b, 35b, both")
-
-    if not ok:
-        sys.exit(1)
 
 
 if __name__ == "__main__":

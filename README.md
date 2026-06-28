@@ -1,10 +1,12 @@
-# Qwen3.5-9B Reasoning Distillation — Fine-Tuning Suite
+# Fine-Tuning Suite
 
-End-to-end pipeline for distilling reasoning capabilities into Qwen3.5-9B via LoRA SFT, with vision preservation, tool calling, and thinking mode support.
+End-to-end pipeline for LLM fine-tuning, tool splicing, GGUF export, and Ollama registry publishing.  
+Supports Qwen-based models from 9B to 397B with **vision, tools, thinking, instruction following**.
 
-Produces Ollama-ready GGUF models with full capabilities: **vision, tools, thinking, instruction following**.
+Includes a full **dark-theme Flask dashboard** with **RESTful API** for agent/MCP toolkit integration,  
+and a `tool_splice.py` pipeline for importing HuggingFace models → Ollama with tool-calling config.
 
-## Quick Start
+## Quick Start — Training Pipeline
 
 ```bash
 # 1. Install dependencies
@@ -29,29 +31,50 @@ python eval_diverse.py <model_name> --base qwen3.5:9b
 python eval_repetition.py <model_name>
 ```
 
-## Dashboard Quick Start
+## Dashboard — Dark Theme + REST API
 
-The refactored package adds a local Flask dashboard for model intake,
-capability inspection, job monitoring, Ollama packaging, and evaluation.
+The Flask dashboard provides model intake, job monitoring, GGUF export, and evaluation gates.  
+**Dark GitHub-themed UI** matching ollama.com/robit/ornith reference design.
 
 ```bash
-# Run from the repository root
-python3 -m venv .venv-dashboard
-.venv-dashboard/bin/python -m pip install flask jinja2 werkzeug httpx
-.venv-dashboard/bin/python -m training_suite db-init
-.venv-dashboard/bin/python -m training_suite ornith-seed --donor-model qwen3.5:9b
-.venv-dashboard/bin/python -m training_suite web --host 127.0.0.1 --port 7860
+cd training_suite
+pip install flask jinja2 werkzeug httpx
+python -m training_suite db-init
+python -m training_suite web --host 127.0.0.1 --port 7860
 ```
 
-Open `http://127.0.0.1:7860`. The dashboard stores lightweight state in
-`training_suite/state/suite.sqlite3`; model weights and generated artifacts
-remain under `training_suite/outputs/`, `training_suite/logs/`, and
-`training_suite/data/`.
+Open `http://127.0.0.1:7860`.
 
-The Ornith 9B test case intentionally uses the matching raw weights
-`deepreinforce-ai/Ornith-1.0-9B` with `deepreinforce-ai/Ornith-1.0-9B-GGUF`.
-The 35B MoE model is handled as a separate target and is blocked from 9B splice
-flows by architecture compatibility checks.
+### RESTful API (Agent/MCP Toolkit)
+
+All endpoints return JSON. Full list in `AGENTS.md`.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/models` | List models |
+| `POST` | `/api/models` | Intake model |
+| `GET` | `/api/models/<id>` | Model detail |
+| `GET` | `/api/jobs` | List jobs |
+| `POST` | `/api/jobs` | Start job |
+| `GET` | `/api/jobs/<id>` | Job detail + log |
+| `POST` | `/api/jobs/<id>/cancel` | Cancel job |
+| `GET` | `/api/datasets` | List datasets |
+| `POST` | `/api/datasets` | Register dataset |
+| `GET` | `/api/evals` | List eval runs |
+| `POST` | `/api/evals` | Run evaluation |
+| `GET` | `/api/actions` | Available actions |
+
+## Quick Start — Tool Splice & Ollama Upload
+
+Import any HuggingFace GGUF model into Ollama with proper tool-calling config:
+
+```bash
+python tool_splice.py 9b     # Ornith-1.0-9B → Ollama with RENDERER/PARSER
+python tool_splice.py 35b    # Ornith-1.0-35B → Ollama
+python tool_splice.py both   # Both sizes
+```
+
+Add `--no-eval` to skip evaluation. See `AGENTS.md` for full agent instructions.
 
 ## File Index
 
@@ -183,9 +206,24 @@ This preserves all 883 tensors (427 text + 441 vision + 15 MTP) with vision byte
 
 ## Models on Ollama
 
-- `robit/qwen3.5-9b-r7-research:q4km` — text model (tools + thinking)
-- `robit/qwen3.5-9b-r7-research-vision:q4km` — full vision model (vision + tools + thinking)
+### Ornith (deepreinforce-ai) — Tool-Spliced
+
+| Tag | Size | Capabilities | Pull |
+|-----|------|-------------|------|
+| `robit/ornith:9b` | 5.6 GB | tools, thinking, completion | `ollama pull robit/ornith:9b` |
+| `robit/ornith:35b` | 21 GB | tools, thinking, completion | `ollama pull robit/ornith:35b` |
+
+Both use `RENDERER qwen3.5` + `PARSER qwen3.5` for structured tool calls,  
+`num_ctx 262144`, temperature 0.6, top_p 0.95.
+
+### Legacy Qwen Fine-Tunes
+
+| Tag | Size | Capabilities |
+|-----|------|-------------|
+| `robit/qwen3.5-9b-r7-research:q4km` | 5.6 GB | tools, thinking |
+| `robit/qwen3.5-9b-r7-research-vision:q4km` | 19 GB | vision, tools, thinking |
 
 ## License
 
-Training data licenses vary by source. Model weights are derived from Qwen3.5-9B (Apache 2.0).
+Training data licenses vary by source. Model weights are derived from Qwen3.5-9B (Apache 2.0)  
+and Ornith-1.0 (deepreinforce-ai).

@@ -1,24 +1,43 @@
 {% extends "base.html" %}
 {% block title %}{{ model.name }} - Training Suite{% endblock %}
 {% block content %}
-<section class="band">
-  <div class="section-head">
-    <h1>{{ model.name }}</h1>
-    <a class="button" href="{{ url_for('export') }}?model_id={{ model.id }}">Export</a>
+<div class="container">
+  <div class="card full-width">
+    <div class="card-header">
+      <h3>{{ model.name }}</h3>
+      <a class="button primary" href="{{ url_for('export') }}?model_id={{ model.id }}">Export</a>
+    </div>
+    <div class="card-body">
+      <div class="summary-grid">
+        <div>
+          <span class="metric-label">Source</span>
+          <span class="metric-value">{{ model.source_type }}</span>
+        </div>
+        <div>
+          <span class="metric-label">Architecture</span>
+          <span class="metric-value">{{ model.architecture or "-" }}</span>
+        </div>
+        <div>
+          <span class="metric-label">Context Length</span>
+          <span class="metric-value">{{ model.context_length or "-" }}</span>
+        </div>
+        <div>
+          <span class="metric-label">Status</span>
+          <span class="metric-value"><span class="status status-{{ model.status }}">{{ model.status }}</span></span>
+        </div>
+      </div>
+
+      <h2>Capabilities</h2>
+      <div style="margin:8px 0 16px">
+        {% for cap in model.detected_capabilities %}<span class="{{ cap|cap_class }}">{{ cap }}</span>{% endfor %}
+      </div>
+
+      <h2>Repair Plan</h2>
+      <pre class="code" style="max-height:300px">{{ model.repair_plan|pretty_json }}</pre>
+
+      <h2>Metadata</h2>
+      <pre class="code" style="max-height:300px">{{ model.metadata|pretty_json }}</pre>
+    </div>
   </div>
-  <div class="summary-grid">
-    <div><span class="label">Source</span><strong>{{ model.source_type }}</strong></div>
-    <div><span class="label">Architecture</span><strong>{{ model.architecture or "-" }}</strong></div>
-    <div><span class="label">Context</span><strong>{{ model.context_length or "-" }}</strong></div>
-    <div><span class="label">Status</span><strong>{{ model.status }}</strong></div>
-  </div>
-  <h2>Capabilities</h2>
-  <p class="cap-line">
-    {% for cap in model.detected_capabilities %}<span class="{{ cap|cap_class }}">{{ cap }}</span>{% endfor %}
-  </p>
-  <h2>Repair Plan</h2>
-  <pre class="code">{{ model.repair_plan|pretty_json }}</pre>
-  <h2>Metadata</h2>
-  <pre class="code">{{ model.metadata|pretty_json }}</pre>
-</section>
+</div>
 {% endblock %}

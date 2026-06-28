@@ -1,33 +1,40 @@
 {% extends "base.html" %}
 {% block title %}Intake - Training Suite{% endblock %}
 {% block content %}
-<section class="band narrow">
-  <h1>Model Intake</h1>
-  <form method="post" class="form-grid">
-    <label>Model weights link or source
-      <input name="source" value="https://huggingface.co/deepreinforce-ai/Ornith-1.0-9B-GGUF" required>
-    </label>
-    <label>Raw weights link
-      <input name="raw_source" value="https://huggingface.co/deepreinforce-ai/Ornith-1.0-9B">
-    </label>
-    <label>Local GGUF path
-      <input name="gguf_path" placeholder="/path/to/model.gguf">
-    </label>
-    <label>Local Ollama model
-      <input name="ollama_model" placeholder="hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:latest">
-    </label>
-    <label>Donor/base model
-      <input name="donor_model" placeholder="qwen3.5:9b">
-    </label>
-    <fieldset>
-      <legend>Target capabilities</legend>
-      {% for cap in target_capabilities %}
-        <label class="check"><input type="checkbox" name="target_capabilities" value="{{ cap }}" checked> {{ cap }}</label>
-      {% endfor %}
-    </fieldset>
-    <div class="form-actions">
-      <button type="submit">Inspect</button>
+<div class="container">
+  <div class="card" style="max-width:720px">
+    <div class="card-header">
+      <h3>Model Intake</h3>
+      <span class="badge badge-green">New</span>
     </div>
-  </form>
-</section>
+    <div class="card-body">
+      <form method="post" class="form-grid">
+        <label>Model weights link or source
+          <input name="source" value="https://huggingface.co/deepreinforce-ai/Ornith-1.0-9B-GGUF" required>
+        </label>
+        <label>Raw weights link
+          <input name="raw_source" value="https://huggingface.co/deepreinforce-ai/Ornith-1.0-9B">
+        </label>
+        <label>Local GGUF path
+          <input name="gguf_path" placeholder="/path/to/model.gguf">
+        </label>
+        <label>Local Ollama model
+          <input name="ollama_model" placeholder="hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:latest">
+        </label>
+        <label>Donor/base model
+          <input name="donor_model" placeholder="qwen3.5:9b">
+        </label>
+        <fieldset>
+          <legend>Target capabilities</legend>
+          {% for cap in target_capabilities %}
+            <label class="check"><input type="checkbox" name="target_capabilities" value="{{ cap }}" checked> {{ cap }}</label>
+          {% endfor %}
+        </fieldset>
+        <div class="form-actions">
+          <button class="primary" type="submit">Inspect &amp; Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
 {% endblock %}

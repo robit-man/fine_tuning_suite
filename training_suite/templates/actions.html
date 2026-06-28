@@ -1,52 +1,66 @@
 {% extends "base.html" %}
 {% block title %}Actions - Training Suite{% endblock %}
 {% block content %}
-<section class="band narrow">
-  <h1>Actions</h1>
-  <form method="post" class="form-grid compact">
-    <label>Action
-      <select name="action">
-        {% for action in actions %}
-          <option value="{{ action.key }}">{{ action.label }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Model
-      <select name="model_id">
-        <option value="">None</option>
-        {% for model in models %}
-          <option value="{{ model.id }}">#{{ model.id }} {{ model.name }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Dataset
-      <select name="dataset_id">
-        <option value="">None</option>
-        {% for dataset in datasets %}
-          <option value="{{ dataset.id }}">#{{ dataset.id }} {{ dataset.name }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <div class="form-actions"><button type="submit">Start Job</button></div>
-  </form>
-</section>
+<div class="container">
+  <div class="card" style="max-width:720px">
+    <div class="card-header">
+      <h3>Start Action</h3>
+      <span class="badge badge-green">Run</span>
+    </div>
+    <div class="card-body">
+      <form method="post" class="form-grid">
+        <label>Action
+          <select name="action">
+            {% for action in actions %}
+              <option value="{{ action.key }}">{{ action.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Model
+          <select name="model_id">
+            <option value="">None</option>
+            {% for model in models %}
+              <option value="{{ model.id }}">#{{ model.id }} {{ model.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Dataset
+          <select name="dataset_id">
+            <option value="">None</option>
+            {% for dataset in datasets %}
+              <option value="{{ dataset.id }}">#{{ dataset.id }} {{ dataset.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div class="form-actions"><button class="primary" type="submit">Start Job</button></div>
+      </form>
+    </div>
+  </div>
 
-<section class="band">
-  <h2>Jobs</h2>
-  <table>
-    <thead><tr><th>ID</th><th>Kind</th><th>Status</th><th>Command</th></tr></thead>
-    <tbody>
-      {% for job in jobs %}
-        <tr>
-          <td><a href="{{ url_for('job_detail', job_id=job.id) }}">#{{ job.id }}</a></td>
-          <td>{{ job.kind }}</td>
-          <td><span class="status status-{{ job.status }}">{{ job.status }}</span></td>
-          <td class="mono">{{ " ".join(job.command) }}</td>
-        </tr>
-      {% else %}
-        <tr><td colspan="4" class="empty">No jobs yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
+  <div class="card full-width">
+    <div class="card-header">
+      <h3>Jobs</h3>
+      <span class="badge badge-blue">{{ jobs|length }}</span>
+    </div>
+    <div class="card-body">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>ID</th><th>Kind</th><th>Status</th><th>Command</th></tr></thead>
+          <tbody>
+            {% for job in jobs %}
+              <tr>
+                <td><a href="{{ url_for('job_detail', job_id=job.id) }}">#{{ job.id }}</a></td>
+                <td>{{ job.kind }}</td>
+                <td><span class="status status-{{ job.status }}">{{ job.status }}</span></td>
+                <td class="mono" style="font-size:12px;max-width:600px;overflow:hidden;text-overflow:ellipsis">{{ " ".join(job.command) }}</td>
+              </tr>
+            {% else %}
+              <tr><td colspan="4" class="empty">No jobs yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}

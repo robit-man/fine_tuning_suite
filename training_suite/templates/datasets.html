@@ -1,52 +1,68 @@
 {% extends "base.html" %}
 {% block title %}Datasets - Training Suite{% endblock %}
 {% block content %}
-<section class="band narrow">
-  <h1>Datasets</h1>
-  <form method="post" class="form-grid">
-    <label>Name
-      <input name="name" placeholder="r7_additive_train">
-    </label>
-    <label>Source
-      <input name="source" placeholder="local.jsonl or Hugging Face dataset id" required>
-    </label>
-    <label>Schema mapping JSON
-      <textarea name="schema_mapping" rows="4">{"messages":"messages"}</textarea>
-    </label>
-    <label>Split config JSON
-      <textarea name="split_config" rows="4">{"train":0.85,"val":0.075,"test":0.075,"seed":42}</textarea>
-    </label>
-    <label>License/source note
-      <input name="license_note" placeholder="MIT, Apache-2.0, internal, mixed">
-    </label>
-    <div class="form-actions"><button type="submit">Register Dataset</button></div>
-  </form>
-</section>
+<div class="container">
+  <div class="card">
+    <div class="card-header">
+      <h3>Register Dataset</h3>
+      <span class="badge badge-green">New</span>
+    </div>
+    <div class="card-body">
+      <form method="post" class="form-grid">
+        <label>Name
+          <input name="name" placeholder="r7_additive_train">
+        </label>
+        <label>Source
+          <input name="source" placeholder="local.jsonl or Hugging Face dataset id" required>
+        </label>
+        <label>Schema mapping JSON
+          <textarea name="schema_mapping" rows="3">{"messages":"messages"}</textarea>
+        </label>
+        <label>Split config JSON
+          <textarea name="split_config" rows="3">{"train":0.85,"val":0.075,"test":0.075,"seed":42}</textarea>
+        </label>
+        <label>License/source note
+          <input name="license_note" placeholder="MIT, Apache-2.0, internal, mixed">
+        </label>
+        <div class="form-actions"><button class="primary" type="submit">Register</button></div>
+      </form>
+    </div>
+  </div>
 
-<section class="grid-two">
-  <div class="panel">
-    <h2>Registered</h2>
-    <table>
-      <thead><tr><th>Name</th><th>Type</th><th>Source</th></tr></thead>
-      <tbody>
-        {% for dataset in datasets %}
-          <tr><td>{{ dataset.name }}</td><td>{{ dataset.source_type }}</td><td class="muted">{{ dataset.source }}</td></tr>
-        {% else %}
-          <tr><td colspan="3" class="empty">No datasets registered.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="card">
+    <div class="card-header">
+      <h3>Registered Datasets</h3>
+      <span class="badge badge-blue">{{ datasets|length }}</span>
+    </div>
+    <div class="card-body">
+      <table>
+        <thead><tr><th>Name</th><th>Type</th><th>Source</th></tr></thead>
+        <tbody>
+          {% for dataset in datasets %}
+            <tr><td>{{ dataset.name }}</td><td>{{ dataset.source_type }}</td><td class="mono" style="font-size:12px;color:var(--text-secondary)">{{ dataset.source }}</td></tr>
+          {% else %}
+            <tr><td colspan="3" class="empty">No datasets registered.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
-  <div class="panel">
-    <h2>Curation Recipes</h2>
-    <table>
-      <thead><tr><th>Key</th><th>Recipe</th><th>Script</th></tr></thead>
-      <tbody>
-        {% for key, recipe in recipes.items() %}
-          <tr><td>{{ key }}</td><td>{{ recipe.label }}</td><td class="muted">{{ recipe.script }}</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+
+  <div class="card">
+    <div class="card-header">
+      <h3>Curation Recipes</h3>
+      <span class="badge badge-purple">{{ recipes|length }}</span>
+    </div>
+    <div class="card-body">
+      <table>
+        <thead><tr><th>Key</th><th>Recipe</th><th>Script</th></tr></thead>
+        <tbody>
+          {% for key, recipe in recipes.items() %}
+            <tr><td class="mono">{{ key }}</td><td>{{ recipe.label }}</td><td class="mono" style="font-size:12px;color:var(--text-secondary)">{{ recipe.script }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
-</section>
+</div>
 {% endblock %}

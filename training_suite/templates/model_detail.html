@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ model.name }} - Training Suite{% endblock %}
+{% block content %}
+<section class="band">
+  <div class="section-head">
+    <h1>{{ model.name }}</h1>
+    <a class="button" href="{{ url_for('export') }}?model_id={{ model.id }}">Export</a>
+  </div>
+  <div class="summary-grid">
+    <div><span class="label">Source</span><strong>{{ model.source_type }}</strong></div>
+    <div><span class="label">Architecture</span><strong>{{ model.architecture or "-" }}</strong></div>
+    <div><span class="label">Context</span><strong>{{ model.context_length or "-" }}</strong></div>
+    <div><span class="label">Status</span><strong>{{ model.status }}</strong></div>
+  </div>
+  <h2>Capabilities</h2>
+  <p class="cap-line">
+    {% for cap in model.detected_capabilities %}<span class="{{ cap|cap_class }}">{{ cap }}</span>{% endfor %}
+  </p>
+  <h2>Repair Plan</h2>
+  <pre class="code">{{ model.repair_plan|pretty_json }}</pre>
+  <h2>Metadata</h2>
+  <pre class="code">{{ model.metadata|pretty_json }}</pre>
+</section>
+{% endblock %}

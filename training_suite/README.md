@@ -29,6 +29,23 @@ python eval_diverse.py <model_name> --base qwen3.5:9b
 python eval_repetition.py <model_name>
 ```
 
+## Local Dashboard
+
+```bash
+# Run from the repository root
+python3 -m venv .venv-dashboard
+.venv-dashboard/bin/python -m pip install flask jinja2 werkzeug httpx
+.venv-dashboard/bin/python -m training_suite db-init
+.venv-dashboard/bin/python -m training_suite ornith-seed --donor-model qwen3.5:9b
+.venv-dashboard/bin/python -m training_suite web --host 127.0.0.1 --port 7860
+```
+
+The dashboard exposes model intake, dataset registration, action jobs, Ollama
+export, and evaluation gates over a shared SQLite state store in
+`state/suite.sqlite3`. It does not download large model weights during intake;
+it inspects Hugging Face metadata, local GGUF files, and local `ollama show`
+output, then launches heavyweight work as monitored jobs.
+
 ## File Index
 
 ### Core Training Harness

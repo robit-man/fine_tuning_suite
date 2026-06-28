@@ -29,6 +29,30 @@ python eval_diverse.py <model_name> --base qwen3.5:9b
 python eval_repetition.py <model_name>
 ```
 
+## Dashboard Quick Start
+
+The refactored package adds a local Flask dashboard for model intake,
+capability inspection, job monitoring, Ollama packaging, and evaluation.
+
+```bash
+# Run from the repository root
+python3 -m venv .venv-dashboard
+.venv-dashboard/bin/python -m pip install flask jinja2 werkzeug httpx
+.venv-dashboard/bin/python -m training_suite db-init
+.venv-dashboard/bin/python -m training_suite ornith-seed --donor-model qwen3.5:9b
+.venv-dashboard/bin/python -m training_suite web --host 127.0.0.1 --port 7860
+```
+
+Open `http://127.0.0.1:7860`. The dashboard stores lightweight state in
+`training_suite/state/suite.sqlite3`; model weights and generated artifacts
+remain under `training_suite/outputs/`, `training_suite/logs/`, and
+`training_suite/data/`.
+
+The Ornith 9B test case intentionally uses the matching raw weights
+`deepreinforce-ai/Ornith-1.0-9B` with `deepreinforce-ai/Ornith-1.0-9B-GGUF`.
+The 35B MoE model is handled as a separate target and is blocked from 9B splice
+flows by architecture compatibility checks.
+
 ## File Index
 
 ### Core Training Harness

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Training Suite{% endblock %}
+{% block content %}
+<section class="band">
+  <div class="section-head">
+    <h1>Model Dashboard</h1>
+    <a class="button" href="{{ url_for('intake') }}">New Intake</a>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Source</th>
+          <th>Architecture</th>
+          <th>Quant</th>
+          <th>Tensors</th>
+          <th>Detected</th>
+          <th>Target</th>
+          <th>Repair</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for model in models %}
+          <tr>
+            <td><a href="{{ url_for('model_detail', model_id=model.id) }}">{{ model.name }}</a></td>
+            <td class="muted">{{ model.source_type }}</td>
+            <td>{{ model.architecture or "-" }}</td>
+            <td>{{ model.quantization or "-" }}</td>
+            <td>{{ model.tensor_count or "-" }}</td>
+            <td>{% for cap in model.detected_capabilities %}<span class="{{ cap|cap_class }}">{{ cap }}</span>{% endfor %}</td>
+            <td>{% for cap in model.target_capabilities %}<span class="cap target">{{ cap }}</span>{% endfor %}</td>
+            <td><span class="pill">{{ model.repair_plan.mode if model.repair_plan else "-" }}</span></td>
+            <td>{{ model.status }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="9" class="empty">No models registered.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="grid-two">
+  <div class="panel">
+    <h2>Recent Jobs</h2>
+    <table>
+      <thead><tr><th>ID</th><th>Kind</th><th>Status</th><th>Started</th></tr></thead>
+      <tbody>
+        {% for job in jobs %}
+          <tr>
+            <td><a href="{{ url_for('job_detail', job_id=job.id) }}">#{{ job.id }}</a></td>
+            <td>{{ job.kind }}</td>
+            <td><span class="status status-{{ job.status }}">{{ job.status }}</span></td>
+            <td class="muted">{{ job.started_at or job.created_at }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="empty">No jobs yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="panel">
+    <h2>Recent Evals</h2>
+    <table>
+      <thead><tr><th>Model</th><th>Eval</th><th>Status</th><th>Report</th></tr></thead>
+      <tbody>
+        {% for run in eval_runs %}
+          <tr>
+            <td>{{ run.model_name }}</td>
+            <td>{{ run.eval_type }}</td>
+            <td><span class="status status-{{ run.status }}">{{ run.status }}</span></td>
+            <td class="muted">{{ run.report_path or "-" }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="empty">No eval runs yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Export - Training Suite{% endblock %}
+{% block content %}
+<section class="band narrow">
+  <h1>Ollama Export</h1>
+  <form method="post" class="form-grid">
+    <label>Model row
+      <select name="model_id">
+        <option value="">None</option>
+        {% for model in models %}
+          <option value="{{ model.id }}">#{{ model.id }} {{ model.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Local model tag
+      <input name="model_name" value="ornith-1.0-9b-tools:q4km">
+    </label>
+    <label>FROM reference
+      <input name="from_ref" placeholder="./model.q4km.gguf or hf.co/repo" required>
+    </label>
+    <label>Remote model tag
+      <input name="remote_model" placeholder="user/ornith-1.0-9b-tools:q4km">
+    </label>
+    <div class="split">
+      <label>Renderer <input name="renderer" value="{{ default_renderer }}"></label>
+      <label>Parser <input name="parser" value="{{ default_parser }}"></label>
+    </div>
+    <label>Template
+      <input name="template" value="{{ '{{ .Prompt }}' }}">
+    </label>
+    <div class="split">
+      <label>num_ctx <input name="param_num_ctx" value="262144"></label>
+      <label>num_predict <input name="param_num_predict" value="16384"></label>
+    </div>
+    <div class="split">
+      <label>temperature <input name="param_temperature" value="0.6"></label>
+      <label>top_p <input name="param_top_p" value="0.95"></label>
+    </div>
+    <div class="split">
+      <label>top_k <input name="param_top_k" value="20"></label>
+      <label>stop <input name="param_stop" value="<|im_end|>"></label>
+    </div>
+    <label>Requires
+      <input name="requires" placeholder="0.24.0">
+    </label>
+    <label>License text
+      <textarea name="license_text" rows="4"></textarea>
+    </label>
+    <div class="button-row">
+      <button name="export_action" value="generate" type="submit">Generate Modelfile</button>
+      <button name="export_action" value="create" type="submit">Create Model</button>
+      <button name="export_action" value="signin" type="submit">Ollama Sign In</button>
+      <button name="export_action" value="copy-push" type="submit">Copy and Push</button>
+    </div>
+  </form>
+  {% if generated %}
+    <h2>Generated Modelfile</h2>
+    <pre class="code">{{ generated }}</pre>
+  {% endif %}
+</section>
+{% endblock %}

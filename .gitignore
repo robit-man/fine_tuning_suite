@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+.venv/
+.venv-*/
+training_suite/.venv/
+
+training_suite/state/*.sqlite3
+training_suite/state/*.sqlite3-*
+training_suite/logs/
+training_suite/outputs/
+training_suite/data/
+training_suite/vendor/

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Evaluation - Training Suite{% endblock %}
+{% block content %}
+<section class="band narrow">
+  <h1>Evaluation</h1>
+  <form method="post" class="form-grid compact">
+    <label>Model row
+      <select name="model_id">
+        <option value="">None</option>
+        {% for model in models %}
+          <option value="{{ model.id }}">{{ model.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Ollama model tag
+      <input name="model_name" required placeholder="ornith-1.0-9b-tools:q4km">
+    </label>
+    <label>Evaluation
+      <select name="eval_key">
+        <option value="capability-gate">Capability gate</option>
+        <option value="tool-smoke-sync">Tool smoke sync</option>
+        {% for spec in eval_specs %}
+          <option value="{{ spec.key }}">{{ spec.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="form-actions"><button type="submit">Run Evaluation</button></div>
+  </form>
+  {% if sync_report %}
+    <h2>Report</h2>
+    <pre class="code">{{ sync_report|pretty_json }}</pre>
+  {% endif %}
+</section>
+
+<section class="band">
+  <h2>Evaluation Runs</h2>
+  <table>
+    <thead><tr><th>ID</th><th>Model</th><th>Eval</th><th>Status</th><th>Report</th></tr></thead>
+    <tbody>
+      {% for run in eval_runs %}
+        <tr><td>#{{ run.id }}</td><td>{{ run.model_name }}</td><td>{{ run.eval_type }}</td><td>{{ run.status }}</td><td class="muted">{{ run.report_path or "-" }}</td></tr>
+      {% else %}
+        <tr><td colspan="5" class="empty">No eval runs yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -56,6 +56,25 @@ python tool_splice.py 35b    # Ornith-1.0-35B into Ollama
 python tool_splice.py both   # Both sizes
 ```
 
+## Quick Start — Ornith Vision Tensor Splice
+
+```bash
+# From the repository root
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 9b --create --test
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 35b --create --test
+
+# Retry create/test/publish without rewriting the GGUF
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 9b --reuse-existing --copy-remote --push
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 35b --reuse-existing --copy-remote --push
+```
+
+The presets splice `ornith-1.0-9b-tools:q4km` with `qwen3.5:9b` and
+`ornith-1.0-35b-tools:q4km` with `qwen3.6:35b`, then create
+`ornith-vision:9b` / `ornith-vision:35b` and publish to
+`robit/ornith-vision:9b` / `robit/ornith-vision:35b`. The generated Modelfiles
+use `RENDERER qwen3.5` and `PARSER qwen3.5` so Ollama exposes vision, tools,
+and thinking together.
+
 ## File Index
 
 | File | Purpose |
@@ -75,6 +94,7 @@ python tool_splice.py both   # Both sizes
 | `cli.py` | CLI entry point |
 | `app.py` | Training harness |
 | `splice_vision_v2.py` | Vision-splice merged model builder |
+| `ornith_vision_splice.py` | GGUF-native Ornith vision splicer and Ollama create/test/copy/push runner |
 
 ## Models on Ollama Registry
 
@@ -82,5 +102,7 @@ python tool_splice.py both   # Both sizes
 |-----|------|-------------|
 | `robit/ornith:9b` | 5.6 GB | tools, thinking, completion |
 | `robit/ornith:35b` | 21 GB | tools, thinking, completion |
+| `robit/ornith-vision:9b` | 6.7 GB | vision, tools, thinking, completion |
+| `robit/ornith-vision:35b` | 22.6 GB | vision, tools, thinking, completion |
 
 See [AGENTS.md](AGENTS.md) for full agent instructions.

@@ -76,6 +76,32 @@ python tool_splice.py both   # Both sizes
 
 Add `--no-eval` to skip evaluation. See `AGENTS.md` for full agent instructions.
 
+## Quick Start — Ornith Vision Tensor Splice
+
+Append vision capability to the local Ornith tool/thinking GGUFs by using a compatible Qwen multimodal
+GGUF as the skeleton and transplanting Ornith text tensors in-place:
+
+```bash
+# Build, register, and smoke-test the 9B vision variant first
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 9b --create --test
+
+# Then build/register/test the 35B variant
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 35b --create --test
+
+# Reuse an existing GGUF for create/test/push retries
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 9b --reuse-existing --create --test
+
+# Publish targets after local tests pass
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 9b --reuse-existing --copy-remote --push
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 35b --reuse-existing --copy-remote --push
+```
+
+Preset inputs are `ornith-1.0-9b-tools:q4km` + `qwen3.5:9b` and
+`ornith-1.0-35b-tools:q4km` + `qwen3.6:35b`. Outputs are written under
+`training_suite/outputs/ornith_vision/<size>/` with a splice report and Modelfile.
+The generated Ollama variants use `RENDERER qwen3.5` + `PARSER qwen3.5` so the
+capability gate should report `vision`, `tools`, and `thinking`.
+
 ## File Index
 
 ### Core Training Harness
@@ -112,6 +138,7 @@ Add `--no-eval` to skip evaluation. See `AGENTS.md` for full agent instructions.
 | `splice_vision_v2.py` | Splice trained text weights into base multimodal HF model (preserves vision) |
 | `splice_vision_r7.py` | R7-specific vision splice |
 | `gguf_text_surgery.py` | GGUF-level text tensor substitution (swap text in combined vision GGUF) |
+| `ornith_vision_splice.py` | GGUF-native Ornith text tensor transplant into Qwen vision donors; create/test/copy/push Ollama variants |
 | `gguf_patch_rope_sections.py` | Patch rope.dimension_sections from 3 to 4 elements |
 | `gguf_set_vision_flag.py` | Add clip.has_vision_encoder flag to GGUF |
 
@@ -212,6 +239,8 @@ This preserves all 883 tensors (427 text + 441 vision + 15 MTP) with vision byte
 |-----|------|-------------|------|
 | `robit/ornith:9b` | 5.6 GB | tools, thinking, completion | `ollama pull robit/ornith:9b` |
 | `robit/ornith:35b` | 21 GB | tools, thinking, completion | `ollama pull robit/ornith:35b` |
+| `robit/ornith-vision:9b` | 6.7 GB | vision, tools, thinking, completion | `ollama pull robit/ornith-vision:9b` |
+| `robit/ornith-vision:35b` | 22.6 GB | vision, tools, thinking, completion | `ollama pull robit/ornith-vision:35b` |
 
 Both use `RENDERER qwen3.5` + `PARSER qwen3.5` for structured tool calls,  
 `num_ctx 262144`, temperature 0.6, top_p 0.95.

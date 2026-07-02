@@ -27,6 +27,7 @@ tool splicing, GGUF export, evaluation, and Ollama registry publishing.
 | `training_suite/static/styles.css` | GitHub-dark theme CSS |
 | `training_suite/templates/` | Jinja2 card-based templates (10 files) |
 | `training_suite/tool_splice.py` | HF→Ollama import pipeline (generalized) |
+| `training_suite/ornith_vision_splice.py` | GGUF-native Ornith vision tensor splice + Ollama create/test/copy/push |
 | `training_suite/core/state.py` | SQLite state store |
 | `training_suite/core/jobs.py` | Background job runner |
 | `training_suite/models/ollama.py` | Ollama show/modelfile/create/push |
@@ -158,6 +159,126 @@ python tool_splice.py --model deepreinforce-ai/Ornith-1.0-397B-GGUF
 
 - Ollama model registered locally as `ornith-1.0-<size>b-tools:q4km`
 - Modelfile saved to `outputs/ollama/ornith-1.0-<size>b-tools-q4km/Modelfile`
+
+## Ornith Vision Tensor Splice (GGUF -> Ollama)
+
+Use `training_suite/ornith_vision_splice.py` when the local Ornith text/tool
+models already exist in Ollama and the goal is to append vision while preserving
+tools and parsed thinking. This path reads Ollama manifests directly, finds the
+model blobs, writes a combined GGUF, creates the local Ollama tag, runs smoke
+tests, and optionally copies/pushes the remote tag.
+
+### Presets
+
+| Size | Ornith source | Vision donor | Local tag | Remote tag |
+|------|---------------|--------------|-----------|------------|
+| `9b` | `ornith-1.0-9b-tools:q4km` | `qwen3.5:9b` | `ornith-vision:9b` | `robit/ornith-vision:9b` |
+| `35b` | `ornith-1.0-35b-tools:q4km` | `qwen3.6:35b` | `ornith-vision:35b` | `robit/ornith-vision:35b` |
+
+Run commands from the repository root and use the suite venv:
+
+```bash
+# Build/register/test the first model before spending time on the 35B variant.
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 9b --create --test
+
+# Build/register/test 35B after the 9B capability smoke passes.
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 35b --create --test
+
+# Build both without registering, useful for report-only verification.
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py both
+
+# Retry create/test/publish without rewriting multi-GB GGUF files.
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 9b --reuse-existing --create --test
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 35b --reuse-existing --copy-remote --push
+```
+
+### What the splicer does
+
+1. Resolves source and donor GGUF blobs from local Ollama manifests under
+   `OLLAMA_MODELS`, `/srv/ollama/models`, or `~/.ollama/models`.
+2. Copies donor metadata and donor-only tensors, including `v.*` vision tensors
+   and `mtp.*` tensors.
+3. Replaces matching text tensors (`blk.*`, `token_embd.*`, `output.*`,
+   `output_norm.*`) with Ornith tensors. The script aliases
+   `.ssm_dt.bias` source tensors to donor `.ssm_dt` names.
+4. Preserves packed quantized tensor bytes directly. For non-quantized tensors,
+   it writes the GGUFReader storage array shape, not the logical tensor shape.
+   Passing logical `raw_shape` for F16/F32 tensors will transpose metadata and
+   create a model that Ollama can show but cannot load.
+5. Allows same-element reshapes only for non-quantized tensors when a compatible
+   donor uses a singleton dimension.
+6. Patches `*.rope.dimension_sections` from 3 to 4 values when needed, sets
+   `clip.has_vision_encoder=true`, and writes `general.name`,
+   `general.basename`, and `general.finetune`.
+7. Verifies every output tensor shape against the donor before returning a
+   successful splice report.
+8. Writes a Modelfile with `RENDERER qwen3.5`, `PARSER qwen3.5`,
+   `REQUIRES 0.17.1`, 262k context, and the Qwen stop token.
+
+### Outputs and validation
+
+For each size, expect:
+
+```text
+training_suite/outputs/ornith_vision/<size>/ornith-vision-<size>.q4km.gguf
+training_suite/outputs/ornith_vision/<size>/Modelfile
+training_suite/outputs/ornith_vision/<size>/splice_report.json
+training_suite/logs/ornith_vision_test_<size>.json
+```
+
+The 9B report should show `replaced=427`, `kept=456`, `vision_tensors=441`,
+`mtp_tensors=15`, and `shape_mismatches_vs_donor=0`. The 35B report should show
+`replaced=733`, `kept=461`, `vision_tensors=441`, `mtp_tensors=20`,
+`reshaped=40`, and `shape_mismatches_vs_donor=0`.
+
+The smoke test checks all three required additions:
+
+```bash
+training_suite/.venv/bin/python - <<'PY'
+from training_suite.evals.runner import capability_gate, tool_smoke
+print(capability_gate("ornith-vision:9b", target=["vision", "tools", "thinking"]))
+print(tool_smoke("ornith-vision:9b"))
+PY
+```
+
+The script also sends a rendered `42` image through `/api/chat`. Thinking models
+can spend many tokens in the parsed `thinking` field before answer content, so
+the vision smoke uses `num_predict=512`. If a manual image probe returns empty
+content with a non-empty `thinking` field, increase `num_predict` before
+assuming vision is broken.
+
+### Publish
+
+After local tests pass:
+
+```bash
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 9b --reuse-existing --copy-remote --push
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 35b --reuse-existing --copy-remote --push
+```
+
+Equivalent manual commands:
+
+```bash
+ollama cp ornith-vision:9b robit/ornith-vision:9b
+ollama push robit/ornith-vision:9b
+ollama cp ornith-vision:35b robit/ornith-vision:35b
+ollama push robit/ornith-vision:35b
+```
+
+### Troubleshooting
+
+- Use `training_suite/.venv/bin/python`; the system `python` may not exist or
+  may not have `gguf`, `httpx`, and `Pillow`.
+- Keep outputs under `training_suite/outputs/ornith_vision/`; `/tmp` may be too
+  small for 6-23 GB GGUF artifacts.
+- If `/api/chat` returns HTTP 500 or Ollama says the model failed to load,
+  inspect `ollama show <tag> --verbose`. Transposed non-quantized shapes such as
+  `F16 [4304 1152]` for vision MLP weights mean an older/broken splicer wrote
+  logical shapes incorrectly; regenerate with the current script.
+- If `ollama push` fails, confirm `ollama signin` and registry permissions for
+  the `robit/ornith-vision` namespace.
+- Large pushes are slow on modest uplinks; the script allows up to three hours
+  per `ollama push` so the 35B tag can finish without a false timeout.
 
 ### Re-quantization (if needed)
 

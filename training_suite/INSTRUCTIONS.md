@@ -283,6 +283,91 @@ python image_probe.py my-model:q4km
 
 Tests: HELLO, 42, BANANA image recognition.
 
+## Phase 6: End-of-Session Cleanup
+
+Run this phase after every completed training, distillation, conversion, or
+Ollama publishing session. Large intermediate files are disposable only after
+the published model is proven recoverable.
+
+### Cleanup Gate
+
+Do not delete weight files until all of these checks pass:
+
+1. `ollama create` succeeded for the final local tag.
+2. The required evaluation suite passed. For multimodal agentic models, verify
+   an actual image response, structured `tool_calls`, and a populated
+   `message.thinking` field.
+3. `ollama push` succeeded for each requested remote tag.
+4. Fetch the public model page or remote registry manifest and confirm the
+   expected tag, model layer, vision projector, renderer, and parser.
+5. Record the source repository and revision, quantization, Modelfile, license,
+   remote tag, layer digests, and evaluation results.
+
+### Inventory Before Deletion
+
+Keep each run's large artifacts in a unique directory. Replace
+`RUN_NAME_HERE` with the completed run's literal directory name; do not leave
+the placeholder unchanged.
+
+```bash
+cleanup_run_dir=$(realpath -- /srv/fine_tuning_suite/training_suite/outputs/sessions/RUN_NAME_HERE)
+
+# Refuse broad or unresolved targets.
+test -n "$cleanup_run_dir"
+test "$cleanup_run_dir" != /srv/fine_tuning_suite/training_suite/outputs
+test "$cleanup_run_dir" != /srv/fine_tuning_suite/training_suite/outputs/sessions
+case "$cleanup_run_dir" in
+  /srv/fine_tuning_suite/training_suite/outputs/sessions/*) ;;
+  *) echo "Refusing cleanup outside the sessions directory" >&2; exit 1 ;;
+esac
+test -d "$cleanup_run_dir"
+
+du -sh "$cleanup_run_dir"
+find "$cleanup_run_dir" -type f \
+  \( -name '*.safetensors' -o \
+     -name '*.f16.gguf' -o \
+     -name '*.bf16.gguf' -o \
+     -name '*.partial' -o \
+     -name '*.incomplete' \
+  \) -print
+```
+
+Review that list before deleting anything. It must contain only artifacts from
+the completed run.
+
+### Remove Completed-Run Weight Artifacts
+
+Once the cleanup gate and inventory review are complete:
+
+```bash
+# Safetensors are mandatory cleanup after their distilled/published Ollama
+# replacement has been verified.
+find "$cleanup_run_dir" -type f -name '*.safetensors' -delete
+
+# Remove full-precision and interrupted conversion intermediates.
+find "$cleanup_run_dir" -type f \
+  \( -name '*.f16.gguf' -o \
+     -name '*.bf16.gguf' -o \
+     -name '*.partial' -o \
+     -name '*.incomplete' \
+  \) -delete
+
+du -sh "$cleanup_run_dir"
+```
+
+Also remove redundant quantized GGUF copies when the final model is registered
+in Ollama and published, unless a standalone GGUF is an explicit deliverable.
+Delete only the exact, reviewed files for that run.
+
+Use `ollama rm <obsolete-local-tag>` to remove unneeded local source, import,
+or staging tags after their remote replacement is verified. Never manually
+delete files from `/srv/ollama/models/blobs`, another `OLLAMA_MODELS` blob
+directory, or the Ollama manifest tree.
+
+Keep the Modelfile, source revision, license, remote tag and digests, evaluation
+reports, logs, and other compact reproducibility metadata. Record the before
+and after sizes in the session handoff.
+
 ## Lessons Learned (R3 through R7)
 
 ### What Destroys Models

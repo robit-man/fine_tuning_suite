@@ -102,6 +102,24 @@ Preset inputs are `ornith-1.0-9b-tools:q4km` + `qwen3.5:9b` and
 The generated Ollama variants use `RENDERER qwen3.5` + `PARSER qwen3.5` so the
 capability gate should report `vision`, `tools`, and `thinking`.
 
+## End-of-Session Storage Cleanup
+
+Every completed training, distillation, conversion, or publishing session must
+end with a storage cleanup. Do not delete artifacts until the final Ollama tag
+has passed its required capability tests, `ollama push` has succeeded, and the
+remote tag or registry manifest has been verified.
+
+After that gate passes, remove the completed run's local `*.safetensors`
+checkpoints and adapters, downloaded Hugging Face weight shards, temporary
+F16/BF16 GGUFs, and redundant conversion outputs. Keep the Modelfile, source
+revision, evaluation reports, licenses, and other small reproducibility
+metadata. Use `ollama rm <obsolete-local-tag>` for Ollama-managed models; never
+delete files directly from the Ollama blob or manifest store.
+
+Use a unique output directory per run and inspect its exact contents and size
+before deletion. See [End-of-Session Cleanup](training_suite/INSTRUCTIONS.md#phase-6-end-of-session-cleanup)
+for the full verification and cleanup checklist.
+
 ## File Index
 
 ### Core Training Harness
@@ -152,6 +170,7 @@ See **[INSTRUCTIONS.md](training_suite/INSTRUCTIONS.md)** for the complete step-
 4. Vision-preserving GGUF export pipeline
 5. Comprehensive capability testing
 6. Ollama registration and upload
+7. End-of-session storage cleanup
 
 ## Proven Pipeline (R7)
 

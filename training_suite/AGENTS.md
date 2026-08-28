@@ -321,6 +321,47 @@ ollama push robit/ornith:9b
 
 You must be signed in (`ollama signin`) before pushing.
 
+## Mandatory End-of-Session Storage Cleanup
+
+Any agent that downloads or produces model weights must treat cleanup as the
+final workflow phase. This prevents completed sessions from accumulating
+duplicate safetensors, full-precision exports, quantizations, and Ollama
+imports on the host.
+
+Cleanup is allowed only after all of the following are true:
+
+1. The final Ollama model was created successfully.
+2. Required capability and behavioral tests passed, including live vision,
+   tools, and thinking probes when those capabilities are expected.
+3. `ollama push` completed successfully for every requested remote tag.
+4. The public tag or remote registry manifest was fetched and verified.
+5. The source repository, revision, quantization, Modelfile, license, and test
+   results needed to reproduce the build were recorded.
+
+After the gate passes:
+
+- Remove every run-local `*.safetensors` file, including downloaded model
+  shards, merged checkpoints, and LoRA adapters that have already been
+  distilled into and verified in the published Ollama model.
+- Remove run-local F16/BF16 GGUF intermediates, partial downloads, conversion
+  shards, and redundant quantized GGUF copies. Retain a standalone final GGUF
+  only when it is an explicit deliverable or is needed for another active run.
+- Remove only cache entries and temporary directories created for the completed
+  run. Hugging Face caches and donor/base weights may be shared by other work,
+  so inspect references before deleting them.
+- Keep Modelfiles, manifests or digests, splice reports, evaluation reports,
+  logs, licenses, and compact metadata in the repository output structure.
+- Never manually remove files from `/srv/ollama/models/blobs`, another
+  `OLLAMA_MODELS` blob directory, or its manifest tree. Use
+  `ollama rm <obsolete-local-tag>` for local tags that are no longer needed.
+- Measure and report the run directory's size before and after cleanup so the
+  reclaimed space is visible in the final handoff.
+
+Use a unique, explicit directory for each run. Before any deletion, list the
+exact candidate files with `find` and inspect the directory with `du -sh`.
+Never run a recursive cleanup against the repository root, `outputs/`, a cache
+root, `$HOME`, or a path assembled from an unset variable.
+
 ## Dashboard Styling
 
 The dashboard uses a **GitHub-dark theme** (matching ollama.com/robit/ornith):

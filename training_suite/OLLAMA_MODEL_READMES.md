@@ -2,6 +2,11 @@
 
 All four model descriptions in one file. Copy each section to the corresponding model page on ollama.com.
 
+The draft for `robit/qwen3.8-27b-e03-obliterated-omni` is maintained separately
+at [`docs/omni-adapter/model-page-template.md`](../docs/omni-adapter/model-page-template.md).
+It contains mandatory placeholders and must not be published until the custom
+runtime and all modality gates pass against the final pushed tag.
+
 ---
 ---
 

@@ -37,7 +37,15 @@ def test_omni_audio_contract_and_validation_endpoints(tmp_path) -> None:
 
     router = client.get("/api/omni/router/contract")
     assert router.status_code == 200
-    assert router.get_json()["request"]["message_audio_field"] == "audios"
+    assert router.get_json()["compatibility"]["message_extensions"] == [
+        "audios",
+        "videos",
+    ]
+    assert router.get_json()["artifact"]["comprehension_tensor_view"].startswith("a.c.")
+
+    adapter = client.get("/api/omni/adapter/contract")
+    assert adapter.status_code == 200
+    assert adapter.get_json()["schema"] == "robit.ollama.omni-adapter.v1"
 
     out = io.BytesIO()
     with wave.open(out, "wb") as wav:
@@ -78,6 +86,36 @@ def test_omni_audio_contract_and_validation_endpoints(tmp_path) -> None:
         },
     )
     assert tagged.status_code == 200
+
+    adapter_validation = client.post(
+        "/api/omni/adapter/validate",
+        json={
+            "model": "robit/combined:latest",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "understand this",
+                    "audios": [
+                        {
+                            "mime_type": "audio/wav",
+                            "encoding": "base64",
+                            "data": base64.b64encode(out.getvalue()).decode("ascii"),
+                        }
+                    ],
+                }
+            ],
+            "omni": {"task": "chat"},
+            "response_modalities": ["text", "audio"],
+            "speech_mode": "auto",
+            "stream": False,
+        },
+    )
+    assert adapter_validation.status_code == 200
+    assert adapter_validation.get_json()["request"]["route"] == [
+        "comprehension",
+        "language",
+        "tts",
+    ]
 
 
 def test_omni_cascade_is_disabled_until_stages_are_configured(tmp_path, monkeypatch) -> None:

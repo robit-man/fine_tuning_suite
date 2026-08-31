@@ -45,6 +45,11 @@ component digests, routing contract, and source provenance. The suite's
 
 ## Runtime contract
 
+The versioned wire schema is `robit.ollama.omni-adapter.v1`. The artifact schema
+remains `robit.ollama-monolithic-audio.v1`; storage and API compatibility are
+versioned independently. The complete normative contract is maintained in
+`docs/omni-adapter/protocol.md`.
+
 The custom Ollama `/api/chat` extension accepts audio in a message field modeled
 after image input:
 
@@ -63,6 +68,10 @@ after image input:
       "data": "<base64 RIFF/WAVE bytes>"
     }]
   }],
+  "omni": {
+    "schema": "robit.ollama.omni-adapter.v1",
+    "task": "chat"
+  },
   "response_modalities": ["text", "audio"],
   "speech_mode": "auto",
   "stream": false
@@ -134,6 +143,10 @@ The custom build must:
    response contract;
 8. keep tool calls and thinking fields intact;
 9. validate input size, WAV format, cancellation, backpressure, and timeouts.
+10. accept bounded `videos` envelopes, normalize frames in temporal order, and
+    preserve optional video-audio alignment;
+11. implement `chat`, `transcribe`, `describe`, and `synthesize` routes under the
+    versioned wire schema.
 
 ## Consequences
 
@@ -159,3 +172,11 @@ The custom build must:
 - `speech_mode=never`, `always`, and `auto` route correctly.
 - Copy/push/pull produces an identical bundle digest or an explicitly recorded
   registry-layer digest.
+
+## Implementation references
+
+- `docs/omni-adapter/` — wire ABI, GGUF ABI, runtime patch guide, build/release
+  runbook, schemas, model-page template, and test plan;
+- `training_suite/models/omni_adapter.py` — executable v1 parser and route
+  planner;
+- `examples/omni_adapter/` — HTTP reference adapter and clients.

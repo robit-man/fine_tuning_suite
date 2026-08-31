@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/robit-man/fine_tuning_suite/docs/omni-adapter/schema/response-v1.schema.json",
+  "title": "Robit Ollama Omni Adapter v1 response",
+  "type": "object",
+  "required": ["model", "message", "done", "adapter"],
+  "properties": {
+    "model": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string"},
+    "message": {
+      "type": "object",
+      "required": ["role", "content"],
+      "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string"},
+        "thinking": {"type": "string"},
+        "tool_calls": {"type": "array"},
+        "images": {"type": "array"},
+        "audio": {"$ref": "#/$defs/audioOutput"}
+      },
+      "additionalProperties": true
+    },
+    "adapter": {
+      "type": "object",
+      "required": ["schema", "task", "route"],
+      "properties": {
+        "schema": {"const": "robit.ollama.omni-adapter.v1"},
+        "task": {
+          "type": "string",
+          "enum": ["chat", "transcribe", "describe", "synthesize"]
+        },
+        "route": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["comprehension", "language", "tts"]
+          }
+        },
+        "input_modalities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["text", "audio", "image", "video"]
+          }
+        },
+        "speech_synthesized": {"type": "boolean"},
+        "tts_skipped_reason": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "done": {"type": "boolean"},
+    "done_reason": {"type": "string"}
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "audioOutput": {
+      "type": "object",
+      "required": [
+        "type",
+        "mime_type",
+        "encoding",
+        "sample_rate_hz",
+        "channels",
+        "sample_width_bits",
+        "data"
+      ],
+      "properties": {
+        "type": {"const": "audio"},
+        "mime_type": {"const": "audio/wav"},
+        "encoding": {"const": "base64"},
+        "container": {"const": "wav"},
+        "codec": {"const": "pcm_s16le"},
+        "sample_rate_hz": {"const": 24000},
+        "channels": {"const": 1},
+        "sample_width_bits": {"const": 16},
+        "frames": {"type": "integer", "minimum": 0},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "decoded_bytes": {"type": "integer", "minimum": 44},
+        "data": {"type": "string", "minLength": 1, "contentEncoding": "base64"},
+        "transcript": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

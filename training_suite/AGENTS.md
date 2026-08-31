@@ -30,8 +30,11 @@ tool splicing, GGUF export, evaluation, and Ollama registry publishing.
 | `training_suite/ornith_vision_splice.py` | GGUF-native Ornith vision tensor splice + Ollama create/test/copy/push |
 | `training_suite/models/audio.py` | Base64 PCM WAV request/response contract and validation |
 | `training_suite/models/omni.py` | Qwen3-Omni architecture gate and component-bundle planner |
+| `training_suite/models/omni_adapter.py` | Versioned audio/image/video/TTS wire parser and route planner |
 | `training_suite/models/single_gguf.py` | One-file component packer, inspector, and custom Ollama router contract |
 | `training_suite/omni_runtime.py` | Base64 audio → llama.cpp → Ollama → TTS HTTP cascade |
+| `docs/omni-adapter/` | Adapter wire/GGUF ABIs, patch guide, release runbook, schemas, and test plan |
+| `examples/omni_adapter/` | Reference sidecar and Python/JavaScript clients |
 | `training_suite/core/state.py` | SQLite state store |
 | `training_suite/core/jobs.py` | Background job runner |
 | `training_suite/models/ollama.py` | Ollama show/modelfile/create/push |
@@ -124,6 +127,8 @@ GET  /api/actions              → [{key, label, kind, requires_model, requires_
 GET  /api/ollama/show?model=<tag>  → {name, exists, architecture, capabilities, ...}
 GET  /api/omni/audio/contract       → required WAV/base64 formats
 GET  /api/omni/router/contract      → custom Ollama audio message and routing contract
+GET  /api/omni/adapter/contract     → versioned wire-only adapter contract
+POST /api/omni/adapter/validate     → validate media and return the selected route
 POST /api/omni/audio/validate       → validate audio envelope without inference
 POST /api/omni/plan                 → native-Omni or monolithic-router compatibility plan
 POST /api/omni/cascade              → execute configured audio/language/TTS stages
@@ -159,6 +164,12 @@ custom `audios`, `response_modalities`, `speech_mode`, or `message.audio`
 fields. Never mark `audio-input`, `video-input`, or `audio-output` as live until
 the custom loader/handler and modality probes pass.
 
+The public request ABI is `robit.ollama.omni-adapter.v1`. Agents changing the
+adapter must update its executable parser, JSON schemas, protocol document,
+reference server/clients, and golden tests together. The supported routes are
+`chat`, `transcribe`, `describe`, and `synthesize`; v1 requires `stream=false`.
+Preserve Ollama tools/thinking fields and never synthesize unresolved tool calls.
+
 Run the live gate with `python -m training_suite omni-audio-smoke --audio
 fixture-16khz-mono.wav`. It must verify a 24 kHz mono PCM16 WAV response before
 publication.
@@ -176,9 +187,10 @@ the suite JSON audio envelope. Before starting either CUDA service, follow the
 host `docker gpu discover` and scoped lease protocol.
 
 The current experiment covers video understanding only. Track that as
-`video-input`; video generation is out of scope. The planner records the donor
-component and frame-interleave requirement, while the executable Flask cascade
-currently implements audio input only.
+`video-input`; video generation is out of scope. The versioned parser and
+reference sidecar handle bounded MP4/WebM envelopes and sampling policy. The
+legacy Flask cascade remains audio-only; the final custom runner must implement
+temporal decoding and audio/video alignment over the embedded graph.
 
 ## Tool Splice Pipeline (HF → Ollama)
 

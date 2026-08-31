@@ -15,7 +15,8 @@ Ollama language graph.
 | Bundle planner | Generate native-Omni or monolithic-router plans | New component |
 | Monolithic packer | Embed base, comprehension, and TTS GGUFs under isolated namespaces | New component |
 | Ollama packaging | Import one GGUF with one `FROM`; custom handler executes embedded graphs | Extended |
-| REST API | Adds audio/router contracts, validation, plan, and reference routing endpoints | Additive |
+| REST API | Adds versioned audio/image/video/TTS contracts, validation, plan, and reference routing endpoints | Additive |
+| Adapter examples | Adds reference sidecar plus Python and JavaScript clients | New component |
 | Dashboard | Displays audio-input/audio-output capability pills | Additive |
 | Evaluation | Unit gates for WAV transport and architecture compatibility | Additive |
 
@@ -30,6 +31,8 @@ Ollama language graph.
 | TTS output is not parseable | Medium | Require 24 kHz mono PCM16 WAV response envelope |
 | Disk growth from multi-component weights | High | Existing post-verification session cleanup policy applies |
 | Text-only quantizer drops embedded tensors | High | Quantize components before packing; inspect final namespaces |
+| Media prompt injection reaches tools | High | Delimit semantic observations as untrusted evidence; preserve tool schemas separately |
+| Video decoder resource exhaustion | High | Sandboxed decoder plus size, FPS, frame, pixel, duration, and timeout limits |
 
 ## Phase Gate
 

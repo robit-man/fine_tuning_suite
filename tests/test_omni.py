@@ -121,9 +121,10 @@ def test_audio_output_is_json_safe_base64_wav() -> None:
 def test_monolithic_router_contract_tags_audio_like_a_binary_message_part() -> None:
     contract = audio_router_contract()
 
-    assert contract["schema"] == BUNDLE_SCHEMA
-    assert contract["request"]["message_audio_field"] == "audios"
-    assert contract["request"]["audio_item"]["encoding"] == "base64"
+    assert contract["artifact"]["bundle_schema"] == BUNDLE_SCHEMA
+    assert contract["schema"] == "robit.ollama.omni-adapter.v1"
+    assert "audios" in contract["compatibility"]["message_extensions"]
+    assert contract["media"]["audio"]["encoding"] == "base64"
     assert contract["response"]["message"]["audio"]["sample_rate_hz"] == 24000
 
 

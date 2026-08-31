@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/robit-man/fine_tuning_suite/docs/omni-adapter/schema/request-v1.schema.json",
+  "title": "Robit Ollama Omni Adapter v1 request",
+  "type": "object",
+  "required": ["model", "messages", "stream"],
+  "properties": {
+    "model": {"type": "string", "minLength": 1},
+    "messages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/message"},
+      "contains": {
+        "type": "object",
+        "properties": {"role": {"const": "user"}},
+        "required": ["role"]
+      }
+    },
+    "stream": {"const": false},
+    "omni": {
+      "type": "object",
+      "properties": {
+        "schema": {"const": "robit.ollama.omni-adapter.v1"},
+        "task": {
+          "type": "string",
+          "enum": ["chat", "transcribe", "describe", "synthesize"],
+          "default": "chat"
+        },
+        "include_audio_from_video": {"type": "boolean", "default": true}
+      },
+      "additionalProperties": false
+    },
+    "response_modalities": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "enum": ["text", "audio"]},
+      "default": ["text"]
+    },
+    "speech_mode": {
+      "type": "string",
+      "enum": ["auto", "always", "never"],
+      "default": "auto"
+    },
+    "speech": {
+      "type": "object",
+      "properties": {
+        "voice": {"type": "string"},
+        "language": {"type": "string"},
+        "style": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "tools": {"type": "array"},
+    "think": {
+      "oneOf": [
+        {"type": "boolean"},
+        {"type": "string", "enum": ["low", "medium", "high"]}
+      ]
+    },
+    "format": {},
+    "options": {"type": "object"},
+    "keep_alive": {},
+    "logprobs": {"type": "boolean"},
+    "top_logprobs": {"type": "integer", "minimum": 0}
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "base64Envelope": {
+      "type": "object",
+      "required": ["data"],
+      "properties": {
+        "mime_type": {"type": "string"},
+        "encoding": {"const": "base64", "default": "base64"},
+        "data": {"type": "string", "minLength": 1, "contentEncoding": "base64"}
+      }
+    },
+    "audio": {
+      "allOf": [
+        {"$ref": "#/$defs/base64Envelope"},
+        {
+          "type": "object",
+          "properties": {
+            "mime_type": {
+              "type": "string",
+              "enum": ["audio/wav", "audio/wave", "audio/x-wav"],
+              "default": "audio/wav"
+            }
+          }
+        }
+      ]
+    },
+    "image": {
+      "oneOf": [
+        {"type": "string", "minLength": 1, "contentEncoding": "base64"},
+        {
+          "allOf": [
+            {"$ref": "#/$defs/base64Envelope"},
+            {
+              "type": "object",
+              "properties": {
+                "mime_type": {
+                  "type": "string",
+                  "enum": ["image/jpeg", "image/png", "image/webp"]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "video": {
+      "allOf": [
+        {"$ref": "#/$defs/base64Envelope"},
+        {
+          "type": "object",
+          "properties": {
+            "mime_type": {
+              "type": "string",
+              "enum": ["video/mp4", "video/webm"],
+              "default": "video/mp4"
+            },
+            "sampling": {
+              "type": "object",
+              "properties": {
+                "fps": {"type": "number", "exclusiveMinimum": 0, "maximum": 30},
+                "max_frames": {"type": "integer", "minimum": 1, "maximum": 1024},
+                "include_audio": {"type": "boolean"}
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "message": {
+      "type": "object",
+      "required": ["role", "content"],
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["system", "user", "assistant", "tool"]
+        },
+        "content": {"type": "string"},
+        "audios": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {"$ref": "#/$defs/audio"}
+        },
+        "images": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {"$ref": "#/$defs/image"}
+        },
+        "videos": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {"$ref": "#/$defs/video"}
+        },
+        "thinking": {"type": "string"},
+        "tool_calls": {"type": "array"},
+        "tool_name": {"type": "string"},
+        "tool_call_id": {"type": "string"}
+      },
+      "additionalProperties": true
+    }
+  }
+}

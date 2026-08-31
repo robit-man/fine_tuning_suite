@@ -44,6 +44,8 @@ Important API endpoints:
 | `GET` | `/api/ollama/show?model=<tag>` | Ollama model inspection |
 | `GET` | `/api/omni/audio/contract` | PCM WAV transport requirements |
 | `GET` | `/api/omni/router/contract` | Custom Ollama audio routing extension |
+| `GET` | `/api/omni/adapter/contract` | Versioned audio/image/video/TTS wire ABI |
+| `POST` | `/api/omni/adapter/validate` | Validate media and report the selected route |
 | `POST` | `/api/omni/audio/validate` | Validate tagged base64 audio |
 | `POST` | `/api/omni/plan` | Plan native fusion or a monolithic router |
 | `POST` | `/api/omni/cascade` | HTTP reference implementation for audio → language → TTS |
@@ -92,18 +94,21 @@ training_suite/.venv/bin/python -m training_suite omni-inspect \
 metadata into filtered views, adds component digests and the router contract,
 and writes a one-`FROM` Modelfile plus a JSON report.
 
-The custom `/api/chat` extension accepts `messages[].audios[]` entries containing
-base64 16 kHz mono PCM16 WAV. It returns generated speech under
-`message.audio` as base64 24 kHz mono PCM16 WAV. `response_modalities` and
-`speech_mode` determine whether TTS runs.
+The custom `/api/chat` extension is versioned as
+`robit.ollama.omni-adapter.v1`. It accepts `messages[].audios[]`, normal Ollama
+images, and `messages[].videos[]`; supports `chat`, `transcribe`, `describe`, and
+`synthesize`; and returns generated speech under `message.audio` as base64
+24 kHz mono PCM16 WAV. `response_modalities` and `speech_mode` determine whether
+TTS runs.
 
-The Flask cascade is a reference implementation using external HTTP stages.
-The custom Ollama loader/runner and normalized video transport are still under
-construction. Do not claim live audio/video/TTS capability from the presence of
-embedded weights alone.
+The repository includes a reference sidecar and Python/JavaScript clients under
+[`examples/omni_adapter/`](../examples/omni_adapter/). The custom Ollama
+loader/runner and production component converters are still under construction.
+Do not claim live audio/video/TTS capability from embedded weights alone.
 
-See [ADR-002](../.aiwg/architecture/adr-002-monolithic-ollama-audio-router-gguf.md)
-for the file layout, request schema, runtime hooks, and release gates.
+See the [adapter documentation](../docs/omni-adapter/README.md) and
+[ADR-002](../.aiwg/architecture/adr-002-monolithic-ollama-audio-router-gguf.md)
+for the file layout, request schema, runtime hooks, examples, and release gates.
 
 ## Main modules
 
@@ -119,6 +124,7 @@ for the file layout, request schema, runtime hooks, and release gates.
 | `models/ollama.py` | Ollama metadata and Modelfile helpers |
 | `models/audio.py` | Strict base64 PCM WAV validation |
 | `models/omni.py` | Qwen3-Omni signature and compatibility planning |
+| `models/omni_adapter.py` | Versioned media parser and route planner |
 | `models/single_gguf.py` | Monolithic packer, inspector, and router contract |
 | `omni_runtime.py` | HTTP audio-comprehension/language/TTS reference route |
 | `tool_splice.py` | Tool-enabled Ollama packaging for HF GGUFs |

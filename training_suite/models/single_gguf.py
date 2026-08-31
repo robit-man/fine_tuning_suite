@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from training_suite.models.omni_adapter import adapter_contract
+
 
 BUNDLE_SCHEMA = "robit.ollama-monolithic-audio.v1"
 BUNDLE_NAMESPACE = "robit.audio_bundle"
@@ -57,50 +59,15 @@ class SingleGGUFError(RuntimeError):
 
 
 def audio_router_contract() -> dict[str, Any]:
-    """Return the custom Ollama-compatible request, routing, and response contract."""
-    return {
-        "schema": BUNDLE_SCHEMA,
-        "request": {
-            "endpoint": "/api/chat",
-            "message_audio_field": "audios",
-            "audio_item": {
-                "mime_type": "audio/wav",
-                "encoding": "base64",
-                "sample_rate_hz": 16000,
-                "channels": 1,
-                "sample_width_bits": 16,
-                "data": "<base64 RIFF/WAVE bytes>",
-            },
-            "response_modalities": ["text", "audio"],
-            "speech_mode": "auto | always | never",
-        },
-        "routing": {
-            "audio_input": "comprehension -> language",
-            "video_input": "comprehension -> language",
-            "text_input": "language",
-            "speech_output": "language text -> tts",
-            "precedence": [
-                "speech_mode=always",
-                "speech_mode=never",
-                "response_modalities",
-                "model router decision",
-            ],
-        },
-        "response": {
-            "message": {
-                "role": "assistant",
-                "content": "<text response>",
-                "audio": {
-                    "mime_type": "audio/wav",
-                    "encoding": "base64",
-                    "sample_rate_hz": 24000,
-                    "channels": 1,
-                    "sample_width_bits": 16,
-                    "data": "<base64 RIFF/WAVE bytes>",
-                },
-            }
-        },
+    """Return the wire ABI plus its binding to the one-file GGUF layout."""
+    contract = adapter_contract()
+    contract["artifact"] = {
+        "bundle_schema": BUNDLE_SCHEMA,
+        "base_tensor_view": "unprefixed tensors",
+        "comprehension_tensor_view": "a.c.* with prefix stripped",
+        "tts_tensor_view": "s.t.* with prefix stripped",
     }
+    return contract
 
 
 def monolithic_bundle_manifest(

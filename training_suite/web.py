@@ -47,6 +47,11 @@ from training_suite.models.omni import (
     load_config_reference,
     plan_omni_bundle,
 )
+from training_suite.models.omni_adapter import (
+    OmniAdapterError,
+    adapter_contract,
+    parse_adapter_request,
+)
 from training_suite.models.single_gguf import audio_router_contract
 from training_suite.omni_runtime import (
     OmniRuntimeConfig,
@@ -393,6 +398,19 @@ def create_app(
     @app.get("/api/omni/router/contract")
     def api_omni_router_contract() -> Response:
         return jsonify(audio_router_contract())
+
+    @app.get("/api/omni/adapter/contract")
+    def api_omni_adapter_contract() -> Response:
+        return jsonify(adapter_contract())
+
+    @app.post("/api/omni/adapter/validate")
+    def api_omni_adapter_validate() -> Response:
+        data = request.get_json(force=True)
+        try:
+            parsed = parse_adapter_request(data)
+        except OmniAdapterError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "request": parsed.summary()})
 
     @app.post("/api/omni/audio/validate")
     def api_omni_audio_validate() -> Response:

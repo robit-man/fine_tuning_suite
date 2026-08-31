@@ -25,9 +25,9 @@ their gates.
 | Ollama | Create, inspect, test, copy, and publish registry tags | Implemented |
 | Control plane | Dark-theme dashboard, SQLite inventory, background jobs, logs, REST API, and model/evaluation comparisons | Implemented |
 | Monolithic multimodal GGUF | Pack a base language GGUF, a self-contained comprehension GGUF, and a text-conditioned TTS GGUF into one Ollama-importable file | Implemented packer and inspector |
-| Audio comprehension | Validate base64 PCM WAV and route it through the embedded comprehension graph before the language graph | Contract and HTTP reference runtime implemented; custom Ollama hook pending |
-| Video comprehension | Detect and plan Qwen3-Omni video-input components and preserve the temporal multimodal path | Planner implemented; video transport adapter is pending |
-| TTS | Route the language response through the embedded text-conditioned speech graph and return validated base64 PCM WAV | Contract and HTTP reference runtime implemented; custom Ollama hook pending |
+| Audio comprehension | Validate base64 PCM WAV and route it through the embedded comprehension graph before the language graph | Versioned adapter/parser and HTTP reference runtime implemented; custom Ollama hook pending |
+| Video comprehension | Validate MP4/WebM envelopes, sampling policy, and route temporal media through comprehension | Versioned adapter/parser and reference sidecar implemented; component converter and custom Ollama hook pending |
+| TTS | Route language or direct text through the embedded text-conditioned speech graph and return validated base64 PCM WAV | Versioned adapter/parser and reference sidecar implemented; component converter and custom Ollama hook pending |
 | Native Qwen3-Omni grafting | Reject unsafe tensor substitution and describe the exact component/runtime boundary | Compatibility-gated research path |
 
 “Implemented” means the suite contains executable code and tests. It does not
@@ -111,10 +111,10 @@ The experiment covers:
 - text reasoning, thinking, and tools in Qwen3.8 or Ornith;
 - TTS audio generation.
 
-Video generation is not part of the experiment. The current Flask runtime is a
-reference implementation of audio comprehension, language routing, and TTS.
-The custom Ollama loader/handler and normalized video upload/streaming adapter
-remain to be implemented.
+Video generation is not part of the experiment. The versioned adapter parser
+and reference sidecar implement turn-based audio/image/video input, semantic
+routing, and tagged TTS output. The custom Ollama loader/handler and production
+component converters remain to be implemented.
 
 ## Requirements
 
@@ -393,6 +393,13 @@ curl -s http://127.0.0.1:7860/api/omni/audio/validate \
 The full extension contract is available at
 `GET /api/omni/router/contract`.
 
+The stable wire schema is `robit.ollama.omni-adapter.v1`. It also defines
+`omni.task=chat|transcribe|describe|synthesize`, validated image/video
+envelopes, preservation of normal Ollama tools/thinking fields, and the rule
+that TTS is deferred while unresolved tool calls are present. See the complete
+[adapter documentation](docs/omni-adapter/README.md) and
+[runnable clients/server](examples/omni_adapter/README.md).
+
 #### HTTP reference runtime
 
 Before the custom Ollama loader/runner is complete, the Flask endpoint exercises
@@ -431,11 +438,12 @@ The planner detects the donor's `video-input` path and records a
 preserve frame order and temporal metadata, and return semantic text to the
 same Ollama language stage used by audio.
 
-The repository does not yet expose a Flask video upload or streaming endpoint.
-Until that adapter exists, the embedded comprehension graph can be tested
-through its source runtime or video can be normalized to sampled frames for a
-compatible vision endpoint. Do not advertise the monolithic tag as live video
-input solely because it contains a video-capable graph.
+The adapter v1 parser accepts tagged MP4/WebM, validates container signatures,
+and bounds FPS/frame sampling. The reference sidecar translates that envelope
+to a multimodal comprehension service. The final custom Ollama runner must
+perform bounded decoding, preserve frame timestamps, and keep video audio
+aligned. Do not advertise the monolithic tag as live video input until its
+embedded graph passes those end-to-end probes.
 
 ### 6. Import and publish the monolithic GGUF to Ollama
 
@@ -527,6 +535,8 @@ exports, evaluations, and comparisons. State is stored in
 | `GET` | `/api/compare/evals?id=1&id=2` | Compare evaluation records |
 | `GET` | `/api/omni/audio/contract` | Read the audio contract |
 | `GET` | `/api/omni/router/contract` | Read the custom Ollama request/routing/response contract |
+| `GET` | `/api/omni/adapter/contract` | Read the versioned wire-only adapter contract |
+| `POST` | `/api/omni/adapter/validate` | Validate an ASR/TTS/image/video request and report its route |
 | `POST` | `/api/omni/audio/validate` | Validate audio without inference |
 | `POST` | `/api/omni/plan` | Generate an Omni compatibility plan |
 | `POST` | `/api/omni/cascade` | Run the configured audio/Ollama/TTS cascade |
@@ -632,6 +642,10 @@ The full checklist is in
 | `TRAINING_SUITE_OMNI_ASR_MODEL` | `qwen3-omni` | Model name sent to that endpoint |
 | `TRAINING_SUITE_OMNI_LANGUAGE_MODEL` | unset | Ollama Qwen3.8/Ornith language tag |
 | `TRAINING_SUITE_OMNI_TTS_URL` | unset | Speech-synthesis endpoint |
+| `OMNI_COMPREHENSION_URL` | `http://127.0.0.1:8901/v1/chat/completions` | Example adapter comprehension endpoint |
+| `OMNI_COMPREHENSION_MODEL` | `Qwen/Qwen3-Omni-30B-A3B-Instruct` | Example adapter comprehension model |
+| `OMNI_LANGUAGE_URL` | `http://127.0.0.1:11434` | Example adapter Ollama base URL |
+| `OMNI_TTS_URL` | `http://127.0.0.1:8091/synthesize` | Example adapter TTS endpoint |
 | `HF_TOKEN` | unset | Hugging Face upload credential |
 
 ## Repository map
@@ -649,8 +663,11 @@ The full checklist is in
 | `training_suite/models/ollama.py` | Ollama inspection and Modelfile helpers |
 | `training_suite/models/audio.py` | Strict base64 PCM WAV contract |
 | `training_suite/models/omni.py` | Qwen3-Omni signatures, compatibility gate, and bundle writer |
+| `training_suite/models/omni_adapter.py` | Versioned audio/image/video/TTS request parser and route planner |
 | `training_suite/models/single_gguf.py` | Monolithic GGUF schema, packer, inspector, and custom audio contract |
 | `training_suite/omni_runtime.py` | Audio-understanding → Ollama → TTS HTTP cascade |
+| `docs/omni-adapter/` | Wire ABI, GGUF ABI, runtime patch guide, release runbook, schemas, and tests |
+| `examples/omni_adapter/` | Runnable reference server plus Python and JavaScript clients |
 | `training_suite/tool_splice.py` | Tool-enabled Ollama packaging for HF GGUFs |
 | `training_suite/ornith_vision_splice.py` | Shape-gated Ornith vision transplant and publish workflow |
 | `training_suite/gguf_text_surgery.py` | GGUF text-tensor substitution |
@@ -667,6 +684,8 @@ Additional documentation:
 - [Ollama registry README content](training_suite/OLLAMA_MODEL_READMES.md)
 - [Qwen3-Omni bundle ADR](.aiwg/architecture/adr-001-qwen3-omni-audio-bundles.md)
 - [Monolithic Ollama audio-router GGUF ADR](.aiwg/architecture/adr-002-monolithic-ollama-audio-router-gguf.md)
+- [Omni adapter documentation](docs/omni-adapter/README.md)
+- [Omni adapter examples](examples/omni_adapter/README.md)
 
 ## Tests
 
@@ -689,9 +708,9 @@ respective services and fixtures.
 - The monolithic file requires a custom Ollama compatibility/runner hook for
   component views, routing, and audio fields. Stock Ollama does not gain those
   behaviors merely by importing the file.
-- The HTTP reference runtime currently implements audio input; the custom
-  monolithic runner and video transport/temporal normalization remain follow-up
-  work.
+- The versioned parser/reference sidecar implements audio/image/video envelopes
+  and all four routes, but the custom monolithic runner, production component
+  converters, and in-process video temporal normalization remain follow-up work.
 - Model and dataset licenses vary. Review every source license and acceptable-use
   condition before training, merging, or publishing derived artifacts.
 

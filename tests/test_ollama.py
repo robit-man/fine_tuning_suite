@@ -48,3 +48,16 @@ def test_generate_modelfile_contains_qwen_renderer_and_parser() -> None:
     assert "PARSER qwen3.5" in text
     assert "PARAMETER num_ctx 262144" in text
     assert 'PARAMETER stop "<|im_end|>"' in text
+
+
+def test_generate_modelfile_supports_separate_multimodal_projector() -> None:
+    text = generate_modelfile(
+        ModelfileSpec(
+            from_ref="./model.gguf",
+            additional_from=["./mmproj.gguf"],
+        )
+    )
+
+    assert text.count("FROM ") == 2
+    assert "FROM ./model.gguf" in text
+    assert "FROM ./mmproj.gguf" in text

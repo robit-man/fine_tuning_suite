@@ -42,6 +42,15 @@ class SuitePaths:
 PATHS = SuitePaths()
 
 DEFAULT_TARGET_CAPABILITIES = ("completion", "vision", "tools", "thinking")
+TARGET_CAPABILITIES = (
+    "completion",
+    "vision",
+    "audio-input",
+    "audio-output",
+    "video-input",
+    "tools",
+    "thinking",
+)
 DEFAULT_OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 DEFAULT_RENDERER = os.environ.get("TRAINING_SUITE_OLLAMA_RENDERER", "qwen3.5")
 DEFAULT_PARSER = os.environ.get("TRAINING_SUITE_OLLAMA_PARSER", "qwen3.5")

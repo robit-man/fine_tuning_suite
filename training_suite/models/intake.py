@@ -10,6 +10,7 @@ import httpx
 from training_suite.core.config import DEFAULT_TARGET_CAPABILITIES
 from training_suite.models.gguf import compatible_for_splice, inspect_gguf
 from training_suite.models.ollama import capability_delta, show_model
+from training_suite.models.omni import architecture_signature
 
 
 HF_MODEL_RE = re.compile(r"huggingface\.co/([^/\s]+/[^/\s?#]+)")
@@ -106,16 +107,20 @@ def _model_name_from_source(source: str, ollama_model: str | None = None) -> str
 def _config_signature(config: dict[str, Any] | None) -> dict[str, Any]:
     if not config:
         return {}
-    text_config = config.get("text_config") or {}
-    vision_config = config.get("vision_config") or {}
+    signature = architecture_signature(config)
     return {
-        "architecture": config.get("model_type") or (config.get("architectures") or [None])[0],
-        "hidden_size": config.get("hidden_size"),
-        "text_hidden_size": text_config.get("hidden_size"),
-        "num_hidden_layers": text_config.get("num_hidden_layers"),
-        "vocab_size": text_config.get("vocab_size"),
-        "vision_out_hidden_size": vision_config.get("out_hidden_size"),
-        "has_vision_config": bool(vision_config),
+        "architecture": signature.model_type or signature.architecture,
+        "hidden_size": signature.hidden_size,
+        "text_hidden_size": signature.hidden_size,
+        "num_hidden_layers": signature.num_hidden_layers,
+        "vocab_size": signature.vocab_size,
+        "vision_out_hidden_size": signature.vision_output_size,
+        "audio_out_hidden_size": signature.audio_output_size,
+        "has_audio_encoder": signature.has_audio_encoder,
+        "has_talker": signature.has_talker,
+        "has_code2wav": signature.has_code2wav,
+        "has_video_input": signature.has_video_input,
+        "has_vision_config": signature.has_vision_encoder,
         "transformers_version": config.get("transformers_version"),
     }
 
@@ -144,6 +149,16 @@ def build_repair_plan(
             actions.append("reconstruct multimodal GGUF from matching raw weights")
         else:
             actions.append("provide matching raw multimodal weights before vision splice")
+    if "audio-input" in delta["missing"]:
+        actions.append(
+            "pack a self-contained Qwen3-Omni/Qwen3-ASR comprehension GGUF under a.c.* or train a compatible bridge"
+        )
+    if "audio-output" in delta["missing"]:
+        actions.append(
+            "pack an independently text-conditioned TTS GGUF under s.t.* and return tagged base64 PCM WAV"
+        )
+    if "video-input" in delta["missing"]:
+        actions.append("preserve the Omni vision/video projector and frame-interleave contract")
 
     if raw_signature and gguf_signature:
         ok, errors = compatible_for_splice(raw_signature, gguf_signature)
@@ -162,6 +177,8 @@ def build_repair_plan(
         mode = "package-only"
     elif gguf_has_vision:
         mode = "metadata-patch"
+    elif {"audio-input", "audio-output"} & set(delta["missing"]):
+        mode = "monolithic-router"
     elif raw_source:
         mode = "vision-splice"
 
@@ -222,6 +239,19 @@ def inspect_intake(
                 detected.append("thinking")
             if "image-text-to-text" in info.get("tags", []) or (info.get("config") or {}).get("vision_config"):
                 detected.append("vision")
+            source_config = hf_raw_json(repo_id, "config.json")
+            if source_config:
+                signature = architecture_signature(source_config)
+                metadata["config_signature"] = signature.to_dict()
+                architecture = signature.model_type or architecture
+                if signature.has_vision_encoder:
+                    detected.append("vision")
+                if signature.has_audio_encoder:
+                    detected.append("audio-input")
+                if signature.has_talker and signature.has_code2wav:
+                    detected.append("audio-output")
+                if signature.has_video_input:
+                    detected.append("video-input")
             metadata["hf_gguf"] = gguf
             if gguf.get("total"):
                 tensor_count = tensor_count or None

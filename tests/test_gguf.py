@@ -42,3 +42,28 @@ def test_splice_compatibility_blocks_architecture_mismatch() -> None:
     assert ok is False
     assert "architecture" in errors[0]
     assert any("text_hidden_size" in item for item in errors)
+
+
+def test_infer_audio_input_and_output_from_metadata_and_tensors() -> None:
+    capabilities, flags = infer_capabilities(
+        architecture="qwen3omni",
+        metadata={
+            "general.architecture": "qwen3omni",
+            "qwen3omni.audio_token_id": 151675,
+            "qwen3omni.video_token_id": 151656,
+            "qwen3omni.talker.block_count": 20,
+            "qwen3omni.code2wav.block_count": 8,
+        },
+        tensor_names=[
+            "blk.0.attn_q.weight",
+            "vision.blk.0.attn_q.weight",
+            "audio_encoder.blk.0.attn_q.weight",
+            "talker.blk.0.attn_q.weight",
+            "code2wav.blk.0.attn_q.weight",
+        ],
+    )
+
+    assert "audio-input" in capabilities
+    assert "audio-output" in capabilities
+    assert "video-input" in capabilities
+    assert "missing audio tensor/metadata counterpart" not in flags

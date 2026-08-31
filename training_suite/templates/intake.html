@@ -27,7 +27,7 @@
         <fieldset>
           <legend>Target capabilities</legend>
           {% for cap in target_capabilities %}
-            <label class="check"><input type="checkbox" name="target_capabilities" value="{{ cap }}" checked> {{ cap }}</label>
+            <label class="check"><input type="checkbox" name="target_capabilities" value="{{ cap }}" {{ 'checked' if cap in default_target_capabilities }}> {{ cap }}</label>
           {% endfor %}
         </fieldset>
         <div class="form-actions">

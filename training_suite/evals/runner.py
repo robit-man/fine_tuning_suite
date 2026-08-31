@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from training_suite.core.config import DEFAULT_OLLAMA_URL, PACKAGE_ROOT, PATHS, slugify
+from training_suite.models.audio import AudioContractError, decode_wav_payload, validate_audio_input
 from training_suite.models.ollama import show_model
 
 
@@ -125,6 +126,63 @@ def capability_gate(model_name: str, target: list[str] | None = None) -> dict[st
         "model": shown.to_dict(),
         "missing": missing,
     }
+
+
+def omni_audio_smoke(
+    audio_path: Path,
+    *,
+    endpoint: str = "http://127.0.0.1:7860/api/omni/cascade",
+    prompt: str = "Transcribe this audio and answer naturally.",
+    timeout: float = 900,
+) -> dict[str, Any]:
+    """Exercise the configured cascade and validate its returned WAV envelope."""
+    started = time.time()
+    try:
+        import base64
+
+        encoded = base64.b64encode(audio_path.read_bytes()).decode("ascii")
+        source = validate_audio_input(encoded)
+        response = httpx.post(
+            endpoint,
+            json={
+                "prompt": prompt,
+                "audio": {
+                    "mime_type": "audio/wav",
+                    "encoding": "base64",
+                    "data": encoded,
+                },
+            },
+            timeout=timeout,
+        )
+        if response.status_code != 200:
+            return {
+                "ok": False,
+                "status_code": response.status_code,
+                "error": response.text[:1000],
+                "elapsed_s": round(time.time() - started, 2),
+            }
+        data = response.json()
+        output = decode_wav_payload(data.get("audio") or {})
+        output_ok = (
+            output.sample_rate_hz == 24000
+            and output.channels == 1
+            and output.sample_width_bits == 16
+        )
+        return {
+            "ok": output_ok,
+            "status_code": response.status_code,
+            "input": source.metadata(),
+            "output": output.metadata(),
+            "audio_understanding": data.get("audio_understanding"),
+            "message": data.get("message"),
+            "elapsed_s": round(time.time() - started, 2),
+        }
+    except (OSError, ValueError, httpx.HTTPError, AudioContractError) as exc:
+        return {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "elapsed_s": round(time.time() - started, 2),
+        }
 
 
 def write_eval_report(path: Path, report: dict[str, Any]) -> Path:

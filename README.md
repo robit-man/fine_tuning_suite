@@ -1,277 +1,704 @@
 # Fine-Tuning Suite
 
-End-to-end pipeline for LLM fine-tuning, tool splicing, GGUF export, and Ollama registry publishing.  
-Supports Qwen-based models from 9B to 397B with **vision, tools, thinking, instruction following**.
+Fine-Tuning Suite is a local-first toolkit for adapting, inspecting, evaluating,
+converting, and publishing Qwen-family language models. It combines a
+reproducible LoRA distillation harness with GGUF surgery, Ollama packaging,
+capability verification, a Flask control plane, and compatibility-gated
+multimodal experiments.
 
-Includes a full **dark-theme Flask dashboard** with **RESTful API** for agent/MCP toolkit integration,  
-and a `tool_splice.py` pipeline for importing HuggingFace models → Ollama with tool-calling config.
+The project is intentionally conservative about capability claims. A model is
+not considered to support vision, tools, thinking, audio, video comprehension,
+or speech output until the relevant artifact and live runtime path have passed
+their gates.
 
-## Quick Start — Training Pipeline
+## What the suite provides
+
+| Area | Capability | Maturity |
+|---|---|---|
+| Training | Qwen3.5-9B LoRA SFT with completion-only loss, DDP, validation, early stopping, and configurable training rounds | Implemented |
+| Data | Deterministic train/validation/test splits; R5, R6, and R7 curation recipes; anti-repetition data generation | Implemented |
+| Evaluation | Frozen baseline/tuned deltas, GSM8K, MMLU, diverse behavior, repetition, image, structured-tool, and adversarial-tool probes | Implemented |
+| Intake | Inspect Hugging Face repositories, local GGUF files, and Ollama models; compare detected and requested capabilities | Implemented |
+| Tools and thinking | Generate Ollama Modelfiles with Qwen renderers/parsers and verify structured tool calls | Implemented |
+| Vision | Preserve a compatible vision tower during LoRA export or transplant text tensors into a shape-compatible multimodal GGUF | Implemented for supported Qwen/Ornith layouts |
+| GGUF | Inspect metadata/tensors, patch vision flags and RoPE sections, substitute text tensors, convert, and quantize | Implemented |
+| Ollama | Create, inspect, test, copy, and publish registry tags | Implemented |
+| Control plane | Dark-theme dashboard, SQLite inventory, background jobs, logs, REST API, and model/evaluation comparisons | Implemented |
+| Monolithic multimodal GGUF | Pack a base language GGUF, a self-contained comprehension GGUF, and a text-conditioned TTS GGUF into one Ollama-importable file | Implemented packer and inspector |
+| Audio comprehension | Validate base64 PCM WAV and route it through the embedded comprehension graph before the language graph | Contract and HTTP reference runtime implemented; custom Ollama hook pending |
+| Video comprehension | Detect and plan Qwen3-Omni video-input components and preserve the temporal multimodal path | Planner implemented; video transport adapter is pending |
+| TTS | Route the language response through the embedded text-conditioned speech graph and return validated base64 PCM WAV | Contract and HTTP reference runtime implemented; custom Ollama hook pending |
+| Native Qwen3-Omni grafting | Reject unsafe tensor substitution and describe the exact component/runtime boundary | Compatibility-gated research path |
+
+“Implemented” means the suite contains executable code and tests. It does not
+mean every external model server is installed or running on a given host.
+
+## Architecture
+
+The repository has two related execution surfaces:
+
+```text
+                                    ┌──────────────────────────────┐
+Hugging Face / GGUF / Ollama ──────▶│ Intake + compatibility gate │
+                                    └──────────────┬───────────────┘
+                                                   │
+                      ┌────────────────────────────┼──────────────────────────┐
+                      ▼                            ▼                          ▼
+             LoRA training/evals          GGUF + Modelfile           Omni bundle plan
+                      │                            │                          │
+                      └───────────────┬────────────┘                          │
+                                      ▼                                       ▼
+                             Ollama create/push                 monolithic GGUF + custom router
+
+Dashboard / REST API ──▶ SQLite state ──▶ background job runner ──▶ logs and reports
+```
+
+For combined audio/video comprehension and spoken output, the target deployment
+is one physical GGUF containing multiple namespaced execution graphs:
+
+```text
+one GGUF
+  ├── unprefixed tensors ──▶ Qwen3.8 or Ornith language graph
+  ├── a.c.* tensors ───────▶ audio/video comprehension graph
+  └── s.t.* tensors ───────▶ text-conditioned TTS graph
+             │
+             ▼
+      custom Ollama router
+        audio/video ──▶ comprehension ──▶ semantic text ──▶ language
+        language text ──▶ optional TTS ──▶ tagged 24 kHz PCM16 WAV
+```
+
+The result is one `.gguf` file and one Ollama model layer. It is still a
+multi-graph runtime internally: a custom Ollama compatibility/runner hook is
+responsible for filtered component views, routing, and audio I/O.
+
+## Design boundaries
+
+### GGUF does not define the execution graph
+
+GGUF can store all tensors and metadata in one file. A loader still needs code
+for each encoder, projector, language trunk, speech model, codec, and scheduling
+relationship. The suite therefore provides a monolithic container format and
+requires a custom Ollama handler to execute it.
+
+### Vision splicing works only when interfaces match
+
+The existing vision pipeline uses a supported donor architecture and verifies
+tensor names, shapes, counts, and projector width before producing a combined
+GGUF. It preserves quantized bytes where possible and blocks incompatible
+substitutions.
+
+### Qwen3-Omni and Qwen3.8/Ornith are not direct tensor substitutes
+
+The current Qwen3-Omni donor uses a different Thinker architecture, hidden
+width, layer count, vocabulary, and Talker conditioning interface from the
+Qwen3.8 and Ornith configurations targeted by this repository. The
+`omni-plan` gate therefore selects a `monolithic-router` layout for those
+combinations instead of claiming native hidden-state fusion.
+
+A true native graft would require training alignment components—for example,
+an audio/vision sequence bridge from the donor encoder width into the target
+language width—plus special-token alignment, multimodal instruction data, and
+runtime support for the new graph. Padding, reshaping, or copying incompatible
+tensors is not a valid substitute for that training.
+
+### The current multimodal scope
+
+The experiment covers:
+
+- audio understanding;
+- video understanding;
+- text reasoning, thinking, and tools in Qwen3.8 or Ornith;
+- TTS audio generation.
+
+Video generation is not part of the experiment. The current Flask runtime is a
+reference implementation of audio comprehension, language routing, and TTS.
+The custom Ollama loader/handler and normalized video upload/streaming adapter
+remain to be implemented.
+
+## Requirements
+
+- Linux with Python 3.12 recommended;
+- `uv` recommended, or standard-library `venv` and `pip`;
+- CUDA-capable PyTorch and NVIDIA GPUs for training or GPU inference;
+- Ollama for local model creation, capability inspection, and publishing;
+- llama.cpp conversion/quantization tools for GGUF export workflows;
+- enough disk space for source safetensors, merged weights, full-precision
+  GGUF intermediates, quantized GGUFs, and Ollama blobs;
+- Hugging Face and Ollama credentials only when downloading restricted assets
+  or publishing.
+
+Model training and large conversion jobs can temporarily require several times
+the final quantized model size. Review the cleanup policy before starting.
+
+## Installation
+
+Run commands from the repository root:
 
 ```bash
-# 1. Install dependencies
-python app.py bootstrap
-
-# 2. Curate training data (R7 — research-backed, additive approach)
-python curate_r7.py
-
-# 3. Train with LoRA SFT
-DISTILL_TRAIN_FILE=r7_additive_train \
-DISTILL_VAL_FILE=r7_additive_val \
-DISTILL_OUTPUT_SUFFIX=.r7-additive \
-DISTILL_LR=1e-4 DISTILL_LORA_R=32 DISTILL_LORA_ALPHA=64 \
-DISTILL_EPOCHS=1 DISTILL_PATIENCE=3 \
-python app.py train
-
-# 4. Export to vision-capable GGUF (proven pipeline)
-python splice_and_export.sh  # see INSTRUCTIONS.md for manual steps
-
-# 5. Evaluate
-python eval_diverse.py <model_name> --base qwen3.5:9b
-python eval_repetition.py <model_name>
+python3 training_suite/app.py bootstrap
+training_suite/.venv/bin/python -m training_suite db-init
 ```
 
-## Dashboard — Dark Theme + REST API
+`bootstrap` creates `training_suite/.venv`, installs
+`training_suite/requirements.txt`, records the requirements hash, and reuses the
+environment until the dependency file changes.
 
-The Flask dashboard provides model intake, job monitoring, GGUF export, and evaluation gates.  
-**Dark GitHub-themed UI** matching ollama.com/robit/ornith reference design.
+To start the dashboard:
 
 ```bash
-cd training_suite
-pip install flask jinja2 werkzeug httpx
-python -m training_suite db-init
-python -m training_suite web --host 127.0.0.1 --port 7860
+training_suite/.venv/bin/python -m training_suite web \
+  --host 127.0.0.1 \
+  --port 7860
 ```
 
-Open `http://127.0.0.1:7860`.
+Open `http://127.0.0.1:7860`. Binding to a non-loopback address exposes a job
+control API; place authentication and a trusted reverse proxy in front of it.
 
-### RESTful API (Agent/MCP Toolkit)
+## Primary workflows
 
-All endpoints return JSON. Full list in `AGENTS.md`.
+### 1. Reasoning distillation
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/models` | List models |
-| `POST` | `/api/models` | Intake model |
-| `GET` | `/api/models/<id>` | Model detail |
-| `GET` | `/api/jobs` | List jobs |
-| `POST` | `/api/jobs` | Start job |
-| `GET` | `/api/jobs/<id>` | Job detail + log |
-| `POST` | `/api/jobs/<id>/cancel` | Cancel job |
-| `GET` | `/api/datasets` | List datasets |
-| `POST` | `/api/datasets` | Register dataset |
-| `GET` | `/api/evals` | List eval runs |
-| `POST` | `/api/evals` | Run evaluation |
-| `GET` | `/api/actions` | Available actions |
-
-## Quick Start — Tool Splice & Ollama Upload
-
-Import any HuggingFace GGUF model into Ollama with proper tool-calling config:
+The harness freezes evaluation splits before training, evaluates the untouched
+base model, trains a LoRA adapter, compares tuned results against the same
+samples, merges the adapter, exports GGUF, and creates an Ollama model.
 
 ```bash
-python tool_splice.py 9b     # Ornith-1.0-9B → Ollama with RENDERER/PARSER
-python tool_splice.py 35b    # Ornith-1.0-35B → Ollama
-python tool_splice.py both   # Both sizes
+python3 training_suite/app.py prepare
+python3 training_suite/app.py baseline
+python3 training_suite/app.py train
+python3 training_suite/app.py eval
+python3 training_suite/app.py export
 ```
 
-Add `--no-eval` to skip evaluation. See `AGENTS.md` for full agent instructions.
-
-## Quick Start — Ornith Vision Tensor Splice
-
-Append vision capability to the local Ornith tool/thinking GGUFs by using a compatible Qwen multimodal
-GGUF as the skeleton and transplanting Ornith text tensors in-place:
+`all` runs the local pipeline through export; upload remains opt-in:
 
 ```bash
-# Build, register, and smoke-test the 9B vision variant first
-training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 9b --create --test
-
-# Then build/register/test the 35B variant
-training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 35b --create --test
-
-# Reuse an existing GGUF for create/test/push retries
-training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 9b --reuse-existing --create --test
-
-# Publish targets after local tests pass
-training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 9b --reuse-existing --copy-remote --push
-training_suite/.venv/bin/python training_suite/ornith_vision_splice.py 35b --reuse-existing --copy-remote --push
+python3 training_suite/app.py all
+HF_TOKEN=... python3 training_suite/app.py upload
 ```
 
-Preset inputs are `ornith-1.0-9b-tools:q4km` + `qwen3.5:9b` and
-`ornith-1.0-35b-tools:q4km` + `qwen3.6:35b`. Outputs are written under
-`training_suite/outputs/ornith_vision/<size>/` with a splice report and Modelfile.
-The generated Ollama variants use `RENDERER qwen3.5` + `PARSER qwen3.5` so the
-capability gate should report `vision`, `tools`, and `thinking`.
+The token is read only from the environment. Do not put credentials in command
+arguments, logs, Modelfiles, manifests, or commits.
 
-## End-of-Session Storage Cleanup
+Training-round overrides:
 
-Every completed training, distillation, conversion, or publishing session must
-end with a storage cleanup. Do not delete artifacts until the final Ollama tag
-has passed its required capability tests, `ollama push` has succeeded, and the
-remote tag or registry manifest has been verified.
+| Variable | Purpose |
+|---|---|
+| `DISTILL_GPUS` | Comma-separated CUDA devices used by the DDP harness |
+| `DISTILL_TRAIN_FILE` / `DISTILL_VAL_FILE` | Split filenames without `.jsonl` |
+| `DISTILL_OUTPUT_SUFFIX` | Distinguish checkpoint rounds |
+| `DISTILL_LR` | Learning rate |
+| `DISTILL_LORA_R` / `DISTILL_LORA_ALPHA` | LoRA rank and scale |
+| `DISTILL_EPOCHS` | Epoch count |
+| `DISTILL_PATIENCE` | Early-stopping patience |
+| `DISTILL_HF_REPO` | Override the Hugging Face upload target |
 
-After that gate passes, remove the completed run's local `*.safetensors`
-checkpoints and adapters, downloaded Hugging Face weight shards, temporary
-F16/BF16 GGUFs, and redundant conversion outputs. Keep the Modelfile, source
-revision, evaluation reports, licenses, and other small reproducibility
-metadata. Use `ollama rm <obsolete-local-tag>` for Ollama-managed models; never
-delete files directly from the Ollama blob or manifest store.
+The R5/R6/R7 recipes are executable directly or from the dashboard:
 
-Use a unique output directory per run and inspect its exact contents and size
-before deletion. See [End-of-Session Cleanup](training_suite/INSTRUCTIONS.md#phase-6-end-of-session-cleanup)
-for the full verification and cleanup checklist.
-
-## File Index
-
-### Core Training Harness
-
-| File | Purpose |
-|------|---------|
-| `app.py` | Main training harness — bootstrap, prepare data, train (DDP), eval, export |
-| `requirements.txt` | Pinned Python dependencies |
-
-### Data Curation
-
-| File | Purpose |
-|------|---------|
-| `curate_r5.py` | R5 dataset: Bespoke-Stratos-17k + Tulu-3 + SlimOrca + format examples |
-| `curate_r6.py` | R6 dataset: Mixture-of-Thoughts + OpenThoughts + anti-loop data |
-| `curate_r7.py` | R7 dataset: R5 base + PrimeIntellect SYNTHETIC-1 + anti-loop (additive) |
-| `generate_antiloop.py` | Generate anti-repetition training data from model's own failures |
-
-### Evaluation
-
-| File | Purpose |
-|------|---------|
-| `eval_diverse.py` | 38-test stochastic eval across 9 categories (instruction, format, conciseness, etc.) |
-| `eval_repetition.py` | 15-test repetition stress test (math, open-ended, ambiguous, diversity) |
-| `eval_via_ollama.py` | GSM8K + MMLU + vision probes via Ollama API |
-| `hard_tool_tests.py` | 12 adversarial tool-calling stress tests |
-| `image_probe.py` | Vision capability probing (rendered text: HELLO, 42, BANANA) |
-| `probe_tools.py` | Tool-calling capability checker |
-
-### GGUF Export & Vision Splice
-
-| File | Purpose |
-|------|---------|
-| `splice_vision_v2.py` | Splice trained text weights into base multimodal HF model (preserves vision) |
-| `splice_vision_r7.py` | R7-specific vision splice |
-| `gguf_text_surgery.py` | GGUF-level text tensor substitution (swap text in combined vision GGUF) |
-| `ornith_vision_splice.py` | GGUF-native Ornith text tensor transplant into Qwen vision donors; create/test/copy/push Ollama variants |
-| `gguf_patch_rope_sections.py` | Patch rope.dimension_sections from 3 to 4 elements |
-| `gguf_set_vision_flag.py` | Add clip.has_vision_encoder flag to GGUF |
-
-## Instruction Document
-
-See **[INSTRUCTIONS.md](training_suite/INSTRUCTIONS.md)** for the complete step-by-step guide covering:
-
-1. Environment setup
-2. Dataset selection and curation
-3. Training configuration and hyperparameters
-4. Vision-preserving GGUF export pipeline
-5. Comprehensive capability testing
-6. Ollama registration and upload
-7. End-of-session storage cleanup
-
-## Proven Pipeline (R7)
-
-The pipeline that produces a working vision+tools+thinking model:
-
-```
-Filter linear_attn from LoRA adapter
-    -> convert_lora_to_gguf.py (LoRA GGUF)
-    -> llama-export-lora (merge into base qwen3.5:9b Q4_K_M)
-    -> llama-quantize (F16 -> Q4_K_M)
-    -> ollama create (RENDERER qwen3.5 + PARSER qwen3.5)
+```bash
+training_suite/.venv/bin/python training_suite/curate_r5.py
+training_suite/.venv/bin/python training_suite/curate_r6.py
+training_suite/.venv/bin/python training_suite/curate_r7.py
 ```
 
-This preserves all 883 tensors (427 text + 441 vision + 15 MTP) with vision byte-for-byte identical to base.
+See [the operational instructions](training_suite/INSTRUCTIONS.md) for the
+round-specific dataset and export sequence.
 
-## Key Hyperparameters
+### 2. Model intake and repair planning
 
-| Parameter | R5 (research) | R7 (additive) |
-|-----------|---------------|---------------|
-| Base model | Qwen/Qwen3.5-9B | Qwen/Qwen3.5-9B |
-| LoRA rank | 32 | 32 |
-| LoRA alpha | 64 | 64 |
-| Learning rate | 1e-4 | 1e-4 |
-| Epochs | 1 | 1 |
-| Batch size | 1 (grad_accum=8) | 1 (grad_accum=8) |
-| Max seq length | 5120 | 5120 |
-| Early stopping | patience=3 | patience=3 |
+Intake can combine remote metadata, raw-weight configuration, a local GGUF, and
+an existing Ollama tag. The result records architecture, quantization, context,
+tensor count, detected capabilities, missing capabilities, blockers, and a
+repair mode.
 
-## Datasets (HuggingFace)
+```bash
+training_suite/.venv/bin/python -m training_suite intake \
+  --source OBLITERATUS/Ornith-1.5-9B-OBLITERATED \
+  --raw-source OBLITERATUS/Ornith-1.5-9B-OBLITERATED \
+  --target-capability completion \
+  --target-capability vision \
+  --target-capability tools \
+  --target-capability thinking \
+  --save
+```
 
-### Primary Training Data
+Use `--gguf-path`, `--ollama-model`, and `--donor-model` when those artifacts
+are available. Intake is diagnostic: it does not silently download all weights
+or perform a splice.
 
-| Dataset | Size | Use | License | Link |
-|---------|------|-----|---------|------|
-| Bespoke-Stratos-17k | 17k | Reasoning distillation (DeepSeek-R1 traces, Qwen-native) | Apache 2.0 | [bespokelabs/Bespoke-Stratos-17k](https://huggingface.co/datasets/bespokelabs/Bespoke-Stratos-17k) |
-| Tulu 3 SFT Mixture | 939k | Production instruction following diversity (18 sources) | ODC-BY 1.0 | [allenai/tulu-3-sft-mixture](https://huggingface.co/datasets/allenai/tulu-3-sft-mixture) |
-| SlimOrca | 518k | Curated GPT-4 instruction data (Orca-style) | MIT | [Open-Orca/SlimOrca](https://huggingface.co/datasets/Open-Orca/SlimOrca) |
-| PrimeIntellect SYNTHETIC-1 | 894k | Verified math/code/STEM reasoning (DeepSeek-R1, filtered) | Apache 2.0 | [PrimeIntellect/SYNTHETIC-1-SFT-Data](https://huggingface.co/datasets/PrimeIntellect/SYNTHETIC-1-SFT-Data) |
+### 3. Enable and verify tool calling in Ollama
 
-### Anti-Repetition & Supplementary
+`tool_splice.py` pulls an HF GGUF through Ollama, writes a Modelfile with the
+Qwen renderer/parser, creates a local tag, and runs capability and structured
+tool-call checks.
 
-| Dataset | Size | Use | License | Link |
-|---------|------|-----|---------|------|
-| Mixture-of-Thoughts | 350k | Verified reasoning traces (math, code, science) | Apache 2.0 | [open-r1/Mixture-of-Thoughts](https://huggingface.co/datasets/open-r1/Mixture-of-Thoughts) |
-| OpenThoughts-114k | 114k | DeepSeek-R1 curated reasoning traces | Apache 2.0 | [open-thoughts/OpenThoughts-114k](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k) |
-| Alpaca-cleaned | 52k | General instruction following (used in R5) | CC-BY-4.0 | [yahma/alpaca-cleaned](https://huggingface.co/datasets/yahma/alpaca-cleaned) |
+```bash
+# Built-in Ornith 1.0 presets
+training_suite/.venv/bin/python training_suite/tool_splice.py 9b
+training_suite/.venv/bin/python training_suite/tool_splice.py 35b
 
-### Evaluation Benchmarks
+# Any compatible Hugging Face GGUF repository
+training_suite/.venv/bin/python training_suite/tool_splice.py \
+  --model org/model-GGUF \
+  --tag local-model-tools:q4km \
+  --gguf model-q4_k_m.gguf
+```
 
-| Dataset | Use | Link |
-|---------|-----|------|
-| GSM8K | Math reasoning holdout (100 locked samples) | [openai/gsm8k](https://huggingface.co/datasets/openai/gsm8k) |
-| MMLU | Multi-subject knowledge evaluation | [cais/mmlu](https://huggingface.co/datasets/cais/mmlu) |
+This is packaging and runtime configuration, not weight fine-tuning. The
+result must still return structured `tool_calls` in a live smoke test.
 
-### Other PrimeIntellect Datasets (Referenced)
+### 4. Preserve or add compatible vision weights
 
-| Dataset | Size | Use | Link |
-|---------|------|-----|------|
-| SYNTHETIC-2-SFT-verified | 105k | Highest-quality verified (DeepSeek-R1-0528) | [PrimeIntellect/SYNTHETIC-2-SFT-verified](https://huggingface.co/datasets/PrimeIntellect/SYNTHETIC-2-SFT-verified) |
-| INTELLECT-MATH-SFT-Data | 733k | Math-specific (QwQ-generated, NuminaMath) | [PrimeIntellect/INTELLECT-MATH-SFT-Data](https://huggingface.co/datasets/PrimeIntellect/INTELLECT-MATH-SFT-Data) |
-| NuminaMath-CoT | 860k | Math with chain-of-thought (K12 to olympiad) | [AI-MO/NuminaMath-CoT](https://huggingface.co/datasets/AI-MO/NuminaMath-CoT) |
-| OpenHermes-2.5 | 1M | General instruction mix (14 sources) | — | [teknium/OpenHermes-2.5](https://huggingface.co/datasets/teknium/OpenHermes-2.5) |
-| WildChat-1M | 838k | Real ChatGPT user conversations | ODC-BY 1.0 | [allenai/WildChat-1M](https://huggingface.co/datasets/allenai/WildChat-1M) |
+The vision tools support two strategies:
 
-### Base Model
+- merge a LoRA adapter into a compatible multimodal Hugging Face base before
+  GGUF conversion;
+- use `ornith_vision_splice.py` or `gguf_text_surgery.py` to replace the text
+  tensors in a compatible multimodal GGUF while retaining the donor vision
+  tensors and metadata.
 
-| Model | Link |
-|-------|------|
-| Qwen3.5-9B | [Qwen/Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B) |
+The automated Ornith path performs shape validation, writes a splice report,
+creates an Ollama tag, and can run vision/tools/thinking smoke tests:
 
-## Evaluation Results
+```bash
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py \
+  9b --create --test
 
-| Model | Diverse Eval | Repetition | Vision | Tools | Thinking |
-|-------|-------------|------------|--------|-------|----------|
-| Base qwen3.5:9b | 79.0% | N/A | Yes | Yes | Yes |
-| cudabenchmarktest (R3) | 73.7% | N/A | No | Yes | Yes |
-| R5 (research) | 84.2% | 20% loops | No | Yes | Yes |
-| R7 (additive) | 86.8% | N/A | Yes | Yes | Yes |
+training_suite/.venv/bin/python training_suite/ornith_vision_splice.py \
+  9b --reuse-existing --copy-remote --push
+```
 
-## Models on Ollama
+The built-in presets target the layouts encoded in the script. For a different
+Ornith or Qwen release, supply explicit source/donor paths and do not lower the
+tensor-replacement or shape-safety gates merely to force a build.
 
-### Ornith (deepreinforce-ai) — Tool-Spliced
+### 5. Plan and pack audio/video comprehension and TTS combinations
 
-| Tag | Size | Capabilities | Pull |
-|-----|------|-------------|------|
-| `robit/ornith:9b` | 5.6 GB | tools, thinking, completion | `ollama pull robit/ornith:9b` |
-| `robit/ornith:35b` | 21 GB | tools, thinking, completion | `ollama pull robit/ornith:35b` |
-| `robit/ornith-vision:9b` | 6.7 GB | vision, tools, thinking, completion | `ollama pull robit/ornith-vision:9b` |
-| `robit/ornith-vision:35b` | 22.6 GB | vision, tools, thinking, completion | `ollama pull robit/ornith-vision:35b` |
+`omni-plan` fetches only model configuration metadata, extracts architecture
+signatures, compares the target language model with the Qwen3-Omni donor, and
+writes a reproducible component manifest.
 
-Both use `RENDERER qwen3.5` + `PARSER qwen3.5` for structured tool calls,  
-`num_ctx 262144`, temperature 0.6, top_p 0.95.
+Qwen3.8 example:
 
-### Legacy Qwen Fine-Tunes
+```bash
+training_suite/.venv/bin/python -m training_suite omni-plan \
+  --text-source manitcor/Qwen3.8-27B-Obliterated-E03 \
+  --omni-source Qwen/Qwen3-Omni-30B-A3B-Instruct \
+  --target-tag robit/qwen3.8-27b-omni-experiment:latest \
+  --out training_suite/outputs/omni/qwen38-27b-experiment
+```
 
-| Tag | Size | Capabilities |
-|-----|------|-------------|
-| `robit/qwen3.5-9b-r7-research:q4km` | 5.6 GB | tools, thinking |
-| `robit/qwen3.5-9b-r7-research-vision:q4km` | 19 GB | vision, tools, thinking |
+Ornith example:
 
-## License
+```bash
+training_suite/.venv/bin/python -m training_suite omni-plan \
+  --text-source OBLITERATUS/Ornith-1.5-9B-OBLITERATED \
+  --omni-source Qwen/Qwen3-Omni-30B-A3B-Instruct \
+  --target-tag robit/ornith-1.5-omni-experiment:latest \
+  --out training_suite/outputs/omni/ornith15-9b-experiment
+```
 
-Training data licenses vary by source. Model weights are derived from Qwen3.5-9B (Apache 2.0)  
-and Ornith-1.0 (deepreinforce-ai).
+Each output directory contains:
+
+- `omni_bundle.json`: source signatures, mismatches, requested capabilities,
+  runtime support, component assignments, and artifact policy;
+- `audio_contract.json`: the validated request/response format;
+- `Modelfile`: written when `--text-gguf` is supplied. An incompatible Omni
+  projector is never attached to a Qwen3.8 or Ornith language GGUF.
+
+For Qwen3.8 and Ornith, the expected result is `monolithic-router`: direct
+hidden-state fusion is blocked, while one physical multi-graph GGUF remains a
+valid packaging target. Use `--require-native` only when the experiment truly
+requires tensor-level substitution into the Omni Thinker; it exits with status
+2 when those signatures do not match.
+
+#### Build the one-file GGUF
+
+Convert and quantize each executable graph to GGUF first, then pack them:
+
+```bash
+training_suite/.venv/bin/python -m training_suite omni-pack \
+  --base-gguf ./components/qwen38-or-ornith.q4_k_m.gguf \
+  --base-source manitcor/Qwen3.8-27B-Obliterated-E03 \
+  --comprehension-gguf ./components/qwen3-omni-comprehension.q4_k_m.gguf \
+  --comprehension-source Qwen/Qwen3-Omni-30B-A3B-Instruct \
+  --tts-gguf ./components/qwen3-tts.q4_k_m.gguf \
+  --tts-source Qwen/Qwen3-TTS-12Hz-0.6B-Base \
+  --out ./release/model.gguf \
+  --renderer qwen3.8 \
+  --parser qwen3.5
+```
+
+The packer leaves the base language tensors unprefixed, rewrites comprehension
+tensors under `a.c.*`, rewrites TTS tensors under `s.t.*`, copies each embedded
+component's metadata into a namespaced view, adds source digests and the router
+contract, and writes one GGUF. It also writes `model.gguf.report.json` and a
+single-`FROM` Modelfile.
+
+Inspect the result without running inference:
+
+```bash
+training_suite/.venv/bin/python -m training_suite omni-inspect \
+  ./release/model.gguf
+```
+
+The comprehension input must be self-contained: a bare Qwen3-Omni audio/vision
+encoder cannot feed Qwen3.8 or Ornith without a trained bridge. The TTS input
+must be text-conditioned; an unmodified Omni Talker tied to another Thinker is
+not sufficient.
+
+#### Audio wire contract
+
+The custom Ollama handler accepts audio as a tagged message field analogous to
+`images`:
+
+```json
+{
+  "model": "robit/combined:latest",
+  "messages": [{
+    "role": "user",
+    "content": "Summarize the conversation and answer the final question.",
+    "audios": [{
+      "mime_type": "audio/wav",
+      "encoding": "base64",
+      "sample_rate_hz": 16000,
+      "channels": 1,
+      "sample_width_bits": 16,
+      "data": "<base64 RIFF/WAVE bytes>"
+    }]
+  }],
+  "response_modalities": ["text", "audio"],
+  "speech_mode": "auto",
+  "stream": false
+}
+```
+
+The validator accepts at most 32 MiB decoded input. Output is base64 24 kHz,
+mono, PCM16 WAV in the same JSON-safe envelope. Base64 is a transport encoding;
+audio is not represented as a bitmap.
+
+When speech is selected, the handler returns the tagged audio under
+`message.audio` while preserving normal text, thinking, and tool-call fields.
+`speech_mode=always` and `speech_mode=never` override automatic model routing.
+
+Validate a request without running inference:
+
+```bash
+curl -s http://127.0.0.1:7860/api/omni/audio/validate \
+  -H 'Content-Type: application/json' \
+  --data-binary @request.json
+```
+
+The full extension contract is available at
+`GET /api/omni/router/contract`.
+
+#### HTTP reference runtime
+
+Before the custom Ollama loader/runner is complete, the Flask endpoint exercises
+the same routing semantics across separate HTTP processes. It is a development
+and evaluation harness, not the final one-file execution path.
+
+Configure three external stages:
+
+```bash
+export TRAINING_SUITE_OMNI_ASR_URL=http://127.0.0.1:8080/v1/chat/completions
+export TRAINING_SUITE_OMNI_ASR_MODEL=qwen3-omni
+export TRAINING_SUITE_OMNI_LANGUAGE_MODEL=robit/qwen3.8-27b-obliterated-e03:27b
+export TRAINING_SUITE_OMNI_TTS_URL=http://127.0.0.1:8081/synthesize
+export OLLAMA_URL=http://127.0.0.1:11434
+```
+
+The first endpoint receives an OpenAI-compatible `input_audio` content part and
+must return semantic text. Ollama receives that text and runs with `think=true`.
+The TTS endpoint receives `{text, output}` and must return either `audio/wav`
+bytes or the documented JSON envelope.
+
+After starting the dashboard, run the publication gate:
+
+```bash
+training_suite/.venv/bin/python -m training_suite omni-audio-smoke \
+  --audio ./fixture-16khz-mono.wav
+```
+
+The gate fails unless the complete request succeeds and the returned waveform
+is 24 kHz mono PCM16 WAV.
+
+#### Video comprehension
+
+The planner detects the donor's `video-input` path and records a
+`video_understanding` component. A native Omni runtime should decode the video,
+preserve frame order and temporal metadata, and return semantic text to the
+same Ollama language stage used by audio.
+
+The repository does not yet expose a Flask video upload or streaming endpoint.
+Until that adapter exists, the embedded comprehension graph can be tested
+through its source runtime or video can be normalized to sampled frames for a
+compatible vision endpoint. Do not advertise the monolithic tag as live video
+input solely because it contains a video-capable graph.
+
+### 6. Import and publish the monolithic GGUF to Ollama
+
+The generated Modelfile has one model reference:
+
+```text
+FROM ./model.gguf
+```
+
+Import with the custom Ollama build, then test the local tag before copying it
+into the account namespace:
+
+```bash
+training_suite/.venv/bin/python -m training_suite capability-gate \
+  local-model:q4km \
+  --capability tools \
+  --capability thinking
+
+training_suite/.venv/bin/python -m training_suite tool-smoke local-model:q4km
+
+training_suite/.venv/bin/python -m training_suite omni-inspect ./release/model.gguf
+
+ollama signin
+ollama cp local-model:q4km robit/model:q4km
+ollama push robit/model:q4km
+```
+
+After pushing, fetch and inspect the remote tag or registry manifest. A
+successful local `ollama create` is not proof that the remote publication is
+complete.
+
+## CLI reference
+
+The package CLI provides control-plane and inspection commands:
+
+| Command | Purpose |
+|---|---|
+| `web` | Start the Flask dashboard/API |
+| `db-init` | Initialize the SQLite state database |
+| `intake` | Inspect a model and optionally store its repair plan |
+| `ollama-show` | Parse local Ollama model metadata and capabilities |
+| `modelfile` | Generate an Ollama Modelfile |
+| `job-list` | List tracked background jobs |
+| `tool-smoke` | Verify a structured Ollama tool call |
+| `capability-gate` | Compare Ollama-advertised capabilities with requirements |
+| `ornith-seed` | Register the canonical Ornith intake case |
+| `omni-plan` | Generate a native-graft or monolithic-router plan |
+| `omni-pack` | Pack the base, comprehension, and TTS GGUFs into one file |
+| `omni-inspect` | Validate schema, metadata, and tensor namespaces in that file |
+| `omni-audio-smoke` | Validate live audio understanding, reasoning, and TTS |
+
+The training harness provides:
+
+| Command | Purpose |
+|---|---|
+| `bootstrap` | Create/update the project virtual environment |
+| `prepare` | Download data and create deterministic splits |
+| `baseline` | Evaluate the untouched base model |
+| `train` | Run DDP LoRA SFT |
+| `eval` | Evaluate the adapter and write a delta report |
+| `export` | Merge, convert, quantize, and create an Ollama model |
+| `prepare-tools` | Create the locked tool benchmark |
+| `baseline-tools` / `eval-tools` | Compare base and tuned tool behavior |
+| `verify-ollama` | Apply the Ollama release gate |
+| `upload` | Publish artifacts to Hugging Face |
+| `all` | Run prepare through export; upload is excluded |
+
+Use `--help` on any command for its exact arguments.
+
+## Dashboard and REST API
+
+The dashboard manages model and dataset intake, actions, background job logs,
+exports, evaluations, and comparisons. State is stored in
+`training_suite/state/suite.sqlite3` by default; job logs are written under
+`training_suite/logs/jobs/`.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET`, `POST` | `/api/models` | List or intake models |
+| `GET` | `/api/models/<id>` | Model detail and repair plan |
+| `GET`, `POST` | `/api/datasets` | List or register datasets |
+| `GET`, `POST` | `/api/jobs` | List or start background actions |
+| `GET` | `/api/jobs/<id>` | Job status and log tail |
+| `POST` | `/api/jobs/<id>/cancel` | Request job termination |
+| `GET`, `POST` | `/api/evals` | List or start evaluations |
+| `GET` | `/api/actions` | Discover supported actions |
+| `GET` | `/api/ollama/show?model=<tag>` | Inspect an Ollama tag |
+| `GET` | `/api/compare/models?id=1&id=2` | Compare model records |
+| `GET` | `/api/compare/evals?id=1&id=2` | Compare evaluation records |
+| `GET` | `/api/omni/audio/contract` | Read the audio contract |
+| `GET` | `/api/omni/router/contract` | Read the custom Ollama request/routing/response contract |
+| `POST` | `/api/omni/audio/validate` | Validate audio without inference |
+| `POST` | `/api/omni/plan` | Generate an Omni compatibility plan |
+| `POST` | `/api/omni/cascade` | Run the configured audio/Ollama/TTS cascade |
+
+The API is designed for local agents and automation. It currently has no
+built-in authentication or multi-tenant authorization.
+
+## Evaluation and release gates
+
+The suite includes:
+
+- held-out loss and perplexity with fixed splits;
+- a fixed-seed GSM8K honesty probe;
+- MMLU and Ollama-based model checks;
+- diverse instruction, formatting, reasoning, concision, and tangent tests;
+- repetition and cyclic-pattern detection;
+- structured single, parallel, no-tool, and post-tool turns;
+- adversarial tool-use tests;
+- rendered-image probes;
+- Ollama capability inspection;
+- strict audio request and waveform-output checks.
+
+Reports are machine-readable JSON under `training_suite/outputs/reports/` or
+`training_suite/logs/`. Capability metadata is necessary but insufficient: a
+release must pass behavioral tests for each advertised modality.
+
+## Guidance for coding agents and operators
+
+Read [training_suite/AGENTS.md](training_suite/AGENTS.md) before changing or
+running the suite. The following rules are especially important:
+
+1. **Respect the GPU broker.** Before changing or starting any CUDA-backed
+   Docker container or service on this host, run `docker gpu discover`. Use
+   scoped GPU reservations exactly as described in
+   `/usr/local/share/ollama-unify/AGENTS.md`; never select devices from a
+   one-time free-VRAM scan.
+2. **Separate inspection from execution.** `intake` and `omni-plan` are
+   diagnostic. Do not turn them into implicit multi-gigabyte downloads or start
+   inference services without making that operation explicit.
+3. **Preserve compatibility gates.** Never bypass architecture, tensor-shape,
+   vocabulary, projector-width, or component-completeness failures. A GGUF that
+   can be written is not necessarily a model that can be loaded correctly.
+4. **Keep capabilities honest.** Renderer/parser settings may enable Ollama to
+   expose tools and thinking, but live structured calls still need testing.
+   Likewise, a projector file is not proof of audio or video support.
+5. **Protect secrets.** Use `HF_TOKEN` and registry login state through the
+   environment or official clients. Never print, persist, or commit tokens.
+6. **Preserve provenance.** Record source repositories and revisions,
+   quantization, licenses, Modelfiles, component digests, compatibility reports,
+   and evaluation results for every published artifact.
+7. **Avoid collateral changes.** The workspace may contain work from other
+   users or agents. Do not discard unrelated edits or overwrite shared model
+   outputs.
+8. **Publish only after gates pass.** Create locally, test every claimed
+   capability, copy to the remote tag, push, and verify the remote artifact in
+   that order.
+9. **Treat embedded components as independent graphs.** Audio/video
+   comprehension and TTS have their own weights, revisions, loaders, health
+   checks, memory budgets, and failure modes even though they share one file.
+   Record them in the bundle manifest.
+10. **Clean up completed sessions.** Large temporary weights must not accumulate
+    indefinitely.
+
+## Artifact lifecycle and storage cleanup
+
+Use one explicit output directory per run. Cleanup is permitted only after:
+
+1. the final local model loads;
+2. required capability and behavioral tests pass;
+3. every requested registry push succeeds;
+4. the remote tag or manifest is verified; and
+5. compact reproducibility metadata has been saved.
+
+Then remove run-local downloaded safetensor shards, merged safetensors, LoRA
+checkpoints already distilled into the verified deliverable, F16/BF16 GGUF
+intermediates, partial downloads, and redundant conversion outputs. Retain
+Modelfiles, manifests, source revisions, component digests, licenses, splice
+reports, evaluation reports, and any final GGUF that is itself a required
+deliverable.
+
+Inspect exact paths and sizes before deletion. Shared Hugging Face caches and
+donor weights may still be in use by another run. Never recursively clean the
+repository root, the entire `outputs/` tree, a cache root, a home directory, or
+a path built from an unset variable.
+
+Do not delete files from Ollama's blob or manifest store directly. Use
+`ollama rm <obsolete-local-tag>` for unneeded local tags. Record disk usage
+before and after cleanup in the session handoff.
+
+The full checklist is in
+[End-of-Session Cleanup](training_suite/INSTRUCTIONS.md#phase-6-end-of-session-cleanup).
+
+## Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TRAINING_SUITE_DB` | `training_suite/state/suite.sqlite3` | SQLite database path |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama API base URL |
+| `OLLAMA_MODELS` | Host-dependent | Override the Ollama model store used by vision tooling |
+| `TRAINING_SUITE_OLLAMA_RENDERER` | `qwen3.5` | Generated Modelfile renderer |
+| `TRAINING_SUITE_OLLAMA_PARSER` | `qwen3.5` | Generated Modelfile parser |
+| `TRAINING_SUITE_OMNI_ASR_URL` | unset | Audio-understanding chat endpoint |
+| `TRAINING_SUITE_OMNI_ASR_MODEL` | `qwen3-omni` | Model name sent to that endpoint |
+| `TRAINING_SUITE_OMNI_LANGUAGE_MODEL` | unset | Ollama Qwen3.8/Ornith language tag |
+| `TRAINING_SUITE_OMNI_TTS_URL` | unset | Speech-synthesis endpoint |
+| `HF_TOKEN` | unset | Hugging Face upload credential |
+
+## Repository map
+
+| Path | Responsibility |
+|---|---|
+| `training_suite/app.py` | Self-bootstrapping distillation, evaluation, export, and upload harness |
+| `training_suite/cli.py` | Package CLI |
+| `training_suite/web.py` | Flask UI and REST API |
+| `training_suite/core/` | Paths, SQLite state, and background jobs |
+| `training_suite/datasets/` | Dataset registry and curation recipes |
+| `training_suite/evals/` | Reusable capability and smoke gates |
+| `training_suite/models/intake.py` | HF/GGUF/Ollama inspection and repair planning |
+| `training_suite/models/gguf.py` | GGUF metadata and capability inspection |
+| `training_suite/models/ollama.py` | Ollama inspection and Modelfile helpers |
+| `training_suite/models/audio.py` | Strict base64 PCM WAV contract |
+| `training_suite/models/omni.py` | Qwen3-Omni signatures, compatibility gate, and bundle writer |
+| `training_suite/models/single_gguf.py` | Monolithic GGUF schema, packer, inspector, and custom audio contract |
+| `training_suite/omni_runtime.py` | Audio-understanding → Ollama → TTS HTTP cascade |
+| `training_suite/tool_splice.py` | Tool-enabled Ollama packaging for HF GGUFs |
+| `training_suite/ornith_vision_splice.py` | Shape-gated Ornith vision transplant and publish workflow |
+| `training_suite/gguf_text_surgery.py` | GGUF text-tensor substitution |
+| `training_suite/splice_vision_*.py` | Vision-preserving Hugging Face merge workflows |
+| `training_suite/templates/`, `static/` | Dashboard presentation |
+| `tests/` | Unit and API tests |
+| `.aiwg/architecture/` | Multimodal ADR and impact analysis |
+
+Additional documentation:
+
+- [Agent operating guide](training_suite/AGENTS.md)
+- [End-to-end operational instructions](training_suite/INSTRUCTIONS.md)
+- [Model cards](training_suite/MODEL_CARDS.md)
+- [Ollama registry README content](training_suite/OLLAMA_MODEL_READMES.md)
+- [Qwen3-Omni bundle ADR](.aiwg/architecture/adr-001-qwen3-omni-audio-bundles.md)
+- [Monolithic Ollama audio-router GGUF ADR](.aiwg/architecture/adr-002-monolithic-ollama-audio-router-gguf.md)
+
+## Tests
+
+```bash
+training_suite/.venv/bin/python -m pytest -q
+```
+
+For documentation-only or CPU environments, unit tests can run without
+starting CUDA workloads. Live Ollama, vision, audio, and TTS gates require their
+respective services and fixtures.
+
+## Limitations
+
+- The core training harness is specialized for Qwen3.5-9B. The inspection,
+  packaging, evaluation, and GGUF utilities cover a broader set of compatible
+  models, but that does not make the SFT recipe architecture-agnostic.
+- Modelfile renderer/parser settings cannot restore tool behavior removed by
+  fine-tuning.
+- Direct GGUF tensor surgery is safe only for explicitly verified layouts.
+- The monolithic file requires a custom Ollama compatibility/runner hook for
+  component views, routing, and audio fields. Stock Ollama does not gain those
+  behaviors merely by importing the file.
+- The HTTP reference runtime currently implements audio input; the custom
+  monolithic runner and video transport/temporal normalization remain follow-up
+  work.
+- Model and dataset licenses vary. Review every source license and acceptable-use
+  condition before training, merging, or publishing derived artifacts.
+
+## License and attribution
+
+Repository code and model/data artifacts may have different licenses. Qwen base
+models, Ornith derivatives, datasets, donor projectors, and generated outputs
+must retain their original notices and comply with their respective terms. Do
+not infer that the repository's code license grants redistribution rights for
+third-party weights or datasets.

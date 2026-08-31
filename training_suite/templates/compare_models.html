@@ -41,7 +41,7 @@
         {% if section in ('all', 'capabilities') %}
         <h2>Capabilities</h2>
         <div class="compare-cap-grid">
-          {% for cap in ['vision', 'tools', 'thinking', 'completion'] %}
+          {% for cap in ['vision', 'audio-input', 'audio-output', 'video-input', 'tools', 'thinking', 'completion'] %}
           <div class="compare-cap-row">
             <span class="metric-label">{{ cap }}</span>
             {% if cap in m.detected_capabilities %}

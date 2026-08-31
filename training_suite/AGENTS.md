@@ -28,6 +28,10 @@ tool splicing, GGUF export, evaluation, and Ollama registry publishing.
 | `training_suite/templates/` | Jinja2 card-based templates (10 files) |
 | `training_suite/tool_splice.py` | HF→Ollama import pipeline (generalized) |
 | `training_suite/ornith_vision_splice.py` | GGUF-native Ornith vision tensor splice + Ollama create/test/copy/push |
+| `training_suite/models/audio.py` | Base64 PCM WAV request/response contract and validation |
+| `training_suite/models/omni.py` | Qwen3-Omni architecture gate and component-bundle planner |
+| `training_suite/models/single_gguf.py` | One-file component packer, inspector, and custom Ollama router contract |
+| `training_suite/omni_runtime.py` | Base64 audio → llama.cpp → Ollama → TTS HTTP cascade |
 | `training_suite/core/state.py` | SQLite state store |
 | `training_suite/core/jobs.py` | Background job runner |
 | `training_suite/models/ollama.py` | Ollama show/modelfile/create/push |
@@ -118,7 +122,63 @@ GET  /compare/evals  → interactive eval run comparison
 ```
 GET  /api/actions              → [{key, label, kind, requires_model, requires_dataset}]
 GET  /api/ollama/show?model=<tag>  → {name, exists, architecture, capabilities, ...}
+GET  /api/omni/audio/contract       → required WAV/base64 formats
+GET  /api/omni/router/contract      → custom Ollama audio message and routing contract
+POST /api/omni/audio/validate       → validate audio envelope without inference
+POST /api/omni/plan                 → native-Omni or monolithic-router compatibility plan
+POST /api/omni/cascade              → execute configured audio/language/TTS stages
 ```
+
+## Qwen3-Omni Monolithic Audio Bundles
+
+Do not splice Qwen3-Omni audio/Talker tensors directly into Qwen3.8 or Ornith.
+The Qwen3-Omni Thinker is a 2,048-wide MoE trunk; Qwen3.8 and Ornith use
+different Qwen3.5 architectures and widths. Run the compatibility planner:
+
+```bash
+python -m training_suite omni-plan \
+  --text-source manitcor/Qwen3.8-27B-Obliterated-E03 \
+  --omni-source Qwen/Qwen3-Omni-30B-A3B-Instruct \
+  --out training_suite/outputs/omni/qwen38-27b-experiment
+```
+
+`native-omni` requires exact model type, hidden width, layer count, vocabulary,
+and conditioning widths. Otherwise use `monolithic-router`: pack the base
+language graph unprefixed, a self-contained comprehension graph under `a.c.*`,
+and text-conditioned TTS under `s.t.*` in one physical GGUF. The custom Ollama
+handler crosses component boundaries through semantic text; it does not pass
+incompatible hidden states between them.
+
+Use `python -m training_suite omni-pack` only after all three component GGUFs
+have been independently converted and quantized. Use `omni-inspect` before
+`ollama create`. Ordinary text-only quantization after packing may omit or
+corrupt embedded components, so component quantization happens before packing.
+
+Stock Ollama may import the base GGUF layout, but it does not interpret the
+custom `audios`, `response_modalities`, `speech_mode`, or `message.audio`
+fields. Never mark `audio-input`, `video-input`, or `audio-output` as live until
+the custom loader/handler and modality probes pass.
+
+Run the live gate with `python -m training_suite omni-audio-smoke --audio
+fixture-16khz-mono.wav`. It must verify a 24 kHz mono PCM16 WAV response before
+publication.
+
+Audio input is strict base64 RIFF/WAVE, 16 kHz mono PCM16, maximum 32 MiB.
+Audio output is base64 RIFF/WAVE, 24 kHz mono PCM16. Preserve component digests,
+runtime revisions, the bundle manifest, and test reports; apply the normal
+end-of-session weight cleanup after successful publication and verification.
+
+The Flask cascade is the pre-integration reference runtime. It reads `TRAINING_SUITE_OMNI_ASR_URL`,
+`TRAINING_SUITE_OMNI_ASR_MODEL`, `TRAINING_SUITE_OMNI_LANGUAGE_MODEL`, and
+`TRAINING_SUITE_OMNI_TTS_URL`. The ASR service uses llama.cpp's
+`input_audio` chat-completions shape. The TTS service must return WAV bytes or
+the suite JSON audio envelope. Before starting either CUDA service, follow the
+host `docker gpu discover` and scoped lease protocol.
+
+The current experiment covers video understanding only. Track that as
+`video-input`; video generation is out of scope. The planner records the donor
+component and frame-interleave requirement, while the executable Flask cascade
+currently implements audio input only.
 
 ## Tool Splice Pipeline (HF → Ollama)
 

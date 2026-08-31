@@ -7,8 +7,15 @@ from pathlib import Path
 from training_suite.core.config import DEFAULT_TARGET_CAPABILITIES, PATHS, PROJECT_ROOT, safe_model_tag, slugify
 from training_suite.core.jobs import JobRunner
 from training_suite.core.state import StateStore
-from training_suite.evals.runner import capability_gate, tool_smoke
+from training_suite.evals.runner import capability_gate, omni_audio_smoke, tool_smoke
 from training_suite.models.intake import inspect_intake
+from training_suite.models.omni import (
+    QWEN3_OMNI_INSTRUCT,
+    load_config_reference,
+    plan_omni_bundle,
+    write_omni_bundle,
+)
+from training_suite.models.single_gguf import inspect_monolithic_gguf, pack_monolithic_gguf
 from training_suite.models.ollama import ModelfileSpec, generate_modelfile, show_model, write_modelfile
 
 
@@ -80,6 +87,18 @@ def cmd_capability_gate(args: argparse.Namespace) -> None:
     print(json.dumps(capability_gate(args.model, args.capability), indent=2, sort_keys=True))
 
 
+def cmd_omni_audio_smoke(args: argparse.Namespace) -> None:
+    report = omni_audio_smoke(
+        Path(args.audio),
+        endpoint=args.endpoint,
+        prompt=args.prompt,
+        timeout=args.timeout,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+    if not report.get("ok"):
+        raise SystemExit(1)
+
+
 def cmd_ornith_seed(args: argparse.Namespace) -> None:
     """Register the canonical Ornith 9B test case without downloading weights."""
     result = inspect_intake(
@@ -91,6 +110,74 @@ def cmd_ornith_seed(args: argparse.Namespace) -> None:
     )
     model_id = StateStore().upsert_model(result.to_model_row())
     print(json.dumps({"id": model_id, **result.to_model_row()}, indent=2, sort_keys=True))
+
+
+def cmd_omni_plan(args: argparse.Namespace) -> None:
+    text_config = load_config_reference(args.text_source)
+    omni_config = load_config_reference(args.omni_source)
+    plan = plan_omni_bundle(
+        text_config=text_config,
+        omni_config=omni_config,
+        text_source=args.text_source,
+        omni_source=args.omni_source,
+        target_tag=args.target_tag,
+    )
+    if args.out:
+        plan["outputs"] = write_omni_bundle(
+            Path(args.out),
+            plan,
+            text_gguf=args.text_gguf,
+            mmproj_gguf=args.mmproj_gguf,
+            talker_gguf=args.talker_gguf,
+            code2wav_gguf=args.code2wav_gguf,
+            renderer=args.renderer,
+            parser=args.parser,
+        )
+    print(json.dumps(plan, indent=2, sort_keys=True))
+    if args.require_native and plan["mode"] != "native-omni":
+        raise SystemExit(2)
+
+
+def cmd_omni_pack(args: argparse.Namespace) -> None:
+    out = Path(args.out).expanduser().resolve()
+    report = pack_monolithic_gguf(
+        base_gguf=Path(args.base_gguf),
+        comprehension_gguf=Path(args.comprehension_gguf),
+        tts_gguf=Path(args.tts_gguf),
+        out_gguf=out,
+        base_source=args.base_source,
+        comprehension_source=args.comprehension_source,
+        tts_source=args.tts_source,
+        overwrite=args.overwrite,
+    )
+    report_path = out.with_suffix(out.suffix + ".report.json")
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    modelfile = out.with_name("Modelfile")
+    write_modelfile(
+        modelfile,
+        ModelfileSpec(
+            from_ref=f"./{out.name}",
+            renderer=args.renderer,
+            parser=args.parser,
+            requires=args.requires,
+            parameters={
+                "num_ctx": args.num_ctx,
+                "temperature": 0.6,
+                "top_p": 0.95,
+                "top_k": 20,
+            },
+        ),
+    )
+    report["report"] = str(report_path)
+    report["modelfile"] = str(modelfile)
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
+def cmd_omni_inspect(args: argparse.Namespace) -> None:
+    report = inspect_monolithic_gguf(Path(args.gguf))
+    print(json.dumps(report, indent=2, sort_keys=True))
+    if not report["valid"]:
+        raise SystemExit(1)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -149,6 +236,80 @@ def build_parser() -> argparse.ArgumentParser:
     ornith.add_argument("--donor-model", default="qwen3.5:9b")
     ornith.add_argument("--ollama-model")
     ornith.set_defaults(func=cmd_ornith_seed)
+
+    omni = sub.add_parser(
+        "omni-plan",
+        help="Plan a native graft or one-file custom Ollama multimodal router",
+    )
+    omni.add_argument(
+        "--text-source",
+        required=True,
+        help="Local config.json path or Hugging Face repo for the language model",
+    )
+    omni.add_argument(
+        "--omni-source",
+        default=QWEN3_OMNI_INSTRUCT,
+        help="Local config.json path or Hugging Face repo for the Omni donor",
+    )
+    omni.add_argument("--target-tag")
+    omni.add_argument("--out", help="Write omni_bundle.json and audio_contract.json here")
+    omni.add_argument("--text-gguf", help="Ollama-compatible language GGUF")
+    omni.add_argument("--mmproj-gguf", help="Audio/vision projector GGUF")
+    omni.add_argument("--talker-gguf", help="Speech Talker GGUF")
+    omni.add_argument("--code2wav-gguf", help="Codec-to-waveform GGUF")
+    omni.add_argument("--renderer", default="qwen3.8")
+    omni.add_argument("--parser", default="qwen3.5")
+    omni.add_argument(
+        "--require-native",
+        action="store_true",
+        help="Exit 2 when the text trunk cannot be substituted into the Omni Thinker",
+    )
+    omni.set_defaults(func=cmd_omni_plan)
+
+    omni_pack = sub.add_parser(
+        "omni-pack",
+        help="Pack language, comprehension, and TTS GGUFs into one custom Ollama artifact",
+    )
+    omni_pack.add_argument("--base-gguf", required=True, help="Qwen3.8/Ornith Ollama-compatible GGUF")
+    omni_pack.add_argument(
+        "--comprehension-gguf",
+        required=True,
+        help="Self-contained audio/video understanding GGUF",
+    )
+    omni_pack.add_argument("--tts-gguf", required=True, help="Text-conditioned TTS GGUF")
+    omni_pack.add_argument("--out", required=True, help="Output monolithic .gguf path")
+    omni_pack.add_argument("--base-source", help="Provenance label for the base model")
+    omni_pack.add_argument("--comprehension-source", help="Provenance label for the comprehension model")
+    omni_pack.add_argument("--tts-source", help="Provenance label for the TTS model")
+    omni_pack.add_argument("--renderer", default="qwen3.8")
+    omni_pack.add_argument("--parser", default="qwen3.5")
+    omni_pack.add_argument("--requires", help="Minimum custom Ollama build version")
+    omni_pack.add_argument("--num-ctx", type=int, default=262144)
+    omni_pack.add_argument("--overwrite", action="store_true")
+    omni_pack.set_defaults(func=cmd_omni_pack)
+
+    omni_inspect = sub.add_parser(
+        "omni-inspect",
+        help="Inspect and validate a monolithic audio/video/TTS GGUF bundle",
+    )
+    omni_inspect.add_argument("gguf")
+    omni_inspect.set_defaults(func=cmd_omni_inspect)
+
+    audio_smoke = sub.add_parser(
+        "omni-audio-smoke",
+        help="Run a live audio-in/text/audio-out cascade probe",
+    )
+    audio_smoke.add_argument("--audio", required=True, help="16 kHz mono PCM16 WAV fixture")
+    audio_smoke.add_argument(
+        "--endpoint",
+        default="http://127.0.0.1:7860/api/omni/cascade",
+    )
+    audio_smoke.add_argument(
+        "--prompt",
+        default="Transcribe this audio and answer naturally.",
+    )
+    audio_smoke.add_argument("--timeout", type=float, default=900)
+    audio_smoke.set_defaults(func=cmd_omni_audio_smoke)
 
     return parser
 

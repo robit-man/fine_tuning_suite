@@ -57,6 +57,31 @@ def infer_capabilities(
     elif has_vision_meta or has_vision_tensors:
         flags.append("missing vision tensor/metadata counterpart")
 
+    if "video_token_id" in meta_text and has_vision_tensors:
+        capabilities.append("video-input")
+
+    has_audio_meta = any(
+        marker in meta_text
+        for marker in ("audio_token_id", ".audio.", "audio_encoder", "audio.projector")
+    )
+    has_audio_tensors = any(
+        name.startswith(("a.", "audio.", "audio_encoder.", "mm.audio."))
+        for name in tensor_names
+    )
+    if has_audio_meta and has_audio_tensors:
+        capabilities.append("audio-input")
+    elif has_audio_meta or has_audio_tensors:
+        flags.append("missing audio tensor/metadata counterpart")
+
+    has_talker = "talker" in meta_text or any(name.startswith("talker.") for name in tensor_names)
+    has_code2wav = "code2wav" in meta_text or any(
+        name.startswith(("code2wav.", "codec.")) for name in tensor_names
+    )
+    if has_talker and has_code2wav:
+        capabilities.append("audio-output")
+    elif has_talker or has_code2wav:
+        flags.append("incomplete audio-output Talker/code2wav pair")
+
     if "tool_call" in template or "<tools>" in template:
         capabilities.append("tools")
     else:

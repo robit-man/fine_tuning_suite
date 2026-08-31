@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import httpx
 from flask import (
     Flask,
     Response,
@@ -21,6 +22,7 @@ from training_suite.core.config import (
     DEFAULT_TARGET_CAPABILITIES,
     PATHS,
     PROJECT_ROOT,
+    TARGET_CAPABILITIES,
     safe_model_tag,
     slugify,
 )
@@ -35,6 +37,22 @@ from training_suite.evals.runner import (
     write_eval_report,
 )
 from training_suite.models.intake import inspect_intake
+from training_suite.models.audio import (
+    AudioContractError,
+    DEFAULT_AUDIO_CONTRACT,
+    validate_audio_input,
+)
+from training_suite.models.omni import (
+    QWEN3_OMNI_INSTRUCT,
+    load_config_reference,
+    plan_omni_bundle,
+)
+from training_suite.models.single_gguf import audio_router_contract
+from training_suite.omni_runtime import (
+    OmniRuntimeConfig,
+    OmniRuntimeError,
+    run_http_cascade,
+)
 from training_suite.models.ollama import (
     ModelfileSpec,
     copy_command,
@@ -46,6 +64,23 @@ from training_suite.models.ollama import (
     write_modelfile,
 )
 from training_suite.training.adapters import action_specs, get_action
+
+
+def _router_audio_and_prompt(data: dict[str, Any]) -> tuple[Any, str]:
+    audio_payload = data.get("audio")
+    prompt = str(data.get("prompt") or "")
+    if audio_payload is None and isinstance(data.get("messages"), list):
+        for message in reversed(data["messages"]):
+            if not isinstance(message, dict) or message.get("role") != "user":
+                continue
+            audios = message.get("audios")
+            if isinstance(audios, list) and audios:
+                audio_payload = audios[0]
+            if not prompt and isinstance(message.get("content"), str):
+                prompt = message["content"]
+            if audio_payload is not None:
+                break
+    return audio_payload, prompt
 
 
 def create_app(
@@ -68,7 +103,8 @@ def create_app(
     @app.context_processor
     def inject_globals() -> dict[str, Any]:
         return {
-            "target_capabilities": DEFAULT_TARGET_CAPABILITIES,
+            "target_capabilities": TARGET_CAPABILITIES,
+            "default_target_capabilities": DEFAULT_TARGET_CAPABILITIES,
         }
 
     @app.get("/")
@@ -349,6 +385,81 @@ def create_app(
         if not model:
             return jsonify({"error": "not found"}), 404
         return jsonify(model)
+
+    @app.get("/api/omni/audio/contract")
+    def api_omni_audio_contract() -> Response:
+        return jsonify(DEFAULT_AUDIO_CONTRACT.to_dict())
+
+    @app.get("/api/omni/router/contract")
+    def api_omni_router_contract() -> Response:
+        return jsonify(audio_router_contract())
+
+    @app.post("/api/omni/audio/validate")
+    def api_omni_audio_validate() -> Response:
+        data = request.get_json(force=True)
+        if isinstance(data, dict):
+            payload, _ = _router_audio_and_prompt(data)
+            if payload is None:
+                payload = data
+        else:
+            payload = data
+        try:
+            audio = validate_audio_input(payload)
+        except AudioContractError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "audio": audio.metadata()})
+
+    @app.post("/api/omni/plan")
+    def api_omni_plan() -> Response:
+        data = request.get_json(force=True)
+        text_source = str(data.get("text_source") or "").strip()
+        omni_source = str(data.get("omni_source") or QWEN3_OMNI_INSTRUCT).strip()
+        try:
+            text_config = data.get("text_config") or load_config_reference(text_source)
+            omni_config = data.get("omni_config") or load_config_reference(omni_source)
+            if not isinstance(text_config, dict) or not isinstance(omni_config, dict):
+                raise ValueError("text_config and omni_config must be JSON objects")
+            plan = plan_omni_bundle(
+                text_config=text_config,
+                omni_config=omni_config,
+                text_source=text_source or "inline:text_config",
+                omni_source=omni_source,
+                target_tag=data.get("target_tag"),
+            )
+        except (ValueError, httpx.HTTPError) as exc:
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 400
+        return jsonify(plan)
+
+    @app.post("/api/omni/cascade")
+    def api_omni_cascade() -> Response:
+        data = request.get_json(force=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "request body must be a JSON object"}), 400
+        audio_payload, prompt = _router_audio_and_prompt(data)
+        speech_mode = str(data.get("speech_mode") or "auto").lower()
+        if speech_mode not in {"auto", "always", "never"}:
+            return jsonify({"error": "speech_mode must be auto, always, or never"}), 400
+        response_modalities = data.get("response_modalities")
+        wants_audio = (
+            True
+            if response_modalities is None
+            else isinstance(response_modalities, list) and "audio" in response_modalities
+        )
+        synthesize = speech_mode == "always" or (speech_mode == "auto" and wants_audio)
+        try:
+            config = OmniRuntimeConfig.from_environment(require_tts=synthesize)
+            report = run_http_cascade(
+                audio_payload=audio_payload,
+                prompt=prompt,
+                config=config,
+                synthesize=synthesize,
+            )
+        except AudioContractError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except OmniRuntimeError as exc:
+            status = 503 if "not configured" in str(exc) else 502
+            return jsonify({"error": str(exc)}), status
+        return jsonify(report)
 
     @app.post("/api/models")
     def api_model_create() -> Response:

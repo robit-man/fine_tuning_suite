@@ -805,7 +805,11 @@ def create_app(
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
-        if request.path.startswith("/api/") or request.path == "/":
+        if (
+            request.path.startswith("/api/")
+            or request.path.startswith("/assets/")
+            or request.path == "/"
+        ):
             response.headers["Cache-Control"] = "no-store"
         return response
 

@@ -1595,13 +1595,16 @@
     const images = state.attachments.filter(item => item.kind === "image");
     const videos = state.attachments.filter(item => item.kind === "video");
     const hasMedia = state.attachments.length > 0;
+    const audioOnly = audios.length > 0 && !images.length && !videos.length;
     if (!typed && !state.attachments.length) throw new Error("Enter a message or attach media");
 
     let task = "chat";
     let content = typed;
-    if (!typed && audios.length && !images.length && !videos.length) {
-      task = "transcribe";
-      content = "Transcribe this audio faithfully.";
+    if (!typed && audioOnly) {
+      content = (
+        "Listen to this audio, use both its speech and non-speech sounds as "
+        + "evidence, then reply naturally and concisely."
+      );
     } else if (!typed && (images.length || videos.length)) {
       task = "describe";
       content = "Describe this media accurately.";
@@ -1625,9 +1628,11 @@
     return {
       task,
       hasMedia,
+      audioOnly,
+      replaceUserWithTranscript: !typed && audioOnly,
       wantsSpeech,
       wantsThinking,
-      display: typed || (task === "transcribe" ? "Audio clip" : "Attached media"),
+      display: typed || (audioOnly ? "Audio clip" : "Attached media"),
       message,
       payload: {
         model: MODEL,
@@ -1663,10 +1668,9 @@
     }
 
     const sentMedia = [...state.attachments];
-    const mediaSummary = sentMedia.map(item => item.kind).join(" · ");
-    addMessage({
+    const user = addMessage({
       role: "user",
-      content: mediaSummary ? `${built.display}\n${mediaSummary}` : built.display,
+      content: built.display,
       media: sentMedia,
     });
     state.attachments = [];
@@ -1675,7 +1679,7 @@
     resizePrompt();
     elements.send.disabled = true;
     setComposerStatus(
-      built.task === "transcribe"
+      built.audioOnly
         ? "Transcribing audio…"
         : (built.wantsThinking ? "Reasoning…" : "Replying…"),
     );
@@ -1685,6 +1689,13 @@
     let streamedThinking = "";
     let pcmController = null;
     let streamedAudio = false;
+    let inputTranscript = "";
+    const applyInputTranscript = value => {
+      const transcript = String(value || "").trim();
+      if (!built.replaceUserWithTranscript || !transcript) return;
+      inputTranscript = transcript;
+      updateMessage(user, { content: transcript, streaming: false });
+    };
     const requestController = new AbortController();
     if (state.requestController) state.requestController.abort();
     state.requestController = requestController;
@@ -1692,7 +1703,9 @@
       const data = await streamChat(built.payload, {
         signal: requestController.signal,
         onEvent: event => {
-          if (event.type === "delta") {
+          if (event.type === "observation") {
+            applyInputTranscript(event.transcript);
+          } else if (event.type === "delta") {
             const contentDelta = String((event.message || {}).content || "");
             const thinkingDelta = built.wantsThinking
               ? String((event.message || {}).thinking || "")
@@ -1727,6 +1740,7 @@
         },
       });
       const reply = data.message || {};
+      applyInputTranscript((data.adapter || {}).input_transcript);
       if (built.wantsSpeech && !(reply.audio && reply.audio.data)) {
         throw new Error("Spoken replies are enabled, but TTS returned no audio");
       }
@@ -1740,7 +1754,10 @@
       });
       if (built.hasMedia) state.history = [];
       if (built.task === "chat" || built.hasMedia) {
-        state.history.push({ role: "user", content: built.message.content });
+        state.history.push({
+          role: "user",
+          content: inputTranscript || built.message.content,
+        });
         if (reply.content) state.history.push({ role: "assistant", content: reply.content });
       }
       setComposerStatus(reply.audio ? "Text and spoken reply ready" : "Text reply ready");

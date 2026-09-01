@@ -92,6 +92,10 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
     assert "HttpOnly" in cookie
     assert "SameSite=Strict" in cookie
 
+    asset = client.get("/assets/portal.js")
+    assert asset.status_code == 200
+    assert asset.headers["Cache-Control"] == "no-store"
+
 
 def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None:
     javascript = Path("examples/omni_portal/static/portal.js").read_text()
@@ -118,6 +122,12 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "event.transcript" in javascript
     assert "(data.adapter || {}).input_transcript" in javascript
     assert '(data.adapter || {}).observation || "Voice message"' not in javascript
+    assert 'task = "transcribe"' not in javascript
+    assert "replaceUserWithTranscript: !typed && audioOnly" in javascript
+    assert 'content: inputTranscript || built.message.content' in javascript
+    assert 'content: built.display' in javascript
+    assert "mediaSummary" not in javascript
+    assert "use both its speech and non-speech sounds as" in javascript
     assert "assistant.node.hidden = true" in javascript
     assert ".message[hidden]" in css
     assert 'addFile(file, "video", "camera")' in javascript

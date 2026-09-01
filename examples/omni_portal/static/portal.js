@@ -1141,6 +1141,9 @@
       audios: [envelope],
     };
     if (frame) message.images = [frame];
+    const callMessages = frame
+      ? [message]
+      : [...state.history.slice(-12), message];
     const user = addMessage({ role: "user", content: frame ? "Video call message" : "Voice message" });
     const assistant = addMessage({ role: "assistant", content: "", streaming: true });
     assistant.node.hidden = true;
@@ -1155,7 +1158,7 @@
       const data = await streamChat(
         {
           model: MODEL,
-          messages: [...state.history.slice(-12), message],
+          messages: callMessages,
           omni: { schema: SCHEMA, task: "chat", include_audio_from_video: true },
           response_modalities: ["text", "audio"],
           speech_mode: "always",
@@ -1214,6 +1217,7 @@
         streaming: false,
         autoplayAudio: !streamedAudio,
       });
+      if (frame) state.history = [];
       state.history.push({ role: "user", content: transcript });
       if (reply.content) state.history.push({ role: "assistant", content: reply.content });
       if (call.discardReply) {
@@ -1396,6 +1400,7 @@
     const audios = state.attachments.filter(item => item.kind === "audio");
     const images = state.attachments.filter(item => item.kind === "image");
     const videos = state.attachments.filter(item => item.kind === "video");
+    const hasMedia = state.attachments.length > 0;
     if (!typed && !state.attachments.length) throw new Error("Enter a message or attach media");
 
     let task = "chat";
@@ -1420,9 +1425,12 @@
 
     const wantsSpeech = elements.speak.getAttribute("aria-pressed") === "true";
     const wantsThinking = reasoningEnabled();
-    const messages = task === "chat" ? [...state.history.slice(-12), message] : [message];
+    const messages = task === "chat" && !hasMedia
+      ? [...state.history.slice(-12), message]
+      : [message];
     return {
       task,
+      hasMedia,
       wantsSpeech,
       wantsThinking,
       display: typed || (task === "transcribe" ? "Audio clip" : "Attached media"),
@@ -1532,7 +1540,8 @@
         streaming: false,
         autoplayAudio: !streamedAudio,
       });
-      if (built.task === "chat") {
+      if (built.hasMedia) state.history = [];
+      if (built.task === "chat" || built.hasMedia) {
         state.history.push({ role: "user", content: built.message.content });
         if (reply.content) state.history.push({ role: "assistant", content: reply.content });
       }

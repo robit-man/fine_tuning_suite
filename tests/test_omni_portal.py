@@ -112,6 +112,11 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "video.loop = true" in javascript
     assert "media: sentMedia" in javascript
     assert ".message-video-preview" in css
+    assert "const hasMedia = state.attachments.length > 0" in javascript
+    assert 'task === "chat" && !hasMedia' in javascript
+    assert "if (built.hasMedia) state.history = []" in javascript
+    assert "const callMessages = frame" in javascript
+    assert "if (frame) state.history = []" in javascript
 
 
 def test_portal_api_requires_bearer_token() -> None:

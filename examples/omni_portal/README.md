@@ -284,6 +284,11 @@ media base64 or the access token.
   the latest captured segment enters a request. The exact submitted clip is
   retained as a muted looping video thumbnail on its user message; separately
   uploaded video attachments remain additive.
+- Every new media submission starts an isolated model context. Earlier media
+  bytes and their generated descriptions are excluded, while the successful
+  newest media turn becomes the context for subsequent text-only follow-ups.
+  Visual-call turns likewise use only the current frame; audio-only calls keep
+  their conversational history.
 
 Cloudflare Quick Tunnels are temporary development endpoints, not durable
 production ingress. Stop the portal after the phone test. For a persistent

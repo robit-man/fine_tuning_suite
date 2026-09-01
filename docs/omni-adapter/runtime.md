@@ -179,8 +179,11 @@ and needs a new artifact schema and release gate.
 
 ## Thinking, tools, and speech
 
-- `think` is passed unchanged to stock Ollama.
+- `think` is passed unchanged to stock Ollama as a native boolean. The adapter
+  does not inject a reasoning-control system message or `/no_think` suffix.
 - `message.thinking` stays separate from answer text and is not synthesized.
+- Tagged reasoning sanitation is a fail-closed output guard only; it is not the
+  mechanism used to disable reasoning.
 - `tools` and tool history are passed unchanged.
 - Speech is skipped while unresolved `tool_calls` exist; the adapter reports
   `tts_skipped_reason=unresolved_tool_calls`.

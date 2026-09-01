@@ -8,11 +8,17 @@
   const MAX_VOICE_REFERENCE_MS = 10_000;
   const MAX_VOICE_REFERENCE_BYTES = 10 * 1024 * 1024;
   const MAX_VIDEO_RECORD_MS = 30_000;
-  const CALL_SILENCE_MS = 700;
-  const CALL_MIN_SPEECH_MS = 250;
-  const CALL_VOICE_THRESHOLD = 0.014;
-  const CALL_BARGE_THRESHOLD = 0.035;
-  const CALL_BARGE_MIN_MS = 300;
+  const callVad = window.OmniCallVad;
+  if (!callVad) throw new Error("Call VAD module failed to load");
+  const BARGE_VAD_OPTIONS = {
+    calibrationMs: 0,
+    startThreshold: 0.05,
+    releaseThreshold: 0.025,
+    noiseMultiplier: 3.5,
+    releaseMultiplier: 1.8,
+    startConfirmMs: 360,
+    minActiveMs: 400,
+  };
   const LIMITS = {
     audio: 30 * 1024 * 1024,
     image: 18 * 1024 * 1024,
@@ -22,6 +28,8 @@
   const elements = {
     headerStatus: document.getElementById("header-status"),
     statusText: document.getElementById("status-text"),
+    activeUsers: document.getElementById("active-users"),
+    activeUserCount: document.getElementById("active-user-count"),
     conversation: document.getElementById("conversation"),
     template: document.getElementById("message-template"),
     prompt: document.getElementById("prompt"),
@@ -75,6 +83,7 @@
     playbackElement: null,
     playbackEpoch: 0,
     streamController: null,
+    scrollFrame: null,
     call: null,
     camera: null,
     voice: {
@@ -104,6 +113,31 @@
   function setComposerStatus(text, error = false) {
     elements.composerStatus.textContent = text;
     elements.composerStatus.classList.toggle("error", error);
+  }
+
+  function scrollConversationToBottom({ smooth = true } = {}) {
+    if (state.scrollFrame !== null) cancelAnimationFrame(state.scrollFrame);
+    state.scrollFrame = requestAnimationFrame(() => {
+      state.scrollFrame = null;
+      elements.conversation.scrollTo({
+        top: elements.conversation.scrollHeight,
+        behavior: smooth ? "smooth" : "auto",
+      });
+    });
+  }
+
+  function revealMessage(record) {
+    const wasHidden = record.node.hidden;
+    record.node.hidden = false;
+    if (wasHidden) scrollConversationToBottom();
+  }
+
+  function setVadActive(call, active) {
+    if (!call) return;
+    call.vadActive = Boolean(active);
+    if (state.call === call) {
+      elements.waveform.classList.toggle("vad-active", call.vadActive);
+    }
   }
 
   function appendInlineMarkdown(parent, text) {
@@ -243,7 +277,7 @@
       const playback = attachAudioPlayer(record.node, audio, autoplayAudio);
       if (autoplayAudio) record.playback = playback;
     }
-    elements.conversation.scrollTop = elements.conversation.scrollHeight;
+    scrollConversationToBottom({ smooth: !streaming });
     return record;
   }
 
@@ -288,7 +322,7 @@
     const record = { node, role, error, playback: Promise.resolve() };
     updateMessage(record, { content, thinking, audio, streaming });
     appendMessageMedia(node, media);
-    elements.conversation.scrollTop = elements.conversation.scrollHeight;
+    scrollConversationToBottom();
     return record;
   }
 
@@ -533,6 +567,7 @@
       const data = await response.json();
       elements.headerStatus.className = `connection ${data.ok ? "online" : "offline"}`;
       elements.statusText.textContent = data.ok ? "Online" : "Unavailable";
+      updateActivity(data.requests);
       if (!state.voice.initialized && data.voice_profile) {
         const profile = data.voice_profile;
         state.voice.serverReference = Boolean(profile.speaker_reference);
@@ -550,6 +585,27 @@
     } catch (_error) {
       elements.headerStatus.className = "connection offline";
       elements.statusText.textContent = "Offline";
+    }
+  }
+
+  function updateActivity(activity) {
+    const users = Math.max(0, Number((activity || {}).users) || 0);
+    const inflight = Math.max(0, Number((activity || {}).inflight) || 0);
+    elements.activeUserCount.textContent = String(users);
+    elements.activeUsers.setAttribute(
+      "aria-label",
+      `${users} active ${users === 1 ? "user" : "users"}, ${inflight} in-flight requests`,
+    );
+  }
+
+  async function refreshActivity() {
+    if (!state.token) return;
+    try {
+      const response = await fetch("/api/activity", { headers: authHeaders() });
+      if (!response.ok) return;
+      updateActivity(await response.json());
+    } catch (_error) {
+      // The health poll owns the visible online/offline state.
     }
   }
 
@@ -719,7 +775,9 @@
     const samples = new Uint8Array(capture.analyser.fftSize);
     capture.analyser.getByteTimeDomainData(samples);
     context.clearRect(0, 0, rect.width, rect.height);
-    context.strokeStyle = state.call ? "#86efac" : "#fb7185";
+    context.strokeStyle = state.call
+      ? (capture.vadActive ? "rgba(134,239,172,.98)" : "rgba(134,239,172,.26)")
+      : "#fb7185";
     context.lineWidth = 1.5;
     context.beginPath();
     for (let index = 0; index < samples.length; index += 1) {
@@ -1102,7 +1160,11 @@
     call.replyComplete = false;
     call.discardReply = false;
     call.busy = true;
-    void submitCallUtterance(call, pending);
+    void submitCallUtterance(
+      call,
+      pending.chunks,
+      pending.activeDurationMs,
+    );
   }
 
   function completeCallTurn(call) {
@@ -1114,6 +1176,8 @@
     } else if (call.bargeActive) {
       setComposerStatus("Call · listening to interruption…");
     } else {
+      callVad.resetState(call.bargeVad, performance.now());
+      setVadActive(call, false);
       call.replyComplete = false;
       call.discardReply = false;
       call.busy = false;
@@ -1121,10 +1185,13 @@
     }
   }
 
-  async function submitCallUtterance(call, chunks) {
+  async function submitCallUtterance(call, chunks, activeDurationMs) {
     const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
-    const durationMs = sampleCount / call.context.sampleRate * 1000;
-    if (durationMs < CALL_MIN_SPEECH_MS || state.call !== call) {
+    const capturedDurationMs = sampleCount / call.context.sampleRate * 1000;
+    const confirmedDurationMs = Number.isFinite(activeDurationMs)
+      ? activeDurationMs
+      : capturedDurationMs;
+    if (confirmedDurationMs < callVad.DEFAULTS.minActiveMs || state.call !== call) {
       call.replyComplete = true;
       completeCallTurn(call);
       return;
@@ -1181,7 +1248,7 @@
               if (showThinking) {
                 streamedThinking += thinkingDelta;
               }
-              if (contentDelta || thinkingDelta) assistant.node.hidden = false;
+              if (contentDelta || thinkingDelta) revealMessage(assistant);
               updateMessage(assistant, {
                 content: streamedContent,
                 thinking: streamedThinking,
@@ -1209,7 +1276,7 @@
         || (frame ? "Video call message" : "Voice message"),
       ).trim();
       user.node.querySelector(".message-content").textContent = transcript;
-      assistant.node.hidden = false;
+      revealMessage(assistant);
       updateMessage(assistant, {
         content: reply.content || "Spoken response",
         thinking: showThinking ? (reply.thinking || streamedThinking) : "",
@@ -1278,14 +1345,11 @@
       processor,
       sink,
       ownsStream: !camera,
-      preRoll: [],
-      chunks: [],
-      speaking: false,
-      lastVoiceAt: 0,
+      vad: callVad.createState(performance.now()),
+      bargeVad: callVad.createState(performance.now(), BARGE_VAD_OPTIONS),
+      vadActive: false,
       busy: false,
       bargeActive: false,
-      bargeCandidate: [],
-      bargeStartedAt: 0,
       pendingUtterance: null,
       replyComplete: false,
       discardReply: false,
@@ -1296,62 +1360,50 @@
       if (state.call !== call) return;
       const now = performance.now();
       const samples = new Float32Array(event.inputBuffer.getChannelData(0));
-      const hasVoice = rms(samples) >= CALL_VOICE_THRESHOLD;
-      if (call.busy) {
-        const isBargeVoice = rms(samples) >= CALL_BARGE_THRESHOLD;
-        if (!call.bargeActive) {
-          if (!isBargeVoice) {
-            call.bargeCandidate = [];
-            call.bargeStartedAt = 0;
-            return;
-          }
-          if (!call.bargeStartedAt) call.bargeStartedAt = now;
-          call.bargeCandidate.push(samples);
-          if (now - call.bargeStartedAt < CALL_BARGE_MIN_MS) return;
+      const detection = callVad.processFrame(call.busy ? call.bargeVad : call.vad, {
+        level: rms(samples),
+        samples,
+        now,
+        frameMs: samples.length / call.context.sampleRate * 1000,
+      });
+      if (detection.event === "start") {
+        setVadActive(call, true);
+        if (call.busy) {
           call.bargeActive = true;
-          call.chunks = call.bargeCandidate.splice(0);
-          call.lastVoiceAt = now;
           call.discardReply = true;
           stopCurrentPlayback();
           setComposerStatus("Call · interruption heard…");
-          return;
+        } else {
+          setComposerStatus("Call · listening to you…");
         }
-        call.chunks.push(samples);
-        if (isBargeVoice) call.lastVoiceAt = now;
-        if (now - call.lastVoiceAt < CALL_SILENCE_MS) return;
-        call.pendingUtterance = call.chunks.splice(0);
+      }
+      if (detection.event === "rejected") {
         call.bargeActive = false;
-        call.bargeCandidate = [];
-        call.bargeStartedAt = 0;
+        setVadActive(call, false);
+        return;
+      }
+      if (detection.event !== "utterance") return;
+      setVadActive(call, false);
+      if (call.busy) {
+        call.pendingUtterance = detection.utterance;
+        call.bargeActive = false;
         setComposerStatus("Call · interruption queued…");
         startPendingCallTurn(call);
         return;
       }
-      if (!call.speaking) {
-        call.preRoll.push(samples);
-        if (call.preRoll.length > 4) call.preRoll.shift();
-        if (hasVoice) {
-          call.speaking = true;
-          call.chunks = call.preRoll.splice(0);
-          call.lastVoiceAt = now;
-          setComposerStatus("Call · listening to you…");
-        }
-        return;
-      }
-      call.chunks.push(samples);
-      if (hasVoice) call.lastVoiceAt = now;
-      if (now - call.lastVoiceAt < CALL_SILENCE_MS) return;
-      const utterance = call.chunks.splice(0);
-      call.preRoll = [];
-      call.speaking = false;
       call.busy = true;
-      void submitCallUtterance(call, utterance);
+      void submitCallUtterance(
+        call,
+        detection.utterance.chunks,
+        detection.utterance.activeDurationMs,
+      );
     };
     source.connect(analyser);
     source.connect(processor);
     processor.connect(sink);
     sink.connect(context.destination);
     state.call = call;
+    setVadActive(call, false);
     elements.callButton.setAttribute("aria-pressed", "true");
     elements.callButton.setAttribute("aria-label", "End voice call");
     elements.callButton.title = "End voice call";
@@ -1391,6 +1443,7 @@
     elements.micButton.disabled = false;
     elements.cameraButton.disabled = false;
     elements.waveform.classList.remove("calling");
+    elements.waveform.classList.remove("vad-active");
     elements.waveform.hidden = true;
     setComposerStatus("Voice call ended");
   }
@@ -1503,7 +1556,7 @@
             if (built.wantsThinking) {
               streamedThinking += thinkingDelta;
             }
-            if (contentDelta || thinkingDelta) assistant.node.hidden = false;
+            if (contentDelta || thinkingDelta) revealMessage(assistant);
             updateMessage(assistant, {
               content: streamedContent,
               thinking: streamedThinking,
@@ -1532,7 +1585,7 @@
       if (built.wantsSpeech && !(reply.audio && reply.audio.data)) {
         throw new Error("Spoken replies are enabled, but TTS returned no audio");
       }
-      assistant.node.hidden = false;
+      revealMessage(assistant);
       updateMessage(assistant, {
         content: reply.content || (reply.audio ? "Spoken response" : "No response returned."),
         thinking: built.wantsThinking ? (reply.thinking || streamedThinking) : "",
@@ -1693,5 +1746,7 @@
   applyVoiceDefaults();
   if (!state.token) showError(new Error("This link is missing its access fragment"));
   refreshStatus();
+  refreshActivity();
+  setInterval(refreshActivity, 2_000);
   setInterval(refreshStatus, 15_000);
 })();

@@ -3,8 +3,12 @@ from __future__ import annotations
 import base64
 import io
 import json
+import subprocess
+import threading
+import time
 import wave
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -66,6 +70,10 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
     assert b'id="voice-button"' in response.data
     assert b'id="voice-clone-enabled"' in response.data
     assert b'id="voice-reference-input"' in response.data
+    assert b'id="active-user-count"' in response.data
+    assert response.data.index(b"/assets/call_vad.js") < response.data.index(
+        b"/assets/portal.js"
+    )
     assert b'href="/assets/favicon.svg"' in response.data
     assert response.data.index(b'id="camera-button"') < response.data.index(
         b'id="call-button"'
@@ -77,6 +85,12 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
     assert "microphone=(self)" in response.headers["Permissions-Policy"]
     assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
     assert response.headers["Referrer-Policy"] == "no-referrer"
+    assert response.headers["Cache-Control"] == "no-store"
+    cookie = response.headers["Set-Cookie"]
+    assert "omni_portal_session=" in cookie
+    assert "Secure" in cookie
+    assert "HttpOnly" in cookie
+    assert "SameSite=Strict" in cookie
 
 
 def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None:
@@ -89,7 +103,7 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "function startCameraCapture" in javascript
     assert "function stopCameraCapture" in javascript
     assert "function streamChat" in javascript
-    assert "CALL_BARGE_THRESHOLD" in javascript
+    assert "BARGE_VAD_OPTIONS" in javascript
     assert "think: wantsThinking" in javascript
     assert "think: showThinking" in javascript
     assert "built.wantsThinking" in javascript
@@ -117,6 +131,31 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "if (built.hasMedia) state.history = []" in javascript
     assert "const callMessages = frame" in javascript
     assert "if (frame) state.history = []" in javascript
+    assert "function scrollConversationToBottom" in javascript
+    assert "behavior: smooth ? \"smooth\" : \"auto\"" in javascript
+    assert "callVad.processFrame" in javascript
+    assert "setVadActive(call, true)" in javascript
+    assert ".waveform.calling.vad-active" in css
+    assert "function refreshActivity" in javascript
+
+
+def test_mock_call_vad_harness_rejects_noise_and_accepts_confirmed_events() -> None:
+    completed = subprocess.run(
+        ["node", "examples/omni_portal/vad_harness.mjs"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = json.loads(completed.stdout)
+    assert result["status"] == "passed"
+    assert result["remote_requests"] == {
+        "calibrated_quiet": 0,
+        "transient_click": 0,
+        "elevated_room_noise": 0,
+        "sustained_speech": 1,
+        "sustained_alarm": 1,
+    }
 
 
 def test_portal_api_requires_bearer_token() -> None:
@@ -124,6 +163,7 @@ def test_portal_api_requires_bearer_token() -> None:
     client = app.test_client()
 
     assert client.get("/api/status").status_code == 401
+    assert client.get("/api/activity").status_code == 401
     assert client.post("/api/chat", json=_request()).status_code == 401
 
 
@@ -150,6 +190,95 @@ def test_portal_status_probes_all_internal_stages() -> None:
         "evidence_field": "adapter.audio_observation",
     }
     assert response.json["voice_profile"]["client_reference_wav"] is True
+    assert response.json["requests"] == {
+        "users": 0,
+        "inflight": 0,
+        "active": 0,
+        "queued": 0,
+        "slots": 1,
+        "limit": 4,
+    }
+
+
+def test_portal_queues_concurrent_sessions_without_context_bleed() -> None:
+    release_first = threading.Event()
+    first_entered = threading.Event()
+    lock = threading.Lock()
+    upstream_active = 0
+    max_upstream_active = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal upstream_active, max_upstream_active
+        body = json.loads(request.content)
+        marker = body["messages"][-1]["content"]
+        with lock:
+            upstream_active += 1
+            max_upstream_active = max(max_upstream_active, upstream_active)
+        try:
+            if marker == "session-one":
+                first_entered.set()
+                assert release_first.wait(5)
+            return httpx.Response(
+                200,
+                json={
+                    "model": DEFAULT_MODEL,
+                    "message": {"role": "assistant", "content": marker},
+                    "adapter": {"route": ["language"]},
+                },
+            )
+        finally:
+            with lock:
+                upstream_active -= 1
+
+    app = create_app(
+        _config(timeout_s=5, max_inflight_requests=3),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    clients = [app.test_client(), app.test_client()]
+    for client in clients:
+        client.get("/")
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    results: dict[str, Any] = {}
+
+    def send(index: int, marker: str) -> None:
+        results[marker] = clients[index].post(
+            "/api/chat",
+            headers=headers,
+            json=_request(messages=[{"role": "user", "content": marker}]),
+        )
+
+    first = threading.Thread(target=send, args=(0, "session-one"))
+    second = threading.Thread(target=send, args=(1, "session-two"))
+    first.start()
+    assert first_entered.wait(2)
+    second.start()
+
+    activity = None
+    observer = app.test_client()
+    for _attempt in range(50):
+        activity = observer.get("/api/activity", headers=headers).json
+        if activity["inflight"] == 2:
+            break
+        time.sleep(0.02)
+    assert activity == {
+        "users": 2,
+        "inflight": 2,
+        "active": 1,
+        "queued": 1,
+        "slots": 1,
+        "limit": 3,
+    }
+
+    release_first.set()
+    first.join(5)
+    second.join(5)
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert max_upstream_active == 1
+    assert results["session-one"].status_code == 200
+    assert results["session-two"].status_code == 200
+    assert results["session-one"].json["message"]["content"] == "session-one"
+    assert results["session-two"].json["message"]["content"] == "session-two"
 
 
 def test_portal_pins_model_and_proxies_normal_response() -> None:
@@ -500,6 +629,49 @@ def test_portal_stream_route_pins_profile_and_relays_ndjson() -> None:
     assert seen[0][1]["stream"] is True
     assert seen[0][1]["think"] is True
     assert seen[0][1]["speech"] == {"language": "en", "seed": 42}
+
+
+def test_mock_live_call_stream_defaults_native_reasoning_off() -> None:
+    seen = []
+    wire = (
+        b'{"type":"delta","message":{"content":"Final answer."}}\n'
+        b'{"type":"final","response":{"message":{"content":"Final answer."}}}\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append(body)
+        return httpx.Response(
+            200,
+            content=wire,
+            headers={"content-type": "application/x-ndjson"},
+        )
+
+    app = create_app(_config(), httpx.Client(transport=httpx.MockTransport(handler)))
+    body = _request(
+        stream=True,
+        messages=[
+            {
+                "role": "user",
+                "content": "Listen and reply naturally.",
+                "audios": [{"data": "UklGRg=="}],
+            }
+        ],
+        response_modalities=["text", "audio"],
+        speech_mode="always",
+    )
+    body.pop("think")
+
+    response = app.test_client().post(
+        "/api/chat/stream",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json=body,
+    )
+
+    assert response.status_code == 200
+    assert response.data == wire
+    assert seen[0]["think"] is False
+    assert seen[0]["messages"] == body["messages"]
 
 
 def test_portal_stream_route_requires_auth_and_disables_auto_tools() -> None:

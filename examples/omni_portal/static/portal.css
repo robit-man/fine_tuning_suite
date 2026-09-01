@@ -89,6 +89,8 @@ button { color: inherit; }
 
 .connection.online .status-dot { background: var(--ok); box-shadow: 0 0 12px rgba(134,239,172,.45); }
 .connection.offline .status-dot { background: var(--danger); box-shadow: 0 0 12px rgba(251,113,133,.45); }
+.active-users { display: inline-flex; align-items: center; gap: 4px; color: rgba(255,255,255,.38); }
+#active-user-count { min-width: 1ch; color: rgba(134,239,172,.64); text-align: center; }
 .top-actions { display: flex; align-items: center; gap: 4px; }
 .call-button[aria-pressed="true"] { background: rgba(251,113,133,.14); color: var(--danger); }
 .call-button .call-stop { display: none; }
@@ -104,6 +106,7 @@ button { color: inherit; }
   padding: 30px 18px 26px;
   overscroll-behavior: contain;
   scrollbar-color: var(--line-strong) transparent;
+  scroll-behavior: smooth;
 }
 
 .message {
@@ -381,8 +384,16 @@ textarea::placeholder { color: var(--quiet); }
 .waveform[hidden] { display: none; }
 .waveform canvas { display: block; width: 100%; height: 44px; }
 .waveform span { color: var(--danger); font: 700 10px var(--mono); }
-.waveform.calling { border-color: rgba(134,239,172,.28); background: rgba(134,239,172,.05); }
-.waveform.calling span { color: var(--ok); }
+.waveform.calling {
+  border-color: rgba(134,239,172,.13);
+  background: rgba(134,239,172,.05);
+  transition: border-color 120ms ease;
+}
+.waveform.calling canvas { opacity: .34; transition: opacity 120ms ease; }
+.waveform.calling span { color: rgba(134,239,172,.34); transition: color 120ms ease; }
+.waveform.calling.vad-active { border-color: rgba(134,239,172,.72); }
+.waveform.calling.vad-active canvas { opacity: 1; }
+.waveform.calling.vad-active span { color: var(--ok); }
 
 .camera-preview {
   position: relative;

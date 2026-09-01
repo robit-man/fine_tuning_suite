@@ -456,7 +456,11 @@ def test_reference_server_preserves_tools_thinking_and_adds_audio() -> None:
 @pytest.mark.parametrize("think", [False, True])
 def test_reference_server_separates_tagged_reasoning(think: bool) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert json.loads(request.content)["think"] is think
+        payload = json.loads(request.content)
+        assert payload["think"] is think
+        assert payload["messages"] == [
+            {"role": "user", "content": "What happened?"}
+        ]
         return httpx.Response(
             200,
             json={
@@ -603,7 +607,11 @@ def test_stream_exposes_only_tagged_input_transcript_to_clients() -> None:
             )
         if request.url.host == "language":
             body = json.loads(request.content)
+            assert body["think"] is False
+            assert len(body["messages"]) == 1
+            assert body["messages"][0]["role"] == "user"
             assert "<adapter_observation>" in body["messages"][-1]["content"]
+            assert "/no_think" not in body["messages"][-1]["content"]
             return httpx.Response(
                 200,
                 content=(
@@ -842,6 +850,42 @@ def test_reference_server_stream_parser_handles_split_think_tags() -> None:
     final = events[-1]["response"]["message"]
     assert final["thinking"] == "step one"
     assert final["content"] == "Answer."
+
+
+def test_disabled_stream_suppresses_orphaned_closing_think_tag() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["think"] is False
+        assert payload["messages"] == [
+            {"role": "user", "content": "What happened?"}
+        ]
+        return httpx.Response(
+            200,
+            content=(
+                b'{"message":{"role":"assistant","content":"hidden chain"}}\n'
+                b'{"message":{"role":"assistant","content":"</thi"}}\n'
+                b'{"message":{"role":"assistant","content":"nk>Visible answer."},'
+                b'"done":true}\n'
+            ),
+        )
+
+    parsed = parse_adapter_request(_base_request(think=False))
+    events = [
+        json.loads(chunk)
+        for chunk in execute_stream(
+            parsed,
+            Config("http://comp", "omni", "http://language", "http://tts", 30),
+            httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+    ]
+
+    deltas = [event["message"] for event in events if event["type"] == "delta"]
+    assert "".join(str(delta.get("content") or "") for delta in deltas) == (
+        "Visible answer."
+    )
+    final = events[-1]["response"]["message"]
+    assert final["content"] == "Visible answer."
+    assert "thinking" not in final
 
 
 def test_reference_server_streams_pcm_and_keeps_final_wav_envelope() -> None:

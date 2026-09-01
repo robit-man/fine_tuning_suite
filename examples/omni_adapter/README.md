@@ -306,12 +306,15 @@ Output speech appears at `message.audio`:
 ## Tools and thinking
 
 For `task=chat`, normal `tools` and `think` are forwarded to stock Ollama. The
-adapter preserves native `message.thinking`, separates fallback
-`<think>...</think>` blocks even when tags cross stream chunks, and removes all
-reasoning from visible/TTS text when `think:false`. Structured `tool_calls`
-remain unchanged. If unresolved tool calls are present, it does not synthesize
-their JSON; speech can resume after the client submits tool results and receives
-final assistant text.
+adapter does not add a reasoning system instruction or `/no_think` prompt
+suffix: `think:false` and `think:true` remain native Ollama booleans. It
+preserves native `message.thinking`, separates malformed fallback
+`<think>...</think>` blocks even when tags cross stream chunks, and removes any
+such reasoning from visible/TTS text when `think:false`. This sanitation is a
+fail-closed response boundary, not a substitute for native mode selection.
+Structured `tool_calls` remain unchanged. If unresolved tool calls are present,
+it does not synthesize their JSON; speech can resume after the client submits
+tool results and receives final assistant text.
 
 Direct `transcribe`/`describe` routes return comprehension output without a
 second Qwen3.8 pass. Direct `synthesize` returns the input text plus audio.

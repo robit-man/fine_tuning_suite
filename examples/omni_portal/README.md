@@ -22,13 +22,16 @@ and synthesized audio. Assistant text renders a safe Markdown subset including
 headings, emphasis, lists, block quotes, links, and fenced code. Sending a turn
 clears the composer and attachments immediately.
 
-The brain icon controls the real Ollama `think` request field. Gray disables
-reasoning and is the default; violet explicitly sends `think:true`. When
-enabled, streamed reasoning is shown in a collapsed Reasoning disclosure
-beneath the answer instead of being mixed into the visible response. The
-adapter preserves Ollama's native `message.thinking` channel and also separates
-fallback `<think>...</think>` tags, including tags split across stream chunks.
-When disabled, native or tagged reasoning is suppressed and never sent to TTS.
+The brain icon controls the real Ollama `think` request field. Gray is the
+default and sends the boolean `think:false`; violet explicitly sends
+`think:true`. No system instruction, prompt suffix, or synthetic `/no_think`
+message controls this mode. When enabled, streamed reasoning is shown in a
+collapsed Reasoning disclosure beneath the answer instead of being mixed into
+the visible response. The adapter preserves Ollama's native
+`message.thinking` channel and also separates malformed fallback
+`<think>...</think>` output, including tags split across stream chunks. The
+latter is a fail-closed output guard, not the reasoning control. Reasoning is
+never sent to TTS.
 
 The camera icon in the upper-right control group opens the device camera and microphone with a live, muted
 in-interface preview. Tap it again—or press Send—to stop and attach the bounded
@@ -40,9 +43,14 @@ this provides bounded live visual conversation without presenting an unbounded
 video stream to the model context.
 
 The phone icon at the upper right starts hands-free voice mode. Browser-side
-voice activity detection groups microphone samples into utterances after 700
-ms of silence, submits each complete 16 kHz WAV through Qwen3-Omni and Qwen3.8,
-streams the response text as Ollama produces it, then plays the Qwen3-TTS reply.
+voice activity detection first calibrates ambient noise for 900 ms, requires
+220 ms of sustained activity above an adaptive threshold, and closes an
+utterance after 750 ms of silence. It submits a 16 kHz WAV only after that
+confirmed utterance; quiet, transient clicks, and elevated steady room noise do
+not call remote ASR. The waveform border, line, and label remain translucent
+while inactive and become opaque only while VAD is active. Confirmed speech is
+sent through Qwen3-Omni and Qwen3.8, response text is relayed as Ollama produces
+it, and Qwen3-TTS speech is streamed back.
 The microphone remains active during inference and playback. Sustained speech
 stops current playback, records the interruption, and queues the new turn as
 soon as the in-flight generation releases the serial inference lane. Echo
@@ -77,6 +85,11 @@ generation and scheduled playback. The viewport disables focus and pinch zoom
 for a stable app-like mobile layout. Conversation text and decorative content
 also disable touch/mouse selection and iOS callouts; normal editing remains
 enabled in the composer and voice configuration fields.
+
+New user and assistant messages smoothly scroll the conversation to the newest
+turn. The small number beside **ONLINE** reports distinct browser sessions with
+an active or queued inference request; it is an aggregate only and is never
+used as conversation state.
 
 Video is sampled at 24 frames by the phone and clamped to at most 32 frames and
 2 fps by the adapter. The comprehension GGUF declares a 65,536-token context,
@@ -233,6 +246,8 @@ continue through broker-owned GPU lanes.
 | `OMNI_TTS_BROKER_TRANSITION_TIMEOUT_S` | `330` | Maximum wait for scoped prepare/ready transitions |
 | `OMNI_KEEP_CACHE` | `0` | Keep materialized views after stop |
 | `OMNI_PORTAL_MAX_BODY_BYTES` | 96 MiB | Same-origin JSON request cap |
+| `OMNI_PORTAL_INFERENCE_SLOTS` | `1` | Simultaneous upstream inference lanes; keep at one for the shared single-lane GPU stack |
+| `OMNI_PORTAL_MAX_INFLIGHT_REQUESTS` | `4` | Active plus queued portal requests before a bounded 503 response |
 
 Ports `8901`, `8892`, `8910`, and `8920` are loopback-only. The Cloudflare
 metrics endpoint defaults to loopback port `49312`.
@@ -269,7 +284,17 @@ media base64 or the access token.
   authenticated `/api/chat/stream` relays the bounded portal NDJSON extension.
 - Media inference has no CPU fallback; CUDA residency is verified before the
   scoped lease is marked ready.
-- Requests are limited to one in-flight inference and 96 MiB encoded JSON.
+- The default admits four simultaneous portal requests and serializes them
+  through one GPU inference lane. Queue tickets, request payloads, upstream
+  responses, streaming iterators, voice settings, and tool rounds are
+  request-local.
+- Conversation history is browser-page-local. The portal stores no message,
+  media, observation, KV-cache, or generated response as server-side session
+  state, so one user's content cannot become another user's context.
+- A random, Secure, HttpOnly, SameSite=Strict cookie is used only to count
+  distinct sessions with active or queued work. `/api/activity` exposes only
+  aggregate counts and requires the same bearer token as inference.
+- Encoded JSON is limited to 96 MiB.
 - The browser caps decoded image, video, and audio sizes below adapter limits.
 - CSP, frame denial, no-referrer, no-store, and same-origin camera/microphone
   policies are applied.

@@ -233,8 +233,20 @@ class _ThinkingTagStream:
         visible: list[str] = []
         thinking: list[str] = []
         while self.pending:
+            lowered = self.pending.lower()
             tag = THINK_CLOSE if self.inside else THINK_OPEN
-            index = self.pending.lower().find(tag)
+            index = lowered.find(tag)
+            if not self.inside:
+                close_index = lowered.find(THINK_CLOSE)
+                if close_index >= 0 and (index < 0 or close_index < index):
+                    # Some Qwen templates emit a closing tag without streaming
+                    # the opening tag. Treat its prefix as reasoning, never as
+                    # visible answer text.
+                    segment = self.pending[:close_index]
+                    if self.enabled and segment:
+                        thinking.append(segment)
+                    self.pending = self.pending[close_index + len(THINK_CLOSE) :]
+                    continue
             if index >= 0:
                 segment = self.pending[:index]
                 if self.inside:
@@ -246,6 +258,11 @@ class _ThinkingTagStream:
                 self.inside = not self.inside
                 continue
             held = 0 if final else self._partial_tag_length(self.pending, tag)
+            if not self.inside and not final:
+                held = max(
+                    held,
+                    self._partial_tag_length(self.pending, THINK_CLOSE),
+                )
             emit = self.pending if not held else self.pending[:-held]
             self.pending = "" if not held else self.pending[-held:]
             if self.inside:
@@ -736,6 +753,7 @@ def execute_stream(
         )
         payload["stream"] = True
         content = ""
+        deferred_content = ""
         thinking = ""
         thinking_enabled = _thinking_requested(parsed)
         tag_stream = _ThinkingTagStream(enabled=thinking_enabled)
@@ -769,15 +787,20 @@ def execute_stream(
                     continue
                 delta: dict[str, Any] = {"role": "assistant"}
                 if message.get("content"):
-                    visible_piece, tagged_piece = tag_stream.feed(
-                        str(message["content"])
-                    )
-                    if visible_piece:
-                        content += visible_piece
-                        delta["content"] = visible_piece
-                    if tagged_piece:
-                        thinking += tagged_piece
-                        delta["thinking"] = tagged_piece
+                    piece = str(message["content"])
+                    if thinking_enabled:
+                        visible_piece, tagged_piece = tag_stream.feed(piece)
+                        if visible_piece:
+                            content += visible_piece
+                            delta["content"] = visible_piece
+                        if tagged_piece:
+                            thinking += tagged_piece
+                            delta["thinking"] = tagged_piece
+                    else:
+                        # Fail closed: reasoning text streamed before a closing
+                        # tag cannot be retracted from a browser. Hold all visible
+                        # content until the completed response can be sanitized.
+                        deferred_content += piece
                 if thinking_enabled and message.get("thinking"):
                     piece = str(message["thinking"])
                     piece = re.sub(r"</?think>", "", piece, flags=re.IGNORECASE)
@@ -788,16 +811,26 @@ def execute_stream(
                     yield _stream_event("delta", message=delta)
                 if message.get("tool_calls"):
                     tool_calls = message["tool_calls"]
-        visible_piece, tagged_piece = tag_stream.feed("", final=True)
-        if visible_piece or tagged_piece:
-            delta = {"role": "assistant"}
-            if visible_piece:
-                content += visible_piece
-                delta["content"] = visible_piece
-            if tagged_piece:
-                thinking += tagged_piece
-                delta["thinking"] = tagged_piece
-            yield _stream_event("delta", message=delta)
+        if thinking_enabled:
+            visible_piece, tagged_piece = tag_stream.feed("", final=True)
+            if visible_piece or tagged_piece:
+                delta = {"role": "assistant"}
+                if visible_piece:
+                    content += visible_piece
+                    delta["content"] = visible_piece
+                if tagged_piece:
+                    thinking += tagged_piece
+                    delta["thinking"] = tagged_piece
+                yield _stream_event("delta", message=delta)
+        else:
+            sanitized = {"content": deferred_content}
+            _normalize_reasoning(sanitized, enabled=False)
+            content = str(sanitized.get("content") or "")
+            if content:
+                yield _stream_event(
+                    "delta",
+                    message={"role": "assistant", "content": content},
+                )
         result["model"] = parsed.model
         final_message = result.setdefault(
             "message", {"role": "assistant", "content": ""}

@@ -12,6 +12,7 @@ import copy
 import hmac
 import json
 import os
+import secrets
 import sys
 import threading
 from collections.abc import Mapping
@@ -25,6 +26,7 @@ from flask import (
     Flask,
     Response,
     jsonify,
+    make_response,
     render_template,
     request,
     stream_with_context,
@@ -60,6 +62,7 @@ VOICE_CLIENT_FIELDS = {
     "max_frames",
 }
 MAX_SPEAKER_REFERENCE_BYTES = 10 * 1024 * 1024
+SESSION_COOKIE_NAME = "omni_portal_session"
 
 SAFE_TOOLS = [
     {
@@ -154,6 +157,8 @@ class PortalConfig:
     voice_profile: Mapping[str, Any] = field(default_factory=dict)
     timeout_s: float = 1200
     max_body_bytes: int = 96 * 1024 * 1024
+    inference_slots: int = 1
+    max_inflight_requests: int = 4
 
     @classmethod
     def from_environment(cls) -> PortalConfig:
@@ -190,6 +195,12 @@ class PortalConfig:
             max_body_bytes=int(
                 os.environ.get("OMNI_PORTAL_MAX_BODY_BYTES", str(96 * 1024 * 1024))
             ),
+            inference_slots=max(
+                1, int(os.environ.get("OMNI_PORTAL_INFERENCE_SLOTS", "1"))
+            ),
+            max_inflight_requests=max(
+                1, int(os.environ.get("OMNI_PORTAL_MAX_INFLIGHT_REQUESTS", "4"))
+            ),
         )
 
 
@@ -199,6 +210,67 @@ class PortalError(RuntimeError):
 
 class PortalRequestError(ValueError):
     """A safe client request validation failure."""
+
+
+@dataclass
+class _InferenceTicket:
+    session_id: str
+    released: bool = False
+
+
+class _InferenceQueue:
+    """Bounded, session-counted queue around isolated upstream requests."""
+
+    def __init__(self, slots: int, max_inflight: int) -> None:
+        self.slots = max(1, slots)
+        self.max_inflight = max(self.slots, max_inflight)
+        self._gate = threading.BoundedSemaphore(self.slots)
+        self._lock = threading.Lock()
+        self._inflight = 0
+        self._active = 0
+        self._sessions: dict[str, int] = {}
+
+    def acquire(self, session_id: str, timeout_s: float) -> _InferenceTicket | None:
+        with self._lock:
+            if self._inflight >= self.max_inflight:
+                return None
+            self._inflight += 1
+            self._sessions[session_id] = self._sessions.get(session_id, 0) + 1
+        if not self._gate.acquire(timeout=timeout_s):
+            self._remove_inflight(session_id)
+            return None
+        with self._lock:
+            self._active += 1
+        return _InferenceTicket(session_id=session_id)
+
+    def _remove_inflight(self, session_id: str) -> None:
+        with self._lock:
+            self._inflight -= 1
+            remaining = self._sessions.get(session_id, 1) - 1
+            if remaining > 0:
+                self._sessions[session_id] = remaining
+            else:
+                self._sessions.pop(session_id, None)
+
+    def release(self, ticket: _InferenceTicket) -> None:
+        with self._lock:
+            if ticket.released:
+                return
+            ticket.released = True
+            self._active -= 1
+        self._gate.release()
+        self._remove_inflight(ticket.session_id)
+
+    def snapshot(self) -> dict[str, int]:
+        with self._lock:
+            return {
+                "users": len(self._sessions),
+                "inflight": self._inflight,
+                "active": self._active,
+                "queued": self._inflight - self._active,
+                "slots": self.slots,
+                "limit": self.max_inflight,
+            }
 
 
 def _voice_override(raw: Any) -> dict[str, Any]:
@@ -401,13 +473,24 @@ def create_app(
     )
     runtime = config or PortalConfig.from_environment()
     session = client or httpx.Client(timeout=runtime.timeout_s)
-    inference_gate = threading.BoundedSemaphore(1)
+    inference_queue = _InferenceQueue(
+        slots=runtime.inference_slots,
+        max_inflight=runtime.max_inflight_requests,
+    )
     app.config["MAX_CONTENT_LENGTH"] = runtime.max_body_bytes
 
     def authorized() -> bool:
         value = request.headers.get("Authorization", "")
         supplied = value[7:].strip() if value.lower().startswith("bearer ") else ""
         return bool(supplied) and hmac.compare_digest(supplied, runtime.access_token)
+
+    def request_session_id() -> str:
+        supplied = str(request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
+        if 16 <= len(supplied) <= 128 and all(
+            character.isalnum() or character in {"-", "_"} for character in supplied
+        ):
+            return supplied
+        return secrets.token_urlsafe(24)
 
     def apply_voice_profile(payload: dict[str, Any]) -> None:
         client_voice = _voice_override(payload.pop("portal_voice", None))
@@ -453,7 +536,7 @@ def create_app(
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
-        if request.path.startswith("/api/"):
+        if request.path.startswith("/api/") or request.path == "/":
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -463,11 +546,24 @@ def create_app(
 
     @app.get("/")
     def index():
-        return render_template(
-            "index.html",
-            model=runtime.model,
-            max_upload_mib=runtime.max_body_bytes // (1024 * 1024),
+        browser_session = request_session_id()
+        response = make_response(
+            render_template(
+                "index.html",
+                model=runtime.model,
+                max_upload_mib=runtime.max_body_bytes // (1024 * 1024),
+            )
         )
+        response.set_cookie(
+            SESSION_COOKIE_NAME,
+            browser_session,
+            max_age=24 * 60 * 60,
+            secure=True,
+            httponly=True,
+            samesite="Strict",
+            path="/",
+        )
+        return response
 
     @app.get("/healthz")
     def healthz():
@@ -519,15 +615,21 @@ def create_app(
                     "environmental_sound_analysis": True,
                     "evidence_field": "adapter.audio_observation",
                 },
+                "requests": inference_queue.snapshot(),
             }
         )
+
+    @app.get("/api/activity")
+    def activity():
+        if not authorized():
+            return jsonify({"error": "unauthorized"}), 401
+        return jsonify(inference_queue.snapshot())
 
     @app.post("/api/chat")
     def chat():
         if not authorized():
             return jsonify({"error": "unauthorized"}), 401
-        if not inference_gate.acquire(blocking=False):
-            return jsonify({"error": "another inference is in progress"}), 429
+        ticket: _InferenceTicket | None = None
         try:
             payload = request.get_json(silent=True)
             if not isinstance(payload, dict):
@@ -539,6 +641,9 @@ def create_app(
                 return jsonify({"error": "portal requires stream=false"}), 400
             apply_reasoning_mode(payload)
             apply_voice_profile(payload)
+            ticket = inference_queue.acquire(request_session_id(), runtime.timeout_s)
+            if ticket is None:
+                return jsonify({"error": "inference queue is full or timed out"}), 503
 
             executed: list[dict[str, str]] = []
             current_payload: dict[str, Any] = payload
@@ -567,7 +672,8 @@ def create_app(
         except (httpx.HTTPError, PortalError) as exc:
             return jsonify({"error": str(exc)}), 502
         finally:
-            inference_gate.release()
+            if ticket is not None:
+                inference_queue.release(ticket)
 
     @app.post("/api/chat/stream")
     def chat_stream():
@@ -589,8 +695,9 @@ def create_app(
             apply_voice_profile(payload)
         except PortalRequestError as exc:
             return jsonify({"error": str(exc)}), 400
-        if not inference_gate.acquire(blocking=False):
-            return jsonify({"error": "another inference is in progress"}), 429
+        ticket = inference_queue.acquire(request_session_id(), runtime.timeout_s)
+        if ticket is None:
+            return jsonify({"error": "inference queue is full or timed out"}), 503
 
         try:
             upstream_request = session.build_request(
@@ -598,7 +705,7 @@ def create_app(
             )
             upstream = session.send(upstream_request, stream=True)
         except httpx.HTTPError as exc:
-            inference_gate.release()
+            inference_queue.release(ticket)
             return jsonify({"error": str(exc)}), 502
 
         def relay():
@@ -606,7 +713,7 @@ def create_app(
                 yield from upstream.iter_bytes()
             finally:
                 upstream.close()
-                inference_gate.release()
+                inference_queue.release(ticket)
 
         return Response(
             stream_with_context(relay()),

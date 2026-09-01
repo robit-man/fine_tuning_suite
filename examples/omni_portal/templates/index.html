@@ -20,6 +20,9 @@
         <div class="connection" id="header-status" role="status">
           <span class="status-dot"></span>
           <span id="status-text">Connecting</span>
+          <span class="active-users" id="active-users" aria-label="0 active requests">
+            <span aria-hidden="true">·</span><span id="active-user-count">0</span>
+          </span>
         </div>
         <div class="top-actions">
           <button class="icon-button voice-button" id="voice-button" type="button" aria-label="Configure reply voice" title="Voice settings">
@@ -161,6 +164,7 @@
     </article>
   </template>
 
+  <script src="/assets/call_vad.js" defer></script>
   <script src="/assets/portal.js" defer></script>
 </body>
 </html>

@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="Robit Omni multimodal model portal">
+  <title>Robit Omni Portal</title>
+  <link rel="stylesheet" href="/assets/portal.css">
+</head>
+<body data-model="{{ model }}" data-max-upload-mib="{{ max_upload_mib }}">
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Robit Omni Portal home">
+      <span class="brand-mark">ROBIT</span>
+      <span class="brand-divider"></span>
+      <span class="brand-section">Omni Portal</span>
+    </a>
+    <div class="header-status" id="header-status">
+      <span class="status-dot" id="status-dot"></span>
+      <span id="status-text">Connecting</span>
+    </div>
+    <button class="header-button" id="clear-button" type="button">Clear</button>
+  </header>
+
+  <main class="portal-shell">
+    <aside class="control-rail" aria-label="Model controls">
+      <div class="rail-block">
+        <p class="eyebrow">Session target</p>
+        <p class="model-name">{{ model }}</p>
+      </div>
+      <div class="rail-block">
+        <p class="eyebrow">Runtime stages</p>
+        <div class="stage-list" id="stage-list">
+          <span data-stage="ollama"><i></i>Language</span>
+          <span data-stage="comprehension"><i></i>Media</span>
+          <span data-stage="tts"><i></i>Speech</span>
+          <span data-stage="adapter"><i></i>Adapter</span>
+        </div>
+      </div>
+      <div class="rail-block feature-copy">
+        <p class="eyebrow">Input matrix</p>
+        <p>Text · microphone · WAV · image · MP4/WebM</p>
+        <p class="quiet">Audio is normalized in-browser to 16 kHz mono PCM16 WAV.</p>
+      </div>
+      <div class="rail-block feature-copy">
+        <p class="eyebrow">Output matrix</p>
+        <p>Text · thinking · safe tools · 24 kHz WAV</p>
+      </div>
+    </aside>
+
+    <section class="workspace">
+      <div class="workspace-toolbar">
+        <div>
+          <p class="eyebrow">Qwen3.8 E03 Obliterated Omni</p>
+          <h1>Multimodal field console</h1>
+        </div>
+        <div class="route-readout" id="route-readout">ROUTE // IDLE</div>
+      </div>
+
+      <nav class="mode-tabs" aria-label="Task mode">
+        <button type="button" class="mode-tab active" data-mode="chat">Chat</button>
+        <button type="button" class="mode-tab" data-mode="transcribe">Transcribe</button>
+        <button type="button" class="mode-tab" data-mode="describe">Describe</button>
+        <button type="button" class="mode-tab" data-mode="synthesize">Speak</button>
+      </nav>
+
+      <div class="conversation" id="conversation" aria-live="polite">
+        <article class="message system-message">
+          <div class="message-meta"><span>PORTAL</span><time>READY</time></div>
+          <p>Send text, record speech, attach an image, or attach a short video. Select <strong>Speak</strong> output to hear the final answer on this device.</p>
+        </article>
+      </div>
+
+      <section class="composer" aria-label="Message composer">
+        <div class="attachments" id="attachments" hidden></div>
+
+        <label class="prompt-label" for="prompt" id="prompt-label">Message</label>
+        <textarea id="prompt" rows="3" maxlength="12000" placeholder="Ask anything, or attach media for comprehension…"></textarea>
+
+        <div class="capture-row">
+          <button class="capture-button mic-button" id="mic-button" type="button" aria-pressed="false">
+            <span class="capture-icon">●</span><span id="mic-label">Record mic</span>
+          </button>
+          <label class="capture-button" for="audio-input">Audio WAV</label>
+          <input id="audio-input" type="file" accept="audio/wav,.wav" hidden>
+          <label class="capture-button" for="image-input">Camera / image</label>
+          <input id="image-input" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden>
+          <label class="capture-button" for="video-input">Video</label>
+          <input id="video-input" type="file" accept="video/mp4,video/webm" capture="environment" hidden>
+        </div>
+
+        <div class="options-row">
+          <label class="toggle"><input id="think-toggle" type="checkbox" checked><span></span>Thinking</label>
+          <label class="toggle"><input id="speak-toggle" type="checkbox"><span></span>Speak output</label>
+          <label class="toggle"><input id="tools-toggle" type="checkbox"><span></span>Safe tools</label>
+          <label class="toggle"><input id="video-audio-toggle" type="checkbox" checked><span></span>Video audio</label>
+        </div>
+
+        <div class="send-row">
+          <p class="composer-status" id="composer-status">Secure endpoint ready</p>
+          <button class="send-button" id="send-button" type="button"><span>Run</span><b>↗</b></button>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <template id="message-template">
+    <article class="message">
+      <div class="message-meta"><span></span><time></time></div>
+      <div class="message-content"></div>
+      <details class="thinking" hidden><summary>Thinking trace</summary><pre></pre></details>
+      <details class="adapter-trace" hidden><summary>Adapter trace</summary><pre></pre></details>
+      <div class="tool-calls" hidden></div>
+      <div class="audio-output" hidden></div>
+    </article>
+  </template>
+
+  <script src="/assets/portal.js" defer></script>
+</body>
+</html>

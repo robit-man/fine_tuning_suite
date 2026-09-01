@@ -98,6 +98,12 @@ See [adapter docs](../docs/omni-adapter/README.md), the
 [runtime guide](../docs/omni-adapter/runtime.md), and
 [examples](../examples/omni_adapter/README.md).
 
+The [phone portal](../examples/omni_portal/README.md) packages these stages as
+an authenticated, mobile-first HTTPS application with browser microphone,
+camera/image, video, thinking/tool, and WAV output controls. Its supervisor
+uses scoped CUDA negotiation and publishes only the portal through a temporary
+Cloudflare tunnel.
+
 ## Main modules
 
 | Path | Responsibility |

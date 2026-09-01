@@ -416,6 +416,12 @@ It resolves all media weights from the installed tag; component URLs are
 internal deployment details. See the [runtime guide](docs/omni-adapter/runtime.md)
 and [examples](examples/omni_adapter/README.md).
 
+For phone testing, the [authenticated Omni portal](examples/omni_portal/README.md)
+adds browser microphone capture, image/video uploads, generated-audio playback,
+thinking/tool traces, a broker-compliant one-command supervisor, and a
+temporary Cloudflare HTTPS tunnel. The deployment and rollback checklist is in
+the [phone portal runbook](docs/omni-adapter/phone-portal.md).
+
 #### Video comprehension
 
 The planner detects the donor's `video-input` path and records a
@@ -640,6 +646,7 @@ The full checklist is in
 | `training_suite/omni_runtime.py` | Audio-understanding → Ollama → TTS HTTP cascade |
 | `docs/omni-adapter/` | Wire ABI, GGUF ABI, runtime patch guide, release runbook, schemas, and tests |
 | `examples/omni_adapter/` | Runnable reference server plus Python and JavaScript clients |
+| `examples/omni_portal/` | Authenticated mobile UI, smoke runner, lifecycle supervisor, and Cloudflare tunnel |
 | `training_suite/tool_splice.py` | Tool-enabled Ollama packaging for HF GGUFs |
 | `training_suite/ornith_vision_splice.py` | Shape-gated Ornith vision transplant and publish workflow |
 | `training_suite/gguf_text_surgery.py` | GGUF text-tensor substitution |
@@ -658,6 +665,7 @@ Additional documentation:
 - [Monolithic Ollama audio-router GGUF ADR](.aiwg/architecture/adr-002-monolithic-ollama-audio-router-gguf.md)
 - [Omni adapter documentation](docs/omni-adapter/README.md)
 - [Omni adapter examples](examples/omni_adapter/README.md)
+- [Omni phone portal](examples/omni_portal/README.md)
 
 ## Tests
 

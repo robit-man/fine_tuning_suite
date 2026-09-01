@@ -150,6 +150,8 @@ session can reconstruct it from the tag's sidecar layer.
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
 - [Model-page template](model-page-template.md)
 - [Runnable examples](../../examples/omni_adapter/README.md)
+- [Authenticated phone portal](phone-portal.md)
+- [Phone portal source and one-command bootstrap](../../examples/omni_portal/README.md)
 - [Request schema](schema/request-v1.schema.json) and
   [response schema](schema/response-v1.schema.json)
 

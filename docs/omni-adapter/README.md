@@ -84,6 +84,7 @@ different Thinker's hidden states without a trained bridge.
 | Wire schema `robit.ollama.omni-adapter.v1` | Implemented and tested |
 | Audio/image/video parsing and bounded validation | Implemented and tested |
 | ASR, describe, chat, and synthesize routes | Implemented in reference adapter |
+| Speech-separated environmental audio analysis | Live-tested with Qwen3-Omni |
 | Python and JavaScript clients | Implemented |
 | Qwen3-Omni audio/image/video inference | Live-tested with pinned llama.cpp |
 | Qwen3-TTS 24 kHz PCM16 output | Live-tested with pinned llama.cpp |

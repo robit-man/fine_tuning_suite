@@ -322,6 +322,10 @@ def _execute_safe_tool(call: Mapping[str, Any]) -> tuple[str, str]:
             "output": ["text", "thinking", "tool_calls", "audio/wav"],
             "tasks": ["chat", "transcribe", "describe", "synthesize"],
             "audio_input": "16 kHz mono PCM16 WAV",
+            "audio_understanding": [
+                "verbatim speech transcription",
+                "environmental sound and acoustic scene analysis",
+            ],
             "audio_output": "24 kHz mono PCM16 WAV",
             "schema": ADAPTER_SCHEMA,
         }
@@ -509,6 +513,11 @@ def create_app(
                     "audio": True,
                     "audio_transport": "pcm_s16le_deltas_with_final_wav",
                     "barge_in": True,
+                },
+                "audio_understanding": {
+                    "speech_transcription": True,
+                    "environmental_sound_analysis": True,
+                    "evidence_field": "adapter.audio_observation",
                 },
             }
         )

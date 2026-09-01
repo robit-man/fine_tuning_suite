@@ -79,6 +79,7 @@ def test_adapter_contract_separates_wire_schema_from_bundle_schema() -> None:
     assert contract["transport"]["streaming_v1"] is False
     assert contract["compatibility"]["message_extensions"] == ["audios", "videos"]
     assert contract["media"]["video"]["max_items"] == 4
+    assert "environmental" in contract["response"]["adapter"]["audio_observation"]
 
 
 def test_tts_stream_window_validation_and_cli_arguments(tmp_path: Path) -> None:
@@ -571,11 +572,13 @@ def test_chat_comprehension_payload_forbids_conversational_media_reply() -> None
     assert system["role"] == "system"
     assert "not a conversational assistant" in system["content"]
     assert "<speech_transcript>" in system["content"]
+    assert "<audio_observation>" in system["content"]
     assert "never your response" in system["content"]
     media_parts = payload["messages"][-1]["content"]
     assert [part["type"] for part in media_parts] == ["input_audio", "text"]
     assert "Reply to this recording." not in media_parts[-1]["text"]
-    assert "Transcribe the supplied speech verbatim" in media_parts[-1]["text"]
+    assert "Analyze the supplied audio" in media_parts[-1]["text"]
+    assert "non-speech sounds" in media_parts[-1]["text"]
     assert "Do not answer the speech" in media_parts[-1]["text"]
 
 
@@ -590,6 +593,7 @@ def test_stream_exposes_only_tagged_input_transcript_to_clients() -> None:
                             "message": {
                                 "content": (
                                     "<speech_transcript>Haha, same, just vibing.</speech_transcript>"
+                                    "<audio_observation>Soft room tone and a fan.</audio_observation>"
                                     "<visual_observation>A person is visible.</visual_observation>"
                                 )
                             }
@@ -638,10 +642,78 @@ def test_stream_exposes_only_tagged_input_transcript_to_clients() -> None:
 
     observation = next(event for event in events if event["type"] == "observation")
     assert observation["transcript"] == "Haha, same, just vibing."
+    assert observation["audio_observation"] == "Soft room tone and a fan."
     assert "A person is visible" in observation["content"]
     final = events[-1]["response"]
     assert final["adapter"]["input_transcript"] == "Haha, same, just vibing."
+    assert final["adapter"]["audio_observation"] == "Soft room tone and a fan."
     assert final["message"]["content"] == "What is the vibe?"
+
+
+def test_environmental_audio_does_not_become_user_transcript() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "comprehension":
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    "<speech_transcript></speech_transcript>"
+                                    "<audio_observation>Rain, a car horn, and distant "
+                                    "traffic.</audio_observation>"
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+        if request.url.host == "language":
+            return httpx.Response(
+                200,
+                content=(
+                    b'{"message":{"role":"assistant","content":"It sounds like a rainy street."},'
+                    b'"done":true}\n'
+                ),
+            )
+        return httpx.Response(404)
+
+    parsed = parse_adapter_request(
+        _base_request(
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What is happening around me?",
+                    "audios": [{"data": _encoded(_wav(16000))}],
+                }
+            ],
+            think=False,
+        )
+    )
+    events = [
+        json.loads(chunk)
+        for chunk in execute_stream(
+            parsed,
+            Config(
+                "http://comprehension/v1/chat/completions",
+                "qwen3-omni",
+                "http://language",
+                "http://tts/synthesize",
+                30,
+            ),
+            httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+    ]
+
+    observation = next(event for event in events if event["type"] == "observation")
+    assert "transcript" not in observation
+    assert observation["audio_observation"] == "Rain, a car horn, and distant traffic."
+    final = events[-1]["response"]
+    assert "input_transcript" not in final["adapter"]
+    assert final["adapter"]["audio_observation"] == (
+        "Rain, a car horn, and distant traffic."
+    )
 
 
 def test_video_context_overflow_retries_with_lower_frame_cap() -> None:

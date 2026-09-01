@@ -92,6 +92,7 @@ result. Do not commit large or restricted media.
 |---|---|---|
 | text chat | `language` | stock response; no media worker required |
 | image/audio/video chat | `comprehension → language` | observation used as untrusted evidence |
+| environmental audio chat | `comprehension → language` | transcript and non-speech acoustic evidence remain separate |
 | media chat with speech | `comprehension → language → tts` | text plus valid tagged WAV |
 | ASR | `comprehension` | direct transcript, no language paraphrase |
 | video describe | `comprehension` | temporal and audio policy honored |

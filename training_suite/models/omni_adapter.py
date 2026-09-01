@@ -226,6 +226,10 @@ def adapter_contract() -> dict[str, Any]:
                 "schema": ADAPTER_SCHEMA,
                 "task": "selected task",
                 "route": ["executed stage names"],
+                "input_transcript": "tagged verbatim speech when available",
+                "audio_observation": (
+                    "tagged environmental and non-speech acoustic evidence when available"
+                ),
             },
         },
     }

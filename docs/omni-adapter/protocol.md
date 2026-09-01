@@ -48,10 +48,12 @@ clearly delimited, untrusted observation text.
 
 For `chat`, the comprehension graph is a perception encoder, not a second
 assistant. It MUST NOT answer the user. Audio-bearing observations SHOULD place
-verbatim speech inside `<speech_transcript>` and visual evidence inside
-`<visual_observation>`, with no conversational reply outside those tags. A
-client may attribute only the extracted transcript—not the raw observation—to
-the user's chat role.
+verbatim speech inside `<speech_transcript>` and non-speech acoustic evidence
+inside `<audio_observation>`. Acoustic evidence includes environmental events,
+ambience, music, speaker activity, temporal changes, and uncertainty without
+duplicating transcript text. Visual evidence belongs in `<visual_observation>`,
+with no conversational reply outside those tags. A client may attribute only
+the extracted transcript—not either observation—to the user's chat role.
 
 The runtime MUST withhold conversational message text from the comprehension
 graph. That text is an instruction to the language model, while the media graph

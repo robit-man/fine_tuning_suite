@@ -144,6 +144,11 @@ def test_portal_status_probes_all_internal_stages() -> None:
     assert set(seen) == {"adapter", "comprehension", "tts", "ollama"}
     assert response.json["model"] == DEFAULT_MODEL
     assert response.json["voice_profile"]["clone_mode"] == "speaker_embedding"
+    assert response.json["audio_understanding"] == {
+        "speech_transcription": True,
+        "environmental_sound_analysis": True,
+        "evidence_field": "adapter.audio_observation",
+    }
     assert response.json["voice_profile"]["client_reference_wav"] is True
 
 

@@ -199,7 +199,10 @@ replay and compatibility. Clients must not interpret NDJSON or HTTP transport
 chunk boundaries as codec-frame boundaries.
 
 For media `chat`, comprehension is perception-only: it cannot answer the user.
-Its output uses `<speech_transcript>` and `<visual_observation>` evidence tags.
+Its output uses `<speech_transcript>`, `<audio_observation>`, and
+`<visual_observation>` evidence tags. `audio_observation` carries non-speech
+events, ambience, music, speaker activity, temporal changes, and uncertainty;
+it does not duplicate the transcript.
 Conversational message text is withheld from the comprehension graph and is
 sent only to the language model; the media graph receives a modality-specific
 extraction instruction instead.
@@ -207,6 +210,10 @@ The `observation` event additionally exposes `transcript` only when a tagged
 speech transcript was produced; the authoritative final response mirrors that
 value as `adapter.input_transcript`. Clients must never display the raw semantic
 observation as a user-authored chat message.
+The event and final adapter trace similarly expose tagged acoustic evidence as
+`audio_observation` and `adapter.audio_observation`. Audio-only `transcribe`
+remains the fast ASR route; attach audio with a text question to run combined
+speech and environmental analysis through the language model.
 
 ## Python client
 

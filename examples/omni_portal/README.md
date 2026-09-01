@@ -289,6 +289,11 @@ media base64 or the access token.
   newest media turn becomes the context for subsequent text-only follow-ups.
   Visual-call turns likewise use only the current frame; audio-only calls keep
   their conversational history.
+- Audio attached with a text question performs combined ASR and environmental
+  sound analysis. Speech is exposed separately from non-speech events, ambience,
+  music, speaker activity, and temporal changes, so acoustic observations reach
+  the language model without appearing as user-authored transcript text. An
+  audio-only send retains the direct, low-latency ASR behavior.
 
 Cloudflare Quick Tunnels are temporary development endpoints, not durable
 production ingress. Stop the portal after the phone test. For a persistent

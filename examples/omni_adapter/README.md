@@ -67,9 +67,12 @@ export OMNI_TTS_PORT=8892
 python examples/omni_adapter/tts_server.py
 ```
 
-Set `OMNI_TTS_GPU_LAYERS=0` for a CPU-only functional test. CUDA services must
-use the host's GPU broker. The wrapper is serial and reloads the model on each
-request; it is intentionally simple, not production throughput code.
+The wrapper is serial and reloads the model on each request. In a manually
+scoped CUDA deployment, pass `OLLAMA_UNIFY_GPU_LEASE`, `OMNI_TTS_GPU_UUID`, and
+`CUDA_VISIBLE_DEVICES` with the exact reserved UUID. The wrapper then calls
+broker `prepare`, verifies that `llama-tts` is resident on that GPU, and calls
+`ready` for each generation. `OMNI_TTS_GPU_LAYERS=-1` enables full offload;
+`0` remains available only for explicit CPU development tests.
 
 ## 4. Start the unified adapter
 

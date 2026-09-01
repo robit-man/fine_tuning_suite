@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import base64
 import os
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -37,6 +39,10 @@ class Config:
     max_text_chars: int = 4096
     max_frames: int = 512
     gpu_layers: int = -1
+    lease_token: str = ""
+    gpu_uuid: str = ""
+    active_pid_file: Path | None = None
+    residency_timeout_s: float = 120
 
     @classmethod
     def from_environment(cls) -> Config:
@@ -88,11 +94,93 @@ class Config:
             max_text_chars=int(os.environ.get("OMNI_TTS_MAX_TEXT_CHARS", "4096")),
             max_frames=int(os.environ.get("OMNI_TTS_MAX_FRAMES", "512")),
             gpu_layers=int(os.environ.get("OMNI_TTS_GPU_LAYERS", "-1")),
+            lease_token=os.environ.get("OLLAMA_UNIFY_GPU_LEASE", "").strip(),
+            gpu_uuid=os.environ.get("OMNI_TTS_GPU_UUID", "").strip(),
+            active_pid_file=(
+                Path(os.environ["OMNI_TTS_ACTIVE_PID_FILE"]).expanduser()
+                if os.environ.get("OMNI_TTS_ACTIVE_PID_FILE")
+                else None
+            ),
+            residency_timeout_s=float(
+                os.environ.get("OMNI_TTS_RESIDENCY_TIMEOUT_S", "120")
+            ),
         )
 
 
 class TTSError(RuntimeError):
     pass
+
+
+def _broker_transition(action: str, token: str) -> None:
+    completed = subprocess.run(
+        ["docker", "gpu", action, token],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if completed.returncode != 0:
+        diagnostic = (completed.stderr or completed.stdout).strip()[-1000:]
+        raise TTSError(f"GPU broker {action} failed: {diagnostic}")
+
+
+def _cuda_process_is_resident(pid: int, gpu_uuid: str) -> bool:
+    completed = subprocess.run(
+        [
+            "nvidia-smi",
+            "--query-compute-apps=pid,gpu_uuid,used_memory",
+            "--format=csv,noheader,nounits",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if completed.returncode != 0:
+        return False
+    for line in completed.stdout.splitlines():
+        fields = [field.strip() for field in line.split(",")]
+        if len(fields) < 3:
+            continue
+        try:
+            process_id = int(fields[0])
+            used_mib = int(fields[2])
+        except ValueError:
+            continue
+        if process_id == pid and fields[1] == gpu_uuid and used_mib > 0:
+            return True
+    return False
+
+
+def _wait_for_cuda_residency(
+    process: subprocess.Popen[str], gpu_uuid: str, timeout_s: float
+) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if _cuda_process_is_resident(process.pid, gpu_uuid):
+            return
+        if process.poll() is not None:
+            stdout, stderr = process.communicate()
+            diagnostic = (stderr or stdout)[-2000:]
+            raise TTSError(
+                "llama-tts exited before CUDA residency was verified: " + diagnostic
+            )
+        time.sleep(0.25)
+    raise TTSError(
+        f"llama-tts did not become resident on reserved GPU {gpu_uuid} "
+        f"within {timeout_s:g}s"
+    )
+
+
+def _stop_process_group(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
 
 
 def synthesize(config: Config, body: dict[str, Any]) -> bytes:
@@ -126,16 +214,47 @@ def synthesize(config: Config, body: dict[str, Any]) -> bytes:
         ]
         if speaker:
             command.extend(["--tts-speaker-file", speaker])
-        completed = subprocess.run(
+        if config.lease_token and not config.gpu_uuid:
+            raise TTSError("OMNI_TTS_GPU_UUID is required with a scoped GPU lease")
+        if config.lease_token:
+            _broker_transition("prepare", config.lease_token)
+
+        process = subprocess.Popen(
             command,
-            check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=config.timeout_s,
+            start_new_session=True,
         )
-        if completed.returncode != 0:
-            diagnostic = (completed.stderr or completed.stdout)[-2000:]
-            raise TTSError(f"llama-tts exited {completed.returncode}: {diagnostic}")
+        if config.active_pid_file:
+            config.active_pid_file.parent.mkdir(parents=True, exist_ok=True)
+            config.active_pid_file.write_text(f"{process.pid}\n")
+        broker_ready = False
+        try:
+            if config.lease_token:
+                _wait_for_cuda_residency(
+                    process, config.gpu_uuid, config.residency_timeout_s
+                )
+                _broker_transition("ready", config.lease_token)
+                broker_ready = True
+            try:
+                stdout, stderr = process.communicate(timeout=config.timeout_s)
+            except subprocess.TimeoutExpired:
+                _stop_process_group(process)
+                raise
+        finally:
+            if config.active_pid_file:
+                config.active_pid_file.unlink(missing_ok=True)
+            if config.lease_token and not broker_ready:
+                try:
+                    # Comprehension remains resident, so restore the scoped lease
+                    # if TTS failed between prepare and its own residency signal.
+                    _broker_transition("ready", config.lease_token)
+                except TTSError as exc:
+                    print(f"warning: {exc}", file=sys.stderr)
+        if process.returncode != 0:
+            diagnostic = (stderr or stdout)[-2000:]
+            raise TTSError(f"llama-tts exited {process.returncode}: {diagnostic}")
         if not output.is_file():
             raise TTSError("llama-tts returned success without a WAV file")
         wav = output.read_bytes()

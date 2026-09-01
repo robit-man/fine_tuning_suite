@@ -11,19 +11,23 @@ compact monospace type, yellow accents, thin borders, fixed runtime status,
 and a responsive control rail. It does not copy NOCLIP assets or documentation
 content.
 
-## Features
+## Interface and routing
 
-| Portal control | Adapter route |
+The phone UI is deliberately a single chat surface. Press and hold the
+microphone icon to record; the live waveform disappears on release and the
+resulting 16 kHz WAV appears as a playable attachment before it is sent. The
+paperclip accepts WAV, JPEG, PNG, WebP, MP4, and WebM. The speaker icon is the
+only output toggle: gray requests text only, while yellow requests both text
+and synthesized audio.
+
+| Composer action | Adapter route |
 |---|---|
 | Text chat | Qwen3.8 language |
-| Microphone or WAV chat | Qwen3-Omni comprehension → Qwen3.8 |
-| Transcribe | Qwen3-Omni comprehension only |
-| Camera/image describe | Qwen3-Omni comprehension only |
-| MP4/WebM describe | ordered video frames plus optional demuxed audio |
-| Speak | Qwen3-TTS direct synthesis |
-| Speak output | final Qwen3.8 text → Qwen3-TTS |
-| Thinking | preserved `message.thinking`, shown in a collapsed panel |
-| Safe tools | allow-listed tool execution followed by a second model turn |
+| Audio attachment with no prompt | Qwen3-Omni direct transcription |
+| Audio attachment with a prompt | Qwen3-Omni comprehension → Qwen3.8 |
+| Image/video with no prompt | Qwen3-Omni direct description |
+| Image/video with a prompt | Qwen3-Omni comprehension → Qwen3.8 |
+| Speaker icon enabled | final text → Qwen3-TTS → 24 kHz WAV |
 
 Microphone capture is encoded in the browser as a complete 16 kHz mono PCM16
 WAV. Generated speech is returned as tagged base64 24 kHz mono PCM16 WAV and
@@ -43,10 +47,9 @@ The command:
 1. verifies the installed Ollama tag and sidecar;
 2. reconstructs the four disposable media-runtime views when missing;
 3. runs `docker gpu discover` and selects an unclaimed broker-approved GPU;
-4. starts comprehension under a scoped `docker gpu run` lease, or in automatic
-   mode falls back to CPU isolation if another broker transition blocks CUDA;
-5. starts CPU-only TTS, the unified adapter, and authenticated portal;
-6. runs a local status and exact-text smoke gate;
+4. acquires one scoped 45 GiB lease and starts comprehension on that exact UUID;
+5. starts broker-coordinated CUDA TTS, the unified adapter, and portal;
+6. runs local status, exact-text, and GPU TTS smoke gates;
 7. starts a Cloudflare Quick Tunnel and prints an HTTPS URL containing the
    access token in its URL fragment.
 
@@ -74,15 +77,16 @@ comprehension worker in that order. It then removes only a component cache
 carrying its ownership marker. Set `OMNI_KEEP_CACHE=1` to keep the reconstructed
 views for a near-term restart.
 
-## Why TTS defaults to CPU
+## CUDA-only media policy
 
-The current `llama-tts` reference executable is single-shot and allocates its
-model on each request. A broker-managed service may not claim stable GPU
-readiness and then grow VRAM without `prepare`. The bootstrap therefore sets
-`CUDA_VISIBLE_DEVICES` empty and `--gpu-layers 0` for TTS. The persistent
-comprehension graph prefers a scoped 30 GiB CUDA reservation. In `auto` mode it
-uses `CUDA_VISIBLE_DEVICES` empty and `-ngl 0` if the broker refuses a new
-transition; Ollama remains on broker-owned lanes in either case.
+The phone deployment has no CPU inference fallback. Persistent comprehension
+uses `-ngl 99` on the exact GPU UUID assigned by a manual scoped broker lease.
+TTS uses `--gpu-layers -1` on the same UUID. Because the current `llama-tts`
+binary is single-shot, the wrapper calls broker `prepare` before every load,
+waits until the TTS PID is visible as resident on that UUID, and then calls
+`ready`. A failed reservation or residency check aborts deployment or the
+request instead of silently running inference on CPU. Ollama language requests
+continue through broker-owned GPU lanes.
 
 ## Configuration
 
@@ -91,8 +95,7 @@ transition; Ollama remains on broker-owned lanes in either case.
 | `OMNI_MODEL` | release `q4km` tag | Pinned portal model |
 | `OMNI_PORTAL_RUNTIME_ROOT` | `training_suite/outputs/omni_portal_runtime` | State/cache/log root |
 | `OMNI_COMPREHENSION_GPU_UUID` | broker-selected | Explicit approved GPU override |
-| `OMNI_COMPREHENSION_VRAM_MIB` | `30000` | Scoped reservation |
-| `OMNI_COMPREHENSION_MODE` | `auto` | `auto`, strict `cuda`, or CPU-only `cpu` |
+| `OMNI_COMPREHENSION_VRAM_MIB` | `45000` | Shared comprehension/TTS scoped reservation |
 | `OMNI_PORTAL_TOKEN` | generated | At least 24 characters |
 | `OMNI_KEEP_CACHE` | `0` | Keep materialized views after stop |
 | `OMNI_PORTAL_MAX_BODY_BYTES` | 96 MiB | Same-origin JSON request cap |
@@ -102,9 +105,9 @@ metrics endpoint defaults to loopback port `49312`.
 
 ## Full smoke test
 
-The startup gate deliberately performs only health checks and a text sentinel
-so publication is not delayed by several serial media generations. Run every
-route against a live deployment with:
+The startup gate performs health checks, a text sentinel, and a GPU TTS
+generation before publishing ingress. Run every media route against a live
+deployment with:
 
 ```bash
 TOKEN_FILE=training_suite/outputs/omni_portal_runtime/state/access-token.txt
@@ -128,6 +131,8 @@ prints media base64 or the access token.
 - Only the portal is tunneled; Ollama and all workers remain on loopback.
 - Every inference/status API requires a constant-time bearer-token match.
 - The model tag is fixed server-side and streaming requests are rejected.
+- Media inference has no CPU fallback; CUDA residency is verified before the
+  scoped lease is marked ready.
 - Requests are limited to one in-flight inference and 96 MiB encoded JSON.
 - The browser caps decoded image, video, and audio sizes below adapter limits.
 - CSP, frame denial, no-referrer, no-store, and same-origin camera/microphone

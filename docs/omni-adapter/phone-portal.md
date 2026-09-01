@@ -17,9 +17,9 @@ Omni phone portal :8920
   │ authenticated, fixed-model proxy
   ▼
 Omni adapter :8910
-  ├── Qwen3-Omni comprehension :8901  (broker-scoped CUDA; CPU fallback)
+  ├── Qwen3-Omni comprehension :8901  (broker-scoped CUDA, persistent)
   ├── Ollama language :11434           (broker-owned lanes)
-  └── Qwen3-TTS :8892                  (CPU-only, single-shot)
+  └── Qwen3-TTS :8892                  (broker-coordinated CUDA, single-shot)
 ```
 
 No component port listens on a public interface. The public URL is a temporary
@@ -32,10 +32,11 @@ Before the tunnel is published, the supervisor requires:
 
 - valid sidecar resolution for the requested Ollama tag;
 - four complete materialized component views;
-- successful CUDA broker discovery and scoped comprehension readiness, or the
-  documented CPU-isolated fallback when another broker transition blocks CUDA;
+- successful CUDA broker discovery, scoped lease acquisition, and verified
+  comprehension residency on the assigned UUID;
 - HTTP 2xx health from comprehension, TTS, adapter, portal, and Ollama;
-- exact `PORTAL TEXT OK` language sentinel through the authenticated portal.
+- exact `PORTAL TEXT OK` language sentinel and valid GPU-generated TTS WAV
+  through the authenticated portal.
 
 Any failed gate terminates the children, releases the scoped lease, and removes
 only the portal-owned cache. The tunnel is never started after a failed local
@@ -51,9 +52,10 @@ examples/omni_portal/start.sh --stop
 ```
 
 The printed URL must be opened as-is so its `#access=...` fragment reaches the
-browser. Microphone permission requires the HTTPS endpoint. If phone autoplay
-is blocked after a long inference, use the audio player's explicit play
-control.
+browser. Microphone permission requires the HTTPS endpoint. Hold the microphone
+icon while speaking; release it to create a playable WAV attachment, then send.
+The speaker icon switches between text-only and text-plus-TTS replies. If phone
+autoplay is blocked after a long inference, use the audio player's play control.
 
 ## Verification matrix
 
@@ -66,9 +68,8 @@ control.
 | Microphone/WAV | non-empty transcription or chat response |
 | Image | non-empty visual description |
 | Video with audio | ordered visual description plus spoken content |
-| Thinking | separate collapsed trace on chat routes |
-| Safe tool | allow-listed call, tool result, final assistant turn |
 | TTS | valid 24 kHz mono PCM16 WAV playable on phone |
+| CUDA scope | comprehension and each TTS process resident on reserved UUID |
 
 Use `examples/omni_portal/smoke.py` for the machine-verifiable form of these
 checks. Browser microphone/camera permission and phone speaker output require a

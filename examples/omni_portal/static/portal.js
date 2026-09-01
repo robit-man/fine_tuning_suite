@@ -10,66 +10,41 @@
     image: 18 * 1024 * 1024,
     video: Math.min(68, Math.max(8, MAX_UPLOAD_MIB - 24)) * 1024 * 1024,
   };
-  const SAFE_TOOLS = [
-    {
-      type: "function",
-      function: {
-        name: "get_current_time",
-        description: "Return the current date, local time, and UTC offset from the portal host.",
-        parameters: { type: "object", properties: {} },
-      },
-    },
-    {
-      type: "function",
-      function: {
-        name: "get_portal_capabilities",
-        description: "Return the input, output, and task capabilities exposed by this portal.",
-        parameters: { type: "object", properties: {} },
-      },
-    },
-  ];
 
   const elements = {
     headerStatus: document.getElementById("header-status"),
     statusText: document.getElementById("status-text"),
-    stageList: document.getElementById("stage-list"),
-    routeReadout: document.getElementById("route-readout"),
     conversation: document.getElementById("conversation"),
     template: document.getElementById("message-template"),
     prompt: document.getElementById("prompt"),
-    promptLabel: document.getElementById("prompt-label"),
-    captureRow: document.querySelector(".capture-row"),
     attachments: document.getElementById("attachments"),
+    mediaInput: document.getElementById("media-input"),
     micButton: document.getElementById("mic-button"),
-    micLabel: document.getElementById("mic-label"),
-    audioInput: document.getElementById("audio-input"),
-    imageInput: document.getElementById("image-input"),
-    videoInput: document.getElementById("video-input"),
-    think: document.getElementById("think-toggle"),
     speak: document.getElementById("speak-toggle"),
-    tools: document.getElementById("tools-toggle"),
-    videoAudio: document.getElementById("video-audio-toggle"),
     send: document.getElementById("send-button"),
     composerStatus: document.getElementById("composer-status"),
     clear: document.getElementById("clear-button"),
-    modes: [...document.querySelectorAll(".mode-tab")],
+    waveform: document.getElementById("waveform"),
+    waveformCanvas: document.getElementById("waveform-canvas"),
+    recordingTime: document.getElementById("recording-time"),
   };
 
   const state = {
-    mode: "chat",
     token: "",
     attachments: [],
     history: [],
     recording: null,
+    holdingMic: false,
     recordTimer: null,
+    recordClock: null,
     playbackContext: null,
   };
 
   function accessToken() {
     const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
     const supplied = fragment.get("access");
-    if (supplied) sessionStorage.setItem("robit_omni_access", supplied);
-    return supplied || sessionStorage.getItem("robit_omni_access") || "";
+    if (supplied) sessionStorage.setItem("omni_access", supplied);
+    return supplied || sessionStorage.getItem("omni_access") || "";
   }
 
   function authHeaders(extra = {}) {
@@ -81,40 +56,12 @@
     elements.composerStatus.classList.toggle("error", error);
   }
 
-  function timestamp() {
-    return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
-
-  function addMessage({ role, content, thinking, trace, tools, audio, error = false }) {
+  function addMessage({ role, content, audio, error = false }) {
     const node = elements.template.content.firstElementChild.cloneNode(true);
     node.classList.add(role === "user" ? "user" : "assistant");
     if (error) node.classList.add("error");
-    node.querySelector(".message-meta span").textContent = error ? "ERROR" : role.toUpperCase();
-    node.querySelector(".message-meta time").textContent = timestamp();
     node.querySelector(".message-content").textContent = content || "";
-
-    if (thinking) {
-      const details = node.querySelector(".thinking");
-      details.hidden = false;
-      details.querySelector("pre").textContent = thinking;
-    }
-    if (trace) {
-      const details = node.querySelector(".adapter-trace");
-      details.hidden = false;
-      details.querySelector("pre").textContent = JSON.stringify(trace, null, 2);
-    }
-    if (tools && tools.length) {
-      const box = node.querySelector(".tool-calls");
-      box.hidden = false;
-      for (const tool of tools) {
-        const chip = document.createElement("div");
-        chip.className = "tool-chip";
-        chip.textContent = `${tool.name || "tool"} // ${tool.result || JSON.stringify(tool)}`;
-        box.appendChild(chip);
-      }
-    }
     if (audio && audio.data) attachAudioPlayer(node, audio);
-
     elements.conversation.appendChild(node);
     elements.conversation.scrollTop = elements.conversation.scrollHeight;
     return node;
@@ -126,7 +73,7 @@
     for (let offset = 0; offset < binary.length; offset += 32_768) {
       const slice = binary.slice(offset, offset + 32_768);
       const bytes = new Uint8Array(slice.length);
-      for (let i = 0; i < slice.length; i += 1) bytes[i] = slice.charCodeAt(i);
+      for (let index = 0; index < slice.length; index += 1) bytes[index] = slice.charCodeAt(index);
       chunks.push(bytes);
     }
     return new Blob(chunks, { type: mime || "audio/wav" });
@@ -144,45 +91,47 @@
     audio.addEventListener("ended", () => URL.revokeObjectURL(url), { once: true });
     const note = document.createElement("p");
     note.className = "audio-note";
-    note.textContent = `${envelope.sample_rate_hz || 24000} Hz · mono PCM16 · tap play if autoplay is blocked`;
+    note.textContent = "Spoken reply · tap play if autoplay is blocked";
     box.append(audio, note);
-    audio.play().catch(() => { note.textContent = "Audio ready · tap play (mobile autoplay policy)"; });
+    audio.play().catch(() => { note.textContent = "Spoken reply ready · tap play"; });
   }
 
   async function unlockPlayback() {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (!AudioContext) return;
     if (!state.playbackContext) state.playbackContext = new AudioContext();
-    if (state.playbackContext.state === "suspended") {
-      await state.playbackContext.resume().catch(() => {});
-    }
+    if (state.playbackContext.state === "suspended") await state.playbackContext.resume().catch(() => {});
   }
 
   async function refreshStatus() {
     if (!state.token) {
-      elements.headerStatus.className = "header-status offline";
-      elements.statusText.textContent = "Access token missing";
+      elements.headerStatus.className = "connection offline";
+      elements.statusText.textContent = "Access missing";
       return;
     }
     try {
       const response = await fetch("/api/status", { headers: authHeaders() });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-      elements.headerStatus.className = `header-status ${data.ok ? "online" : "offline"}`;
-      elements.statusText.textContent = data.ok ? "All systems nominal" : "Stage unavailable";
-      for (const item of elements.stageList.querySelectorAll("[data-stage]")) {
-        const result = data.stages[item.dataset.stage];
-        item.className = result && result.ok ? "online" : "offline";
-      }
+      elements.headerStatus.className = `connection ${data.ok ? "online" : "offline"}`;
+      elements.statusText.textContent = data.ok ? "Online" : "Unavailable";
     } catch (_error) {
-      elements.headerStatus.className = "header-status offline";
-      elements.statusText.textContent = "Portal unavailable";
+      elements.headerStatus.className = "connection offline";
+      elements.statusText.textContent = "Offline";
     }
   }
 
   function humanBytes(bytes) {
-    if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KiB`;
+    if (bytes < 1024 * 1024) return `${Math.max(1, Math.ceil(bytes / 1024))} KiB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  }
+
+  function inferKind(file) {
+    const mime = (file.type || "").toLowerCase();
+    if (mime === "audio/wav" || file.name.toLowerCase().endsWith(".wav")) return "audio";
+    if (mime.startsWith("image/")) return "image";
+    if (mime === "video/mp4" || mime === "video/webm") return "video";
+    throw new Error("Choose a WAV, JPEG, PNG, WebP, MP4, or WebM file");
   }
 
   function renderAttachments() {
@@ -191,19 +140,43 @@
     for (const [index, item] of state.attachments.entries()) {
       const node = document.createElement("div");
       node.className = "attachment";
-      const kind = document.createElement("b");
-      kind.textContent = item.kind;
-      const name = document.createElement("span");
-      name.textContent = `${item.name} · ${humanBytes(item.bytes)}`;
+      const preview = document.createElement("div");
+      preview.className = "attachment-preview";
+      if (item.kind === "image") {
+        const image = document.createElement("img");
+        image.alt = "";
+        image.src = `data:${item.mime};base64,${item.data}`;
+        preview.appendChild(image);
+      } else {
+        preview.textContent = item.kind === "audio" ? "WAV" : "VID";
+      }
+      const body = document.createElement("div");
+      body.className = "attachment-body";
+      const name = document.createElement("div");
+      name.className = "attachment-name";
+      name.textContent = item.name;
+      const meta = document.createElement("div");
+      meta.className = "attachment-meta";
+      meta.textContent = `${item.kind} · ${humanBytes(item.bytes)}`;
+      body.append(name, meta);
+      if (item.kind === "audio") {
+        const audio = document.createElement("audio");
+        audio.controls = true;
+        audio.playsInline = true;
+        audio.preload = "metadata";
+        audio.src = `data:audio/wav;base64,${item.data}`;
+        body.appendChild(audio);
+      }
       const remove = document.createElement("button");
       remove.type = "button";
+      remove.className = "icon-button attachment-remove";
       remove.textContent = "×";
       remove.setAttribute("aria-label", `Remove ${item.name}`);
       remove.addEventListener("click", () => {
         state.attachments.splice(index, 1);
         renderAttachments();
       });
-      node.append(kind, name, remove);
+      node.append(preview, body, remove);
       elements.attachments.appendChild(node);
     }
   }
@@ -217,18 +190,19 @@
     });
   }
 
-  async function addFile(kind, file, overrideMime) {
+  async function addFile(file, forcedKind = null) {
     if (!file) return;
+    const kind = forcedKind || inferKind(file);
     if (file.size > LIMITS[kind]) {
-      throw new Error(`${kind} is ${humanBytes(file.size)}; portal limit is ${humanBytes(LIMITS[kind])}`);
+      throw new Error(`${kind} is ${humanBytes(file.size)}; limit is ${humanBytes(LIMITS[kind])}`);
     }
     const dataUrl = await fileDataUrl(file);
     const comma = dataUrl.indexOf(",");
-    if (comma < 0) throw new Error("File could not be base64 encoded");
+    if (comma < 0) throw new Error("File could not be encoded");
     state.attachments.push({
       kind,
-      name: file.name || `recording-${Date.now()}.wav`,
-      mime: overrideMime || file.type,
+      name: file.name || `microphone-${Date.now()}.wav`,
+      mime: kind === "audio" ? "audio/wav" : file.type,
       data: dataUrl.slice(comma + 1),
       bytes: file.size,
     });
@@ -250,12 +224,12 @@
     if (sourceRate === targetRate) return samples;
     const ratio = sourceRate / targetRate;
     const output = new Float32Array(Math.floor(samples.length / ratio));
-    for (let i = 0; i < output.length; i += 1) {
-      const start = Math.floor(i * ratio);
-      const end = Math.max(start + 1, Math.floor((i + 1) * ratio));
+    for (let index = 0; index < output.length; index += 1) {
+      const start = Math.floor(index * ratio);
+      const end = Math.max(start + 1, Math.floor((index + 1) * ratio));
       let total = 0;
-      for (let j = start; j < end && j < samples.length; j += 1) total += samples[j];
-      output[i] = total / (end - start);
+      for (let cursor = start; cursor < end && cursor < samples.length; cursor += 1) total += samples[cursor];
+      output[index] = total / (end - start);
     }
     return output;
   }
@@ -264,7 +238,7 @@
     const buffer = new ArrayBuffer(44 + samples.length * 2);
     const view = new DataView(buffer);
     const write = (offset, text) => {
-      for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+      for (let index = 0; index < text.length; index += 1) view.setUint8(offset + index, text.charCodeAt(index));
     };
     write(0, "RIFF");
     view.setUint32(4, 36 + samples.length * 2, true);
@@ -288,10 +262,45 @@
     return new Blob([buffer], { type: "audio/wav" });
   }
 
-  async function startRecording() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      throw new Error("Microphone capture is unavailable; use the HTTPS tunnel on a supported browser");
+  function drawWaveform() {
+    const recording = state.recording;
+    if (!recording) return;
+    const canvas = elements.waveformCanvas;
+    const rect = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.floor(rect.width * ratio));
+    canvas.height = Math.max(1, Math.floor(rect.height * ratio));
+    const context = canvas.getContext("2d");
+    context.scale(ratio, ratio);
+    const samples = new Uint8Array(recording.analyser.fftSize);
+    recording.analyser.getByteTimeDomainData(samples);
+    context.clearRect(0, 0, rect.width, rect.height);
+    context.strokeStyle = "#fb7185";
+    context.lineWidth = 1.5;
+    context.beginPath();
+    for (let index = 0; index < samples.length; index += 1) {
+      const x = index * rect.width / (samples.length - 1);
+      const y = samples[index] / 255 * rect.height;
+      if (index === 0) context.moveTo(x, y);
+      else context.lineTo(x, y);
     }
+    context.stroke();
+    recording.animationFrame = requestAnimationFrame(drawWaveform);
+  }
+
+  function updateRecordClock() {
+    if (!state.recording) return;
+    const seconds = Math.floor((Date.now() - state.recording.started) / 1000);
+    const minutes = Math.floor(seconds / 60);
+    elements.recordingTime.textContent = `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+  }
+
+  async function startRecording() {
+    if (state.recording) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("Microphone capture requires this HTTPS page in a supported browser");
+    }
+    setComposerStatus("Requesting microphone…");
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
       video: false,
@@ -300,26 +309,38 @@
     const context = new AudioContext();
     await context.resume();
     const source = context.createMediaStreamSource(stream);
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 1024;
     const processor = context.createScriptProcessor(4096, 1, 1);
     const sink = context.createGain();
     sink.gain.value = 0;
     const chunks = [];
     processor.onaudioprocess = event => chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+    source.connect(analyser);
     source.connect(processor);
     processor.connect(sink);
     sink.connect(context.destination);
-    state.recording = { stream, context, source, processor, sink, chunks, started: Date.now() };
+    state.recording = { stream, context, source, analyser, processor, sink, chunks, started: Date.now(), animationFrame: null };
+    elements.waveform.hidden = false;
     elements.micButton.classList.add("recording");
-    elements.micButton.setAttribute("aria-pressed", "true");
-    elements.micLabel.textContent = "Stop recording";
-    setComposerStatus("Recording · 60 second maximum");
-    state.recordTimer = setTimeout(() => stopRecording().catch(showError), MAX_RECORD_MS);
+    elements.micButton.setAttribute("aria-label", "Release to attach recording");
+    setComposerStatus("Recording · release to attach");
+    drawWaveform();
+    updateRecordClock();
+    state.recordClock = setInterval(updateRecordClock, 250);
+    state.recordTimer = setTimeout(() => {
+      state.holdingMic = false;
+      stopRecording().catch(showError);
+    }, MAX_RECORD_MS);
+    if (!state.holdingMic) await stopRecording();
   }
 
   async function stopRecording() {
     const recording = state.recording;
     if (!recording) return;
     clearTimeout(state.recordTimer);
+    clearInterval(state.recordClock);
+    cancelAnimationFrame(recording.animationFrame);
     recording.processor.disconnect();
     recording.source.disconnect();
     recording.sink.disconnect();
@@ -327,63 +348,61 @@
     const samples = downsample(mergeSamples(recording.chunks), recording.context.sampleRate);
     await recording.context.close();
     state.recording = null;
+    elements.waveform.hidden = true;
     elements.micButton.classList.remove("recording");
-    elements.micButton.setAttribute("aria-pressed", "false");
-    elements.micLabel.textContent = "Record mic";
-    if (!samples.length) throw new Error("Microphone recording contained no samples");
+    elements.micButton.setAttribute("aria-label", "Hold to record microphone");
+    if (!samples.length) throw new Error("The microphone clip contained no samples");
     const blob = pcmWav(samples);
     const file = new File([blob], `microphone-${Date.now()}.wav`, { type: "audio/wav" });
-    await addFile("audio", file, "audio/wav");
-    setComposerStatus(`Microphone ready · ${(samples.length / 16000).toFixed(1)} seconds`);
-  }
-
-  function attachmentSummary() {
-    if (!state.attachments.length) return "";
-    return `\n\n[${state.attachments.map(item => `${item.kind}: ${item.name}`).join(" · ")}]`;
+    await addFile(file, "audio");
+    setComposerStatus(`Audio attached · ${(samples.length / 16000).toFixed(1)} seconds`);
   }
 
   function requestPayload() {
-    const content = elements.prompt.value.trim();
+    const typed = elements.prompt.value.trim();
+    const audios = state.attachments.filter(item => item.kind === "audio");
+    const images = state.attachments.filter(item => item.kind === "image");
+    const videos = state.attachments.filter(item => item.kind === "video");
+    if (!typed && !state.attachments.length) throw new Error("Enter a message or attach media");
+
+    let task = "chat";
+    let content = typed;
+    if (!typed && audios.length && !images.length && !videos.length) {
+      task = "transcribe";
+      content = "Transcribe this audio faithfully.";
+    } else if (!typed && (images.length || videos.length)) {
+      task = "describe";
+      content = "Describe this media accurately.";
+    }
+
     const message = { role: "user", content };
-    const audios = state.attachments.filter(item => item.kind === "audio").map(item => ({
-      mime_type: "audio/wav", encoding: "base64", data: item.data,
+    if (audios.length) message.audios = audios.map(item => ({ mime_type: "audio/wav", encoding: "base64", data: item.data }));
+    if (images.length) message.images = images.map(item => ({ mime_type: item.mime, encoding: "base64", data: item.data }));
+    if (videos.length) message.videos = videos.map(item => ({
+      mime_type: item.mime,
+      encoding: "base64",
+      data: item.data,
+      sampling: { fps: 1, max_frames: 96, include_audio: true },
     }));
-    const images = state.attachments.filter(item => item.kind === "image").map(item => ({
-      mime_type: item.mime, encoding: "base64", data: item.data,
-    }));
-    const videos = state.attachments.filter(item => item.kind === "video").map(item => ({
-      mime_type: item.mime, encoding: "base64", data: item.data,
-      sampling: { fps: 1, max_frames: 96, include_audio: elements.videoAudio.checked },
-    }));
-    if (audios.length) message.audios = audios;
-    if (images.length) message.images = images;
-    if (videos.length) message.videos = videos;
 
-    if (state.mode === "transcribe" && !audios.length) throw new Error("Transcribe mode requires a microphone recording or WAV file");
-    if (state.mode === "describe" && !state.attachments.length) throw new Error("Describe mode requires audio, an image, or a video");
-    if (state.mode === "synthesize" && !content) throw new Error("Speak mode requires text");
-    if (state.mode === "synthesize" && state.attachments.length) throw new Error("Speak mode does not accept input media");
-    if (state.mode === "chat" && !content && !state.attachments.length) throw new Error("Enter a message or attach media");
-
-    const messages = state.mode === "chat" ? [...state.history.slice(-12), message] : [message];
-    const wantsSpeech = state.mode === "synthesize" || (state.mode === "chat" && elements.speak.checked);
-    const payload = {
-      model: MODEL,
-      messages,
-      omni: {
-        schema: SCHEMA,
-        task: state.mode,
-        include_audio_from_video: elements.videoAudio.checked,
+    const wantsSpeech = elements.speak.getAttribute("aria-pressed") === "true";
+    const messages = task === "chat" ? [...state.history.slice(-12), message] : [message];
+    return {
+      task,
+      display: typed || (task === "transcribe" ? "Audio clip" : "Attached media"),
+      message,
+      payload: {
+        model: MODEL,
+        messages,
+        omni: { schema: SCHEMA, task, include_audio_from_video: true },
+        response_modalities: wantsSpeech ? ["text", "audio"] : ["text"],
+        speech_mode: wantsSpeech ? "always" : "never",
+        think: false,
+        stream: false,
+        options: { num_predict: 2048 },
+        portal_auto_tools: false,
       },
-      response_modalities: wantsSpeech ? ["text", "audio"] : ["text"],
-      speech_mode: wantsSpeech ? "always" : "never",
-      think: state.mode === "chat" && elements.think.checked,
-      stream: false,
-      options: { num_predict: 2048 },
-      portal_auto_tools: state.mode === "chat" && elements.tools.checked,
     };
-    if (payload.portal_auto_tools) payload.tools = SAFE_TOOLS;
-    return { payload, message, wantsSpeech };
   }
 
   function showError(error) {
@@ -393,7 +412,7 @@
   }
 
   async function send() {
-    if (!state.token) return showError(new Error("Access token missing from this portal link"));
+    if (!state.token) return showError(new Error("Access token missing from this link"));
     if (state.recording) await stopRecording();
     await unlockPlayback();
     let built;
@@ -403,13 +422,10 @@
       return showError(error);
     }
 
-    addMessage({
-      role: "user",
-      content: (built.message.content || "Respond to the attached media.") + attachmentSummary(),
-    });
+    const mediaSummary = state.attachments.map(item => item.kind).join(" · ");
+    addMessage({ role: "user", content: mediaSummary ? `${built.display}\n${mediaSummary}` : built.display });
     elements.send.disabled = true;
-    elements.routeReadout.textContent = `ROUTE // ${state.mode.toUpperCase()} / RUNNING`;
-    setComposerStatus("Inference running · keep this tab open");
+    setComposerStatus(built.task === "transcribe" ? "Transcribing audio…" : "Thinking…");
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
@@ -418,86 +434,90 @@
       });
       const data = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      const message = data.message || {};
-      const executed = data.portal && data.portal.safe_tools_executed || [];
+      const reply = data.message || {};
       addMessage({
         role: "assistant",
-        content: message.content || (message.tool_calls ? "Tool call returned without final text." : "No text returned."),
-        thinking: message.thinking,
-        trace: data.adapter,
-        tools: executed.length ? executed : message.tool_calls,
-        audio: message.audio,
+        content: reply.content || (reply.audio ? "Spoken response" : "No response returned."),
+        audio: reply.audio,
       });
-      const route = data.adapter && data.adapter.route || [];
-      elements.routeReadout.textContent = `ROUTE // ${route.length ? route.join(" → ").toUpperCase() : state.mode.toUpperCase()}`;
-      if (state.mode === "chat") {
-        state.history.push({ role: "user", content: built.message.content || "Respond to the supplied media." });
-        if (message.content) state.history.push({ role: "assistant", content: message.content });
+      if (built.task === "chat") {
+        state.history.push({ role: "user", content: built.message.content });
+        if (reply.content) state.history.push({ role: "assistant", content: reply.content });
       }
       state.attachments = [];
       renderAttachments();
       elements.prompt.value = "";
-      setComposerStatus(message.audio ? "Response ready · audio attached" : "Response ready");
+      resizePrompt();
+      setComposerStatus(reply.audio ? "Text and spoken reply ready" : "Text reply ready");
     } catch (error) {
       showError(error);
-      elements.routeReadout.textContent = `ROUTE // ${state.mode.toUpperCase()} / FAILED`;
     } finally {
       elements.send.disabled = false;
       refreshStatus();
     }
   }
 
-  function setMode(mode) {
-    state.mode = mode;
-    for (const button of elements.modes) button.classList.toggle("active", button.dataset.mode === mode);
-    const direct = mode !== "chat";
-    elements.think.disabled = direct;
-    elements.tools.disabled = direct;
-    elements.speak.disabled = direct || mode === "synthesize";
-    elements.captureRow.classList.toggle("disabled", mode === "synthesize");
-    const labels = {
-      chat: ["Message", "Ask anything, or attach media for comprehension…"],
-      transcribe: ["Transcription instruction", "Optional guidance for the transcription…"],
-      describe: ["Description instruction", "What should the model inspect in this media?"],
-      synthesize: ["Speech text", "Enter exactly what the model should speak…"],
-    };
-    elements.promptLabel.textContent = labels[mode][0];
-    elements.prompt.placeholder = labels[mode][1];
-    elements.routeReadout.textContent = `ROUTE // ${mode.toUpperCase()} / IDLE`;
-    setComposerStatus(`${mode} mode selected`);
+  function resizePrompt() {
+    elements.prompt.style.height = "auto";
+    elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 160)}px`;
   }
 
-  elements.micButton.addEventListener("click", () => {
-    (state.recording ? stopRecording() : startRecording()).catch(showError);
+  function beginMicHold(event) {
+    if (event.type === "pointerdown" && event.button !== 0) return;
+    event.preventDefault();
+    state.holdingMic = true;
+    if (event.pointerId !== undefined) elements.micButton.setPointerCapture(event.pointerId);
+    startRecording().catch(error => {
+      state.holdingMic = false;
+      showError(error);
+    });
+  }
+
+  function endMicHold(event) {
+    event.preventDefault();
+    state.holdingMic = false;
+    if (state.recording) stopRecording().catch(showError);
+  }
+
+  elements.micButton.addEventListener("pointerdown", beginMicHold);
+  elements.micButton.addEventListener("pointerup", endMicHold);
+  elements.micButton.addEventListener("pointercancel", endMicHold);
+  elements.micButton.addEventListener("keydown", event => {
+    if (!event.repeat && (event.key === " " || event.key === "Enter")) beginMicHold(event);
   });
-  elements.audioInput.addEventListener("change", event => {
-    addFile("audio", event.target.files[0], "audio/wav").catch(showError);
+  elements.micButton.addEventListener("keyup", event => {
+    if (event.key === " " || event.key === "Enter") endMicHold(event);
+  });
+  elements.mediaInput.addEventListener("change", event => {
+    addFile(event.target.files[0]).then(() => setComposerStatus("Media attached")).catch(showError);
     event.target.value = "";
   });
-  elements.imageInput.addEventListener("change", event => {
-    addFile("image", event.target.files[0]).catch(showError);
-    event.target.value = "";
-  });
-  elements.videoInput.addEventListener("change", event => {
-    addFile("video", event.target.files[0]).catch(showError);
-    event.target.value = "";
+  elements.speak.addEventListener("click", () => {
+    const enabled = elements.speak.getAttribute("aria-pressed") !== "true";
+    elements.speak.setAttribute("aria-pressed", String(enabled));
+    elements.speak.setAttribute("aria-label", `${enabled ? "Disable" : "Enable"} spoken replies`);
+    elements.speak.title = `Spoken replies ${enabled ? "on" : "off"}`;
+    setComposerStatus(enabled ? "Spoken replies on" : "Text replies only");
+    if (enabled) unlockPlayback();
   });
   elements.send.addEventListener("click", () => send().catch(showError));
+  elements.prompt.addEventListener("input", resizePrompt);
   elements.prompt.addEventListener("keydown", event => {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) send().catch(showError);
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      send().catch(showError);
+    }
   });
   elements.clear.addEventListener("click", () => {
     state.history = [];
     state.attachments = [];
     renderAttachments();
     for (const message of [...elements.conversation.querySelectorAll(".message")].slice(1)) message.remove();
-    setComposerStatus("Session cleared");
+    setComposerStatus("Conversation cleared");
   });
-  for (const button of elements.modes) button.addEventListener("click", () => setMode(button.dataset.mode));
 
   state.token = accessToken();
   if (!state.token) showError(new Error("This link is missing its access fragment"));
-  setMode("chat");
   refreshStatus();
   setInterval(refreshStatus, 15_000);
 })();

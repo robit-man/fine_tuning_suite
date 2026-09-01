@@ -102,12 +102,13 @@ export OMNI_TTS_PORT=8892
 python examples/omni_adapter/tts_server.py
 ```
 
-For CPU validation set `OMNI_TTS_GPU_LAYERS=0`. For CUDA deployment, place the
-entire TTS worker under a broker reservation. The reference wrapper reloads the
-model for every request and is not a high-throughput production service. A
-production implementation should keep a libmtmd TTS worker resident, expose a
-readiness check only after model allocation, and retain the same `/synthesize`
-contract.
+For CPU validation set `OMNI_TTS_GPU_LAYERS=0`. For a manually scoped CUDA
+deployment, give the wrapper `OLLAMA_UNIFY_GPU_LEASE`, `OMNI_TTS_GPU_UUID`, and
+an exactly matching `CUDA_VISIBLE_DEVICES`. With `OMNI_TTS_GPU_LAYERS=-1`, it
+calls broker `prepare`, starts the single-shot process, verifies that PID's
+residency on the reserved UUID, and calls `ready`. A production implementation
+should keep a libmtmd TTS worker resident while retaining the same
+`/synthesize` contract.
 
 ## Start the unified adapter
 

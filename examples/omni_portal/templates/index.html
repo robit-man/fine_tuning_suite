@@ -3,117 +3,71 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#000000">
+  <meta name="theme-color" content="#050505">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="description" content="Robit Omni multimodal model portal">
-  <title>Robit Omni Portal</title>
+  <meta name="description" content="Omni multimodal chat portal">
+  <title>Omni Chat</title>
   <link rel="stylesheet" href="/assets/portal.css">
 </head>
 <body data-model="{{ model }}" data-max-upload-mib="{{ max_upload_mib }}">
-  <header class="site-header">
-    <a class="brand" href="/" aria-label="Robit Omni Portal home">
-      <span class="brand-mark">ROBIT</span>
-      <span class="brand-divider"></span>
-      <span class="brand-section">Omni Portal</span>
-    </a>
-    <div class="header-status" id="header-status">
-      <span class="status-dot" id="status-dot"></span>
-      <span id="status-text">Connecting</span>
-    </div>
-    <button class="header-button" id="clear-button" type="button">Clear</button>
-  </header>
-
-  <main class="portal-shell">
-    <aside class="control-rail" aria-label="Model controls">
-      <div class="rail-block">
-        <p class="eyebrow">Session target</p>
-        <p class="model-name">{{ model }}</p>
-      </div>
-      <div class="rail-block">
-        <p class="eyebrow">Runtime stages</p>
-        <div class="stage-list" id="stage-list">
-          <span data-stage="ollama"><i></i>Language</span>
-          <span data-stage="comprehension"><i></i>Media</span>
-          <span data-stage="tts"><i></i>Speech</span>
-          <span data-stage="adapter"><i></i>Adapter</span>
+  <main class="app-shell">
+    <section class="chat-panel" aria-label="Omni chat">
+      <div class="topbar">
+        <div class="connection" id="header-status" role="status">
+          <span class="status-dot"></span>
+          <span id="status-text">Connecting</span>
         </div>
+        <button class="icon-button quiet-button" id="clear-button" type="button" aria-label="Clear conversation" title="Clear conversation">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5"/></svg>
+        </button>
       </div>
-      <div class="rail-block feature-copy">
-        <p class="eyebrow">Input matrix</p>
-        <p>Text · microphone · WAV · image · MP4/WebM</p>
-        <p class="quiet">Audio is normalized in-browser to 16 kHz mono PCM16 WAV.</p>
-      </div>
-      <div class="rail-block feature-copy">
-        <p class="eyebrow">Output matrix</p>
-        <p>Text · thinking · safe tools · 24 kHz WAV</p>
-      </div>
-    </aside>
-
-    <section class="workspace">
-      <div class="workspace-toolbar">
-        <div>
-          <p class="eyebrow">Qwen3.8 E03 Obliterated Omni</p>
-          <h1>Multimodal field console</h1>
-        </div>
-        <div class="route-readout" id="route-readout">ROUTE // IDLE</div>
-      </div>
-
-      <nav class="mode-tabs" aria-label="Task mode">
-        <button type="button" class="mode-tab active" data-mode="chat">Chat</button>
-        <button type="button" class="mode-tab" data-mode="transcribe">Transcribe</button>
-        <button type="button" class="mode-tab" data-mode="describe">Describe</button>
-        <button type="button" class="mode-tab" data-mode="synthesize">Speak</button>
-      </nav>
 
       <div class="conversation" id="conversation" aria-live="polite">
-        <article class="message system-message">
-          <div class="message-meta"><span>PORTAL</span><time>READY</time></div>
-          <p>Send text, record speech, attach an image, or attach a short video. Select <strong>Speak</strong> output to hear the final answer on this device.</p>
+        <article class="message assistant welcome-message">
+          <div class="message-content">Ready for text, speech, images, or video.</div>
         </article>
       </div>
 
       <section class="composer" aria-label="Message composer">
         <div class="attachments" id="attachments" hidden></div>
 
-        <label class="prompt-label" for="prompt" id="prompt-label">Message</label>
-        <textarea id="prompt" rows="3" maxlength="12000" placeholder="Ask anything, or attach media for comprehension…"></textarea>
-
-        <div class="capture-row">
-          <button class="capture-button mic-button" id="mic-button" type="button" aria-pressed="false">
-            <span class="capture-icon">●</span><span id="mic-label">Record mic</span>
-          </button>
-          <label class="capture-button" for="audio-input">Audio WAV</label>
-          <input id="audio-input" type="file" accept="audio/wav,.wav" hidden>
-          <label class="capture-button" for="image-input">Camera / image</label>
-          <input id="image-input" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden>
-          <label class="capture-button" for="video-input">Video</label>
-          <input id="video-input" type="file" accept="video/mp4,video/webm" capture="environment" hidden>
+        <div class="waveform" id="waveform" hidden>
+          <canvas id="waveform-canvas" aria-label="Live microphone waveform"></canvas>
+          <span id="recording-time">0:00</span>
         </div>
 
-        <div class="options-row">
-          <label class="toggle"><input id="think-toggle" type="checkbox" checked><span></span>Thinking</label>
-          <label class="toggle"><input id="speak-toggle" type="checkbox"><span></span>Speak output</label>
-          <label class="toggle"><input id="tools-toggle" type="checkbox"><span></span>Safe tools</label>
-          <label class="toggle"><input id="video-audio-toggle" type="checkbox" checked><span></span>Video audio</label>
-        </div>
+        <div class="composer-box">
+          <textarea id="prompt" rows="1" maxlength="12000" aria-label="Message" placeholder="Message Omni"></textarea>
+          <div class="actions">
+            <label class="icon-button" for="media-input" aria-label="Attach audio, image, or video" title="Attach media">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8.5 12.5 6.7-6.7a3 3 0 0 1 4.2 4.2l-9.2 9.2a5 5 0 0 1-7.1-7.1l9-9m-5.5 11.3 8.6-8.6"/></svg>
+            </label>
+            <input id="media-input" type="file" accept="audio/wav,.wav,image/jpeg,image/png,image/webp,video/mp4,video/webm" hidden>
 
-        <div class="send-row">
-          <p class="composer-status" id="composer-status">Secure endpoint ready</p>
-          <button class="send-button" id="send-button" type="button"><span>Run</span><b>↗</b></button>
+            <button class="icon-button mic-button" id="mic-button" type="button" aria-label="Hold to record microphone" title="Hold to record">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3m-4 0h8"/></svg>
+            </button>
+
+            <button class="icon-button speak-button" id="speak-toggle" type="button" aria-label="Enable spoken replies" aria-pressed="false" title="Spoken replies off">
+              <svg class="speaker-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10v4h4l5 4V6l-5 4H5Zm12-1a5 5 0 0 1 0 6m2-8a8 8 0 0 1 0 10"/></svg>
+              <svg class="speaker-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10v4h4l5 4V6l-5 4H5Zm12-1 5 6m0-6-5 6"/></svg>
+            </button>
+
+            <button class="icon-button send-button" id="send-button" type="button" aria-label="Send message" title="Send">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6-7-1Zm7 1 7-8"/></svg>
+            </button>
+          </div>
         </div>
+        <p class="composer-status" id="composer-status">Hold the mic to record</p>
       </section>
     </section>
   </main>
 
   <template id="message-template">
     <article class="message">
-      <div class="message-meta"><span></span><time></time></div>
       <div class="message-content"></div>
-      <details class="thinking" hidden><summary>Thinking trace</summary><pre></pre></details>
-      <details class="adapter-trace" hidden><summary>Adapter trace</summary><pre></pre></details>
-      <div class="tool-calls" hidden></div>
       <div class="audio-output" hidden></div>
     </article>
   </template>

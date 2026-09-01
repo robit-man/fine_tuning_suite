@@ -417,10 +417,11 @@ internal deployment details. See the [runtime guide](docs/omni-adapter/runtime.m
 and [examples](examples/omni_adapter/README.md).
 
 For phone testing, the [authenticated Omni portal](examples/omni_portal/README.md)
-adds browser microphone capture, image/video uploads, generated-audio playback,
-thinking/tool traces, a broker-compliant one-command supervisor, and a
-temporary Cloudflare HTTPS tunnel. The deployment and rollback checklist is in
-the [phone portal runbook](docs/omni-adapter/phone-portal.md).
+adds hold-to-record microphone capture with a live waveform, automatic ASR and
+media routing, image/video uploads, a spoken-reply toggle, a broker-compliant
+CUDA-only supervisor, and a temporary Cloudflare HTTPS tunnel. The deployment
+and rollback checklist is in the
+[phone portal runbook](docs/omni-adapter/phone-portal.md).
 
 #### Video comprehension
 

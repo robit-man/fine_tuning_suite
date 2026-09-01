@@ -18,12 +18,14 @@ TTS_PORT=${OMNI_TTS_PORT:-8892}
 ADAPTER_PORT=${OMNI_ADAPTER_PORT:-8910}
 PORTAL_PORT=${OMNI_PORTAL_PORT:-8920}
 METRICS_PORT=${OMNI_CLOUDFLARED_METRICS_PORT:-49312}
-COMP_VRAM_MIB=${OMNI_COMPREHENSION_VRAM_MIB:-30000}
+COMP_VRAM_MIB=${OMNI_COMPREHENSION_VRAM_MIB:-45000}
 
 SUPERVISOR_PID_FILE="$STATE_DIR/supervisor.pid"
 ACCESS_URL_FILE="$STATE_DIR/access-url.txt"
 TOKEN_FILE="$STATE_DIR/access-token.txt"
 GPU_FILE="$STATE_DIR/comprehension-gpu.txt"
+GPU_LEASE_FILE="$STATE_DIR/gpu-lease-token.txt"
+TTS_ACTIVE_PID_FILE="$STATE_DIR/tts-active.pid"
 SUPERVISOR_LOG="$LOG_DIR/supervisor.log"
 CACHE_MARKER="$CACHE_DIR/.robit-omni-portal-cache"
 
@@ -32,6 +34,8 @@ TTS_PID=""
 ADAPTER_PID=""
 PORTAL_PID=""
 TUNNEL_PID=""
+HEARTBEAT_PID=""
+LEASE_TOKEN=""
 CLEANING_UP=0
 
 log() {
@@ -93,8 +97,26 @@ terminate_child() {
     while kill -0 "$pid" 2>/dev/null && (( SECONDS - started < 45 )); do
       sleep 1
     done
+    if kill -0 "$pid" 2>/dev/null; then
+      log "$label did not stop gracefully; killing exact pid $pid"
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
     wait "$pid" 2>/dev/null || true
   fi
+}
+
+terminate_pid_file() {
+  local file=$1
+  local label=$2
+  if [[ ! -s "$file" ]]; then
+    return
+  fi
+  local pid
+  pid=$(sed -n '1p' "$file")
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then
+    terminate_child "$pid" "$label"
+  fi
+  if [[ -f "$file" ]]; then unlink "$file"; fi
 }
 
 cleanup_cache() {
@@ -126,12 +148,21 @@ cleanup() {
   terminate_child "$PORTAL_PID" "portal"
   terminate_child "$ADAPTER_PID" "adapter"
   terminate_child "$TTS_PID" "TTS wrapper"
+  terminate_pid_file "$TTS_ACTIVE_PID_FILE" "TTS CUDA worker"
   terminate_child "$COMP_PID" "broker-scoped comprehension worker"
+  terminate_child "$HEARTBEAT_PID" "GPU lease heartbeat"
+  if [[ -n "$LEASE_TOKEN" ]]; then
+    log "releasing scoped GPU lease"
+    docker gpu release "$LEASE_TOKEN" >/dev/null 2>&1 || true
+    LEASE_TOKEN=""
+  fi
   cleanup_cache
   if [[ -f "$SUPERVISOR_PID_FILE" ]]; then unlink "$SUPERVISOR_PID_FILE"; fi
   if [[ -f "$ACCESS_URL_FILE" ]]; then unlink "$ACCESS_URL_FILE"; fi
   if [[ -f "$TOKEN_FILE" ]]; then unlink "$TOKEN_FILE"; fi
   if [[ -f "$GPU_FILE" ]]; then unlink "$GPU_FILE"; fi
+  if [[ -f "$GPU_LEASE_FILE" ]]; then unlink "$GPU_LEASE_FILE"; fi
+  if [[ -f "$TTS_ACTIVE_PID_FILE" ]]; then unlink "$TTS_ACTIVE_PID_FILE"; fi
   log "shutdown complete"
 }
 
@@ -248,12 +279,13 @@ choose_gpu() {
   else
     selected=$(jq -nr \
       --argjson discovery "$discovery" \
-      --argjson status "$broker_status" '
+      --argjson status "$broker_status" \
+      --argjson required "$COMP_VRAM_MIB" '
         [$status.leases[]?
           | select(.state == "pending" or .state == "active" or .state == "revoking")
           | .gpu_uuids[]] as $claimed
         | [$discovery.gpus[]
-            | select(.selected_for_ollama == true and .total_mib >= 30000)
+            | select(.selected_for_ollama == true and .total_mib >= $required)
             | .uuid as $uuid
             | select(($claimed | index($uuid)) == null)]
         | sort_by(.free_mib) | reverse | .[0].uuid // empty
@@ -277,6 +309,7 @@ run_foreground() {
   require_command docker
   require_command ffmpeg
   require_command jq
+  require_command nvidia-smi
   require_command openssl
   require_command ss
   [[ -x "$PYTHON_BIN" ]] || die "suite Python is missing: $PYTHON_BIN"
@@ -297,56 +330,62 @@ run_foreground() {
   prepare_cache
 
   local gpu_uuid
-  local comprehension_mode=${OMNI_COMPREHENSION_MODE:-auto}
-  [[ "$comprehension_mode" =~ ^(auto|cuda|cpu)$ ]] \
-    || die "OMNI_COMPREHENSION_MODE must be auto, cuda, or cpu"
-  if [[ "$comprehension_mode" != cpu ]]; then
-    gpu_uuid=$(choose_gpu)
-    log "starting comprehension on broker reservation $gpu_uuid"
-    docker gpu run \
-      --owner robit-omni-phone-portal \
-      --vram-mib "$COMP_VRAM_MIB" \
-      --gpu "$gpu_uuid" \
-      --ready-command "curl -fsS http://127.0.0.1:$COMP_PORT/health" \
-      --ready-timeout 1200 -- \
-      "$REPO_ROOT/training_suite/vendor/llama.cpp/build/bin/llama-server" \
-        -m "$CACHE_DIR/comprehension-model.gguf" \
-        --mmproj "$CACHE_DIR/comprehension-projector.gguf" \
-        --host 127.0.0.1 --port "$COMP_PORT" \
-        --jinja -ngl 99 -c 8192 \
-        >"$LOG_DIR/comprehension.log" 2>&1 &
-    COMP_PID=$!
-    if wait_http_child "http://127.0.0.1:$COMP_PORT/health" 1200 "$COMP_PID"; then
-      log "CUDA comprehension is ready"
-    else
-      wait "$COMP_PID" 2>/dev/null || true
-      COMP_PID=""
-      if [[ "$comprehension_mode" == cuda ]]; then
-        die "broker-scoped CUDA comprehension exited before readiness"
-      fi
-      log "broker-scoped CUDA unavailable; falling back to CPU comprehension"
-    fi
-  fi
-  if [[ -z "$COMP_PID" ]]; then
-    CUDA_VISIBLE_DEVICES="" \
-    "$REPO_ROOT/training_suite/vendor/llama.cpp/build/bin/llama-server" \
-      -m "$CACHE_DIR/comprehension-model.gguf" \
-      --mmproj "$CACHE_DIR/comprehension-projector.gguf" \
-      --host 127.0.0.1 --port "$COMP_PORT" \
-      --jinja -ngl 0 -c 8192 \
-      >>"$LOG_DIR/comprehension.log" 2>&1 &
-    COMP_PID=$!
-    wait_http "http://127.0.0.1:$COMP_PORT/health" "CPU comprehension" 1200 "$COMP_PID"
-  fi
+  gpu_uuid=$(choose_gpu)
+  log "acquiring ${COMP_VRAM_MIB} MiB scoped CUDA lease on $gpu_uuid"
+  LEASE_TOKEN=$(docker gpu acquire \
+    --owner robit-omni-phone-portal \
+    --vram-mib "$COMP_VRAM_MIB" \
+    --gpu "$gpu_uuid" \
+    --token-only)
+  [[ -n "$LEASE_TOKEN" ]] || die "GPU broker returned an empty lease token"
+  printf '%s\n' "$LEASE_TOKEN" >"$GPU_LEASE_FILE"
+  docker gpu heartbeat "$LEASE_TOKEN" --watch \
+    >"$LOG_DIR/gpu-heartbeat.log" 2>&1 &
+  HEARTBEAT_PID=$!
 
-  log "starting CPU-isolated TTS wrapper"
-  CUDA_VISIBLE_DEVICES="" \
+  log "starting CUDA comprehension on exact reservation $gpu_uuid"
+  CUDA_VISIBLE_DEVICES="$gpu_uuid" \
+  HIP_VISIBLE_DEVICES=-1 \
+  ROCR_VISIBLE_DEVICES=-1 \
+  "$REPO_ROOT/training_suite/vendor/llama.cpp/build/bin/llama-server" \
+    -m "$CACHE_DIR/comprehension-model.gguf" \
+    --mmproj "$CACHE_DIR/comprehension-projector.gguf" \
+    --host 127.0.0.1 --port "$COMP_PORT" \
+    --jinja -ngl 99 -c 8192 \
+    >"$LOG_DIR/comprehension.log" 2>&1 &
+  COMP_PID=$!
+  wait_http "http://127.0.0.1:$COMP_PORT/health" "CUDA comprehension" 1200 "$COMP_PID"
+  local residency_started=$SECONDS
+  while ! nvidia-smi \
+    --query-compute-apps=pid,gpu_uuid,used_memory \
+    --format=csv,noheader,nounits \
+    | awk -F, -v pid="$COMP_PID" -v uuid="$gpu_uuid" '
+        { gsub(/^ +| +$/, "", $1); gsub(/^ +| +$/, "", $2) }
+        $1 == pid && $2 == uuid { found=1 }
+        END { exit !found }
+      '; do
+    kill -0 "$COMP_PID" 2>/dev/null \
+      || die "comprehension exited before CUDA residency verification"
+    (( SECONDS - residency_started < 120 )) \
+      || die "comprehension did not become resident on reserved GPU $gpu_uuid"
+    sleep 1
+  done
+  docker gpu ready "$LEASE_TOKEN" >/dev/null
+  log "CUDA comprehension is resident and broker-ready"
+
+  log "starting broker-coordinated CUDA TTS wrapper"
+  CUDA_VISIBLE_DEVICES="$gpu_uuid" \
+  HIP_VISIBLE_DEVICES=-1 \
+  ROCR_VISIBLE_DEVICES=-1 \
+  OLLAMA_UNIFY_GPU_LEASE="$LEASE_TOKEN" \
   OMNI_OLLAMA_MODEL="$MODEL" \
   OMNI_COMPONENT_CACHE="$CACHE_DIR" \
   OMNI_TTS_MODEL_GGUF="$CACHE_DIR/tts-model.gguf" \
   OMNI_TTS_PROJECTOR_GGUF="$CACHE_DIR/tts-projector.gguf" \
   LLAMA_TTS_BIN="$REPO_ROOT/training_suite/vendor/llama.cpp/build/bin/llama-tts" \
-  OMNI_TTS_GPU_LAYERS=0 \
+  OMNI_TTS_GPU_LAYERS=-1 \
+  OMNI_TTS_GPU_UUID="$gpu_uuid" \
+  OMNI_TTS_ACTIVE_PID_FILE="$TTS_ACTIVE_PID_FILE" \
   OMNI_TTS_HOST=127.0.0.1 \
   OMNI_TTS_PORT="$TTS_PORT" \
   "$PYTHON_BIN" "$REPO_ROOT/examples/omni_adapter/tts_server.py" \
@@ -391,7 +430,7 @@ run_foreground() {
   "$PYTHON_BIN" "$REPO_ROOT/examples/omni_portal/smoke.py" \
     --endpoint "http://127.0.0.1:$PORTAL_PORT" \
     --token-file "$TOKEN_FILE" \
-    --model "$MODEL" --text \
+    --model "$MODEL" --text --tts \
     >"$LOG_DIR/pre-tunnel-smoke.log" 2>&1
 
   log "starting Cloudflare quick tunnel"

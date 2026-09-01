@@ -46,7 +46,11 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
     response = client.get("/")
 
     assert response.status_code == 200
-    assert b"Multimodal field console" in response.data
+    assert b"Omni Chat" in response.data
+    assert b"ROBIT" not in response.data
+    assert b'id="waveform-canvas"' in response.data
+    assert b'id="speak-toggle"' in response.data
+    assert b'aria-pressed="false"' in response.data
     assert TOKEN.encode() not in response.data
     assert "microphone=(self)" in response.headers["Permissions-Policy"]
     assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]

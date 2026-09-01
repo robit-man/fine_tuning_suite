@@ -1,14 +1,17 @@
 """Reference sidecar for the robit.ollama.omni-adapter.v1 contract.
 
 This is deliberately small and readable. It proves request parsing and routing
-against separate HTTP component servers before the same route is implemented in
-the custom Ollama runner over namespaced graphs in one GGUF.
+against component workers whose weights are resolved from one logical Ollama
+tag and its custom namespaced GGUF sidecar layer.
 """
 
 from __future__ import annotations
 
+import base64
 import os
+import subprocess
 import sys
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +32,7 @@ from training_suite.models.audio import (
 from training_suite.models.omni_adapter import (
     ADAPTER_SCHEMA,
     AdapterMessage,
+    MediaItem,
     OmniAdapterError,
     ParsedAdapterRequest,
     adapter_contract,
@@ -101,20 +105,76 @@ def _assistant_text(data: Mapping[str, Any], stage: str) -> str:
     raise AdapterStageError(f"{stage} returned no assistant text")
 
 
-def _content_parts(message: AdapterMessage) -> list[dict[str, Any]]:
+def _video_audio(media: MediaItem) -> str | None:
+    suffix = ".mp4" if media.mime_type == "video/mp4" else ".webm"
+    with tempfile.TemporaryDirectory(prefix="robit-omni-video-") as temp_dir:
+        source = Path(temp_dir) / ("input" + suffix)
+        output = Path(temp_dir) / "audio.wav"
+        source.write_bytes(media.data)
+        completed = subprocess.run(
+            [
+                os.environ.get("FFMPEG_BIN", "ffmpeg"),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(source),
+                "-map",
+                "0:a:0?",
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-c:a",
+                "pcm_s16le",
+                str(output),
+            ],
+            check=False,
+            capture_output=True,
+            timeout=float(os.environ.get("OMNI_FFMPEG_TIMEOUT_S", "120")),
+        )
+        if completed.returncode != 0:
+            diagnostic = completed.stderr.decode("utf-8", errors="replace")[-1000:]
+            raise AdapterStageError(f"video audio extraction failed: {diagnostic}")
+        if not output.is_file() or output.stat().st_size <= 44:
+            return None
+        return base64.b64encode(output.read_bytes()).decode("ascii")
+
+
+def _content_parts(
+    message: AdapterMessage,
+    *,
+    include_audio_from_video: bool,
+) -> list[dict[str, Any]]:
     parts: list[dict[str, Any]] = []
     for media in message.audios:
-        parts.append({"type": "audio_url", "audio_url": {"url": media.data_uri()}})
+        parts.append(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": base64.b64encode(media.data).decode("ascii")},
+            }
+        )
     for media in message.images:
         parts.append({"type": "image_url", "image_url": {"url": media.data_uri()}})
     for media in message.videos:
         video_part: dict[str, Any] = {
-            "type": "video_url",
-            "video_url": {"url": media.data_uri()},
+            "type": "input_video",
+            "input_video": {"data": base64.b64encode(media.data).decode("ascii")},
         }
         if media.options:
             video_part["sampling"] = dict(media.options)
         parts.append(video_part)
+        if include_audio_from_video:
+            audio = _video_audio(media)
+            if audio:
+                parts.append(
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": audio},
+                    }
+                )
     if message.content:
         parts.append({"type": "text", "text": message.content})
     return parts
@@ -143,7 +203,10 @@ def build_comprehension_payload(
             }
         )
     for message in parsed.messages:
-        parts = _content_parts(message)
+        parts = _content_parts(
+            message,
+            include_audio_from_video=parsed.include_audio_from_video,
+        )
         if parts:
             messages.append({"role": message.role, "content": parts})
     return {

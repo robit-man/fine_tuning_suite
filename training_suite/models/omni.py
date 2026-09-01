@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import httpx
 
 from training_suite.core.config import utc_now
 from training_suite.models.audio import DEFAULT_AUDIO_CONTRACT
 from training_suite.models.ollama import ModelfileSpec, write_modelfile
-
 
 OMNI_SCHEMA_VERSION = 1
 QWEN3_OMNI_INSTRUCT = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
@@ -188,7 +188,7 @@ def plan_omni_bundle(
                 "runtime": "llama.cpp libmtmd or a native Qwen3-Omni runtime",
                 "input": "decoded frame sequence with temporal metadata",
                 "output": "text transcript or semantic description",
-                "status": "planned component; no Flask video transport adapter yet",
+                "status": "implemented by the reference adapter with optional audio demux",
             },
             "language_model": {
                 "source": text_source,
@@ -198,17 +198,17 @@ def plan_omni_bundle(
                 "output": "text",
             },
             "speech_synthesis": {
-                "source": "Qwen/Qwen3-TTS-12Hz-0.6B-Base or another text-conditioned TTS model",
-                "artifact": "runtime-native TTS weights; GGUF only when supported by the selected loader",
-                "runtime": "llama.cpp experimental audio generation or dedicated TTS runtime",
+                "source": "Qwen/Qwen3-TTS-12Hz-1.7B-Base or another text-conditioned TTS model",
+                "artifact": "model.gguf + codec/projector gguf",
+                "runtime": "llama.cpp llama-tts/libmtmd or a compatible dedicated TTS runtime",
                 "input": "text",
                 "output": "24 kHz mono PCM16 WAV",
             },
         }
         rationale = (
-            "Direct hidden-state grafting is unsafe. Package the Qwen3.8/Ornith language model, a "
-            "self-contained audio/video comprehension graph, and text-conditioned TTS into one namespaced "
-            "GGUF. A custom Ollama runner routes between graphs without pretending their hidden states match."
+            "Direct hidden-state grafting is unsafe. Keep stock-runnable language/projector layers and "
+            "attach one namespaced GGUF sidecar containing reproducible base, comprehension, and TTS "
+            "views. The adapter routes semantic text without pretending hidden states match."
         )
 
     return {
@@ -232,16 +232,21 @@ def plan_omni_bundle(
         "components": components,
         "rationale": rationale,
         "artifact_policy": {
-            "single_gguf": True,
-            "single_gguf_layout": "base tensors + a.c.* comprehension + s.t.* text-conditioned TTS",
-            "ollama_model_gguf": True,
+            "one_logical_ollama_tag": True,
+            "single_custom_sidecar_gguf": True,
+            "sidecar_layout": (
+                "base + b.p.* base projector + a.c.m.*/a.c.p.* comprehension + "
+                "s.t.m.*/s.t.p.* text-conditioned TTS"
+            ),
+            "stock_ollama_standard_model_layer": True,
+            "stock_ollama_direct_sidecar_import": False,
             "component_inputs_must_be_gguf": True,
-            "custom_ollama_handler_required": True,
+            "custom_media_adapter_required": True,
             "stock_ollama_audio_api": False,
-            "full_audio_output_runtime": "custom Ollama runner loading namespaced component views",
+            "full_audio_output_runtime": "adapter loading sidecar-derived component views",
             "reason": (
-                "A monolithic GGUF can hold all component tensors, while the custom runner defines the "
-                "execution graph and tagged audio protocol."
+                "Standard GGUF loading accepts one architecture inventory. The custom manifest layer "
+                "ships heterogeneous weights under one tag while the adapter defines routing and media I/O."
             ),
         },
         "runtime_support": {

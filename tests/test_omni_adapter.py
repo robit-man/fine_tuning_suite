@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from examples.omni_adapter.client import printable_response
 from examples.omni_adapter.server import Config, build_comprehension_payload, execute
 from training_suite.models.omni_adapter import (
     ADAPTER_SCHEMA,
@@ -57,6 +58,16 @@ def test_adapter_contract_separates_wire_schema_from_bundle_schema() -> None:
     assert contract["transport"]["streaming_v1"] is False
     assert contract["compatibility"]["message_extensions"] == ["audios", "videos"]
     assert contract["media"]["video"]["max_items"] == 4
+
+
+def test_example_client_redacts_audio_base64_by_default() -> None:
+    response = {"message": {"audio": {"data": "YWJj", "decoded_bytes": 3}}}
+
+    printable = printable_response(response, include_audio_base64=False)
+
+    assert printable["message"]["audio"]["data"] == "<base64 omitted; 4 characters>"
+    assert response["message"]["audio"]["data"] == "YWJj"
+    assert printable_response(response, include_audio_base64=True) is response
 
 
 def test_adapter_json_schemas_are_valid_json_and_use_v1_identifier() -> None:
@@ -194,7 +205,7 @@ def test_reference_server_preserves_tools_thinking_and_adds_audio() -> None:
         body = json.loads(request.content)
         if request.url.host == "comprehension":
             part = body["messages"][-1]["content"][0]
-            assert part["type"] == "audio_url"
+            assert part["type"] == "input_audio"
             return httpx.Response(
                 200,
                 json={"choices": [{"message": {"content": "the user said hello"}}]},
@@ -282,5 +293,5 @@ def test_comprehension_payload_tags_video_for_qwen_style_server() -> None:
         Config("http://comp", "omni", "http://ollama", "http://tts", 30),
     )
 
-    assert payload["messages"][-1]["content"][0]["type"] == "video_url"
+    assert payload["messages"][-1]["content"][0]["type"] == "input_video"
     assert payload["mm_processor_kwargs"]["use_audio_in_video"] is False

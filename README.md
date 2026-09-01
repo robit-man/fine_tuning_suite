@@ -24,10 +24,10 @@ their gates.
 | GGUF | Inspect metadata/tensors, patch vision flags and RoPE sections, substitute text tensors, convert, and quantize | Implemented |
 | Ollama | Create, inspect, test, copy, and publish registry tags | Implemented |
 | Control plane | Dark-theme dashboard, SQLite inventory, background jobs, logs, REST API, and model/evaluation comparisons | Implemented |
-| Monolithic multimodal GGUF | Pack a base language GGUF, a self-contained comprehension GGUF, and a text-conditioned TTS GGUF into one Ollama-importable file | Implemented packer and inspector |
-| Audio comprehension | Validate base64 PCM WAV and route it through the embedded comprehension graph before the language graph | Versioned adapter/parser and HTTP reference runtime implemented; custom Ollama hook pending |
-| Video comprehension | Validate MP4/WebM envelopes, sampling policy, and route temporal media through comprehension | Versioned adapter/parser and reference sidecar implemented; component converter and custom Ollama hook pending |
-| TTS | Route language or direct text through the embedded text-conditioned speech graph and return validated base64 PCM WAV | Versioned adapter/parser and reference sidecar implemented; component converter and custom Ollama hook pending |
+| Omni GGUF sidecar | Pack six byte-preserving model/projector views into one namespaced GGUF, attach it as a custom Ollama layer, resolve it, and materialize disposable runtime views | Implemented and tested |
+| Audio comprehension | Validate base64 PCM WAV and route installed-sidecar Qwen3-Omni output into the language graph | Reference runtime live-tested |
+| Video comprehension | Validate MP4/WebM, demux optional audio, and route temporal media through installed-sidecar Qwen3-Omni | Reference runtime live-tested |
+| TTS | Route language or direct text through installed-sidecar Qwen3-TTS and return tagged base64 PCM WAV | Reference runtime live-tested |
 | Native Qwen3-Omni grafting | Reject unsafe tensor substitution and describe the exact component/runtime boundary | Compatibility-gated research path |
 
 “Implemented” means the suite contains executable code and tests. It does not
@@ -48,38 +48,41 @@ Hugging Face / GGUF / Ollama ──────▶│ Intake + compatibility gat
                       │                            │                          │
                       └───────────────┬────────────┘                          │
                                       ▼                                       ▼
-                             Ollama create/push                 monolithic GGUF + custom router
+                             Ollama create/push                 namespaced sidecar + adapter
 
 Dashboard / REST API ──▶ SQLite state ──▶ background job runner ──▶ logs and reports
 ```
 
-For combined audio/video comprehension and spoken output, the target deployment
-is one physical GGUF containing multiple namespaced execution graphs:
+For combined audio/video comprehension and spoken output, the deployment unit
+is one Ollama model tag. Standard layers remain stock-runnable; one custom
+layer carries a namespaced multi-graph GGUF:
 
 ```text
-one GGUF
-  ├── unprefixed tensors ──▶ Qwen3.8 or Ornith language graph
-  ├── a.c.* tensors ───────▶ audio/video comprehension graph
-  └── s.t.* tensors ───────▶ text-conditioned TTS graph
-             │
-             ▼
-      custom Ollama router
-        audio/video ──▶ comprehension ──▶ semantic text ──▶ language
-        language text ──▶ optional TTS ──▶ tagged 24 kHz PCM16 WAV
+one Ollama tag
+  ├── standard model/projector ──▶ stock text, vision, tools, thinking
+  └── custom Omni layer ─────────▶ one six-view GGUF sidecar
+       ├── a.c.m.* + a.c.p.* ───▶ audio/image/video comprehension
+       └── s.t.m.* + s.t.p.* ───▶ text-conditioned TTS
+                        │
+                        ▼
+                 adapter router
+                   media ──▶ semantic text ──▶ stock language graph
+                   final text ──▶ optional TTS ──▶ tagged WAV
 ```
 
-The result is one `.gguf` file and one Ollama model layer. It is still a
-multi-graph runtime internally: a custom Ollama compatibility/runner hook is
-responsible for filtered component views, routing, and audio I/O.
+The result is one pullable tag and one physical custom sidecar GGUF. It is not
+one directly runnable heterogeneous GGUF: standard GGUF loaders require one
+architecture-specific tensor inventory. The adapter resolves the custom layer,
+creates filtered component views, and owns media routing and audio I/O.
 
 ## Design boundaries
 
 ### GGUF does not define the execution graph
 
-GGUF can store all tensors and metadata in one file. A loader still needs code
-for each encoder, projector, language trunk, speech model, codec, and scheduling
-relationship. The suite therefore provides a monolithic container format and
-requires a custom Ollama handler to execute it.
+GGUF can index all tensors and metadata in one file, but stock loaders validate
+that inventory against one selected architecture. The suite therefore ships
+the heterogeneous file as a custom manifest layer while retaining normal
+Ollama model/projector layers for native execution.
 
 ### Vision splicing works only when interfaces match
 
@@ -111,10 +114,10 @@ The experiment covers:
 - text reasoning, thinking, and tools in Qwen3.8 or Ornith;
 - TTS audio generation.
 
-Video generation is not part of the experiment. The versioned adapter parser
-and reference sidecar implement turn-based audio/image/video input, semantic
-routing, and tagged TTS output. The custom Ollama loader/handler and production
-component converters remain to be implemented.
+Video generation is not part of the experiment. The versioned adapter and
+pinned llama.cpp workers implement turn-based audio/image/video input, semantic
+routing, and tagged TTS output. Stock Ollama does not natively parse those
+media extensions; callers requiring them use the adapter endpoint.
 
 ## Requirements
 
@@ -308,49 +311,54 @@ Each output directory contains:
   projector is never attached to a Qwen3.8 or Ornith language GGUF.
 
 For Qwen3.8 and Ornith, the expected result is `monolithic-router`: direct
-hidden-state fusion is blocked, while one physical multi-graph GGUF remains a
-valid packaging target. Use `--require-native` only when the experiment truly
-requires tensor-level substitution into the Omni Thinker; it exits with status
-2 when those signatures do not match.
+hidden-state fusion is blocked, while a namespaced multi-graph GGUF is used as
+the custom media layer of one logical Ollama tag. `--require-native` exits with
+status 2 when tensor-level signatures do not match.
 
-#### Build the one-file GGUF
+#### Build the six-view sidecar
 
-Convert and quantize each executable graph to GGUF first, then pack them:
-
-```bash
-training_suite/.venv/bin/python -m training_suite omni-pack \
-  --base-gguf ./components/qwen38-or-ornith.q4_k_m.gguf \
-  --base-source manitcor/Qwen3.8-27B-Obliterated-E03 \
-  --comprehension-gguf ./components/qwen3-omni-comprehension.q4_k_m.gguf \
-  --comprehension-source Qwen/Qwen3-Omni-30B-A3B-Instruct \
-  --tts-gguf ./components/qwen3-tts.q4_k_m.gguf \
-  --tts-source Qwen/Qwen3-TTS-12Hz-0.6B-Base \
-  --out ./release/model.gguf \
-  --renderer qwen3.8 \
-  --parser qwen3.5
-```
-
-The packer leaves the base language tensors unprefixed, rewrites comprehension
-tensors under `a.c.*`, rewrites TTS tensors under `s.t.*`, copies each embedded
-component's metadata into a namespaced view, adds source digests and the router
-contract, and writes one GGUF. It also writes `model.gguf.report.json` and a
-single-`FROM` Modelfile.
-
-Inspect the result without running inference:
+Convert, quantize, and test each graph first, then pack the base model/projector,
+comprehension model/projector, and TTS model/projector:
 
 ```bash
-training_suite/.venv/bin/python -m training_suite omni-inspect \
-  ./release/model.gguf
+python -m training_suite omni-pack \
+  --base-gguf ./components/base.gguf \
+  --base-projector-gguf ./components/base-projector.gguf \
+  --comprehension-gguf ./components/comprehension-model.gguf \
+  --comprehension-projector-gguf ./components/comprehension-projector.gguf \
+  --tts-gguf ./components/tts-model.gguf \
+  --tts-projector-gguf ./components/tts-projector.gguf \
+  --base-source org/base@revision \
+  --comprehension-source org/omni@revision:q4_k_m \
+  --tts-source org/tts@revision:q4_k_m \
+  --out ./release/omni-sidecar.gguf
+
+python -m training_suite omni-inspect ./release/omni-sidecar.gguf
 ```
 
-The comprehension input must be self-contained: a bare Qwen3-Omni audio/vision
-encoder cannot feed Qwen3.8 or Ornith without a trained bridge. The TTS input
-must be text-conditioned; an unmodified Omni Talker tied to another Thinker is
-not sufficient.
+The storage namespaces are unprefixed base, `b.p.*`, `a.c.m.*`, `a.c.p.*`,
+`s.t.m.*`, and `s.t.p.*`. The command writes a pack report and custom-layer
+descriptor. It does not write a misleading Modelfile: the heterogeneous file
+must not be a stock `FROM` target.
+
+Create/copy a normal Ollama tag from the verified base, then attach the sidecar:
+
+```bash
+python -m training_suite omni-attach robit/example-omni:q4km \
+  ./release/omni-sidecar.gguf
+python -m training_suite omni-resolve robit/example-omni:q4km
+python -m training_suite omni-prepare robit/example-omni:q4km \
+  --out ./runtime-cache
+```
+
+`omni-prepare` produces disposable component files for runtimes without
+filtered mmap support. Delete that cache only after workers stop. The
+comprehension graph must be self-contained, and TTS must be independently
+text-conditioned; an Omni Talker coupled to a different Thinker is insufficient.
 
 #### Audio wire contract
 
-The custom Ollama handler accepts audio as a tagged message field analogous to
+The Omni adapter accepts audio as a tagged message field analogous to
 `images`:
 
 ```json
@@ -400,36 +408,13 @@ that TTS is deferred while unresolved tool calls are present. See the complete
 [adapter documentation](docs/omni-adapter/README.md) and
 [runnable clients/server](examples/omni_adapter/README.md).
 
-#### HTTP reference runtime
+#### Reference runtime
 
-Before the custom Ollama loader/runner is complete, the Flask endpoint exercises
-the same routing semantics across separate HTTP processes. It is a development
-and evaluation harness, not the final one-file execution path.
-
-Configure three external stages:
-
-```bash
-export TRAINING_SUITE_OMNI_ASR_URL=http://127.0.0.1:8080/v1/chat/completions
-export TRAINING_SUITE_OMNI_ASR_MODEL=qwen3-omni
-export TRAINING_SUITE_OMNI_LANGUAGE_MODEL=robit/qwen3.8-27b-obliterated-e03:27b
-export TRAINING_SUITE_OMNI_TTS_URL=http://127.0.0.1:8081/synthesize
-export OLLAMA_URL=http://127.0.0.1:11434
-```
-
-The first endpoint receives an OpenAI-compatible `input_audio` content part and
-must return semantic text. Ollama receives that text and runs with `think=true`.
-The TTS endpoint receives `{text, output}` and must return either `audio/wav`
-bytes or the documented JSON envelope.
-
-After starting the dashboard, run the publication gate:
-
-```bash
-training_suite/.venv/bin/python -m training_suite omni-audio-smoke \
-  --audio ./fixture-16khz-mono.wav
-```
-
-The gate fails unless the complete request succeeds and the returned waveform
-is 24 kHz mono PCM16 WAV.
+The reference adapter exposes one `/api/chat` endpoint while coordinating a
+pinned llama.cpp comprehension worker, stock Ollama, and a Qwen3-TTS worker.
+It resolves all media weights from the installed tag; component URLs are
+internal deployment details. See the [runtime guide](docs/omni-adapter/runtime.md)
+and [examples](examples/omni_adapter/README.md).
 
 #### Video comprehension
 
@@ -438,42 +423,22 @@ The planner detects the donor's `video-input` path and records a
 preserve frame order and temporal metadata, and return semantic text to the
 same Ollama language stage used by audio.
 
-The adapter v1 parser accepts tagged MP4/WebM, validates container signatures,
-and bounds FPS/frame sampling. The reference sidecar translates that envelope
-to a multimodal comprehension service. The final custom Ollama runner must
-perform bounded decoding, preserve frame timestamps, and keep video audio
-aligned. Do not advertise the monolithic tag as live video input until its
-embedded graph passes those end-to-end probes.
+The adapter accepts tagged MP4/WebM, validates container signatures, bounds
+sampling, passes raw base64 through llama.cpp's `input_video`, and optionally
+demuxes a separate 16 kHz audio part. Production deployments must additionally
+bound duration/resolution/decoder resources and should not claim sample-accurate
+alignment from the reference demux path.
 
-### 6. Import and publish the monolithic GGUF to Ollama
+### 6. Publish the combined release
 
-The generated Modelfile has one model reference:
+Push the repository documentation first. Publish and verify the sidecar GGUF,
+model card, pack report, and hashes on Hugging Face. Then push the already
+attached Ollama `q4km` and `latest` tags. A release is complete only after a
+pull round trip preserves the custom layer digest and `ollama show` still
+reports the standard capabilities.
 
-```text
-FROM ./model.gguf
-```
-
-Import with the custom Ollama build, then test the local tag before copying it
-into the account namespace:
-
-```bash
-training_suite/.venv/bin/python -m training_suite capability-gate \
-  local-model:q4km \
-  --capability tools \
-  --capability thinking
-
-training_suite/.venv/bin/python -m training_suite tool-smoke local-model:q4km
-
-training_suite/.venv/bin/python -m training_suite omni-inspect ./release/model.gguf
-
-ollama signin
-ollama cp local-model:q4km robit/model:q4km
-ollama push robit/model:q4km
-```
-
-After pushing, fetch and inspect the remote tag or registry manifest. A
-successful local `ollama create` is not proof that the remote publication is
-complete.
+The complete order, rollback, credential hygiene, and mandatory cleanup gates
+are in the [build/release runbook](docs/omni-adapter/build-and-release.md).
 
 ## CLI reference
 
@@ -491,8 +456,12 @@ The package CLI provides control-plane and inspection commands:
 | `capability-gate` | Compare Ollama-advertised capabilities with requirements |
 | `ornith-seed` | Register the canonical Ornith intake case |
 | `omni-plan` | Generate a native-graft or monolithic-router plan |
-| `omni-pack` | Pack the base, comprehension, and TTS GGUFs into one file |
-| `omni-inspect` | Validate schema, metadata, and tensor namespaces in that file |
+| `omni-pack` | Pack six model/projector views into one custom GGUF sidecar |
+| `omni-inspect` | Validate sidecar schema, metadata, and tensor namespaces |
+| `omni-unpack` | Materialize one executable component view |
+| `omni-attach` | Attach the sidecar as a custom layer on an existing Ollama tag |
+| `omni-resolve` | Locate and validate that layer in a local Ollama manifest |
+| `omni-prepare` | Build a disposable media-worker cache from an installed tag |
 | `omni-audio-smoke` | Validate live audio understanding, reasoning, and TTS |
 
 The training harness provides:
@@ -591,12 +560,12 @@ running the suite. The following rules are especially important:
    users or agents. Do not discard unrelated edits or overwrite shared model
    outputs.
 8. **Publish only after gates pass.** Create locally, test every claimed
-   capability, copy to the remote tag, push, and verify the remote artifact in
-   that order.
+   capability, push repository docs, publish/verify Hugging Face artifacts,
+   then push/pull/verify Ollama tags.
 9. **Treat embedded components as independent graphs.** Audio/video
    comprehension and TTS have their own weights, revisions, loaders, health
-   checks, memory budgets, and failure modes even though they share one file.
-   Record them in the bundle manifest.
+   checks, memory budgets, and failure modes even though they share one logical
+   tag and one custom sidecar. Record them in the bundle manifest.
 10. **Clean up completed sessions.** Large temporary weights must not accumulate
     indefinitely.
 
@@ -606,16 +575,16 @@ Use one explicit output directory per run. Cleanup is permitted only after:
 
 1. the final local model loads;
 2. required capability and behavioral tests pass;
-3. every requested registry push succeeds;
-4. the remote tag or manifest is verified; and
+3. every requested Hugging Face and Ollama push succeeds;
+4. Hugging Face files/model card and pulled Ollama sidecar digest are verified;
 5. compact reproducibility metadata has been saved.
 
 Then remove run-local downloaded safetensor shards, merged safetensors, LoRA
 checkpoints already distilled into the verified deliverable, F16/BF16 GGUF
-intermediates, partial downloads, and redundant conversion outputs. Retain
-Modelfiles, manifests, source revisions, component digests, licenses, splice
-reports, evaluation reports, and any final GGUF that is itself a required
-deliverable.
+intermediates, partial downloads, redundant conversion outputs, and disposable
+sidecar materializations. Retain Modelfiles, manifests, source revisions,
+component digests, licenses, splice reports, evaluation reports, and any final
+GGUF that is itself a required deliverable.
 
 Inspect exact paths and sizes before deletion. Shared Hugging Face caches and
 donor weights may still be in use by another run. Never recursively clean the
@@ -646,6 +615,8 @@ The full checklist is in
 | `OMNI_COMPREHENSION_MODEL` | `Qwen/Qwen3-Omni-30B-A3B-Instruct` | Example adapter comprehension model |
 | `OMNI_LANGUAGE_URL` | `http://127.0.0.1:11434` | Example adapter Ollama base URL |
 | `OMNI_TTS_URL` | `http://127.0.0.1:8091/synthesize` | Example adapter TTS endpoint |
+| `OMNI_OLLAMA_MODEL` | unset | Resolve the TTS sidecar from this installed model tag |
+| `OMNI_COMPONENT_CACHE` | `training_suite/outputs/omni-cache` | Disposable materialized-view cache |
 | `HF_TOKEN` | unset | Hugging Face upload credential |
 
 ## Repository map
@@ -664,7 +635,8 @@ The full checklist is in
 | `training_suite/models/audio.py` | Strict base64 PCM WAV contract |
 | `training_suite/models/omni.py` | Qwen3-Omni signatures, compatibility gate, and bundle writer |
 | `training_suite/models/omni_adapter.py` | Versioned audio/image/video/TTS request parser and route planner |
-| `training_suite/models/single_gguf.py` | Monolithic GGUF schema, packer, inspector, and custom audio contract |
+| `training_suite/models/single_gguf.py` | Six-view GGUF sidecar schema, packer, inspector, and materializer |
+| `training_suite/models/ollama_sidecar.py` | Ollama custom-layer attach, resolve, and runtime-cache preparation |
 | `training_suite/omni_runtime.py` | Audio-understanding → Ollama → TTS HTTP cascade |
 | `docs/omni-adapter/` | Wire ABI, GGUF ABI, runtime patch guide, release runbook, schemas, and tests |
 | `examples/omni_adapter/` | Runnable reference server plus Python and JavaScript clients |
@@ -690,7 +662,7 @@ Additional documentation:
 ## Tests
 
 ```bash
-training_suite/.venv/bin/python -m pytest -q
+training_suite/.venv/bin/python -m pytest -q tests
 ```
 
 For documentation-only or CPU environments, unit tests can run without
@@ -705,12 +677,12 @@ respective services and fixtures.
 - Modelfile renderer/parser settings cannot restore tool behavior removed by
   fine-tuning.
 - Direct GGUF tensor surgery is safe only for explicitly verified layouts.
-- The monolithic file requires a custom Ollama compatibility/runner hook for
-  component views, routing, and audio fields. Stock Ollama does not gain those
-  behaviors merely by importing the file.
-- The versioned parser/reference sidecar implements audio/image/video envelopes
-  and all four routes, but the custom monolithic runner, production component
-  converters, and in-process video temporal normalization remain follow-up work.
+- Stock Ollama ignores the custom sidecar layer and does not gain audio/video/TTS
+  fields. The adapter is required for those paths; stock execution covers the
+  tag's standard text/vision/tools/thinking layers.
+- The reference runtime implements all four turn-based routes. Persistent TTS,
+  streaming, filtered mmap views, and sample-accurate video/audio alignment are
+  follow-up production work.
 - Model and dataset licenses vary. Review every source license and acceptable-use
   condition before training, merging, or publishing derived artifacts.
 

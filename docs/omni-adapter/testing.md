@@ -1,178 +1,140 @@
 # Omni Adapter Test Plan
 
-The combined model is releasable only when storage, protocol, every component,
-the full route, and the original language capabilities pass independently.
+A release is valid only when the repository, container, Ollama manifest,
+individual graphs, combined routes, registry copies, and cleanup gates pass.
 
 ## Test levels
 
-| Level | Purpose | Hardware |
-|---|---|---|
-| Unit | Validate envelopes, routing, GGUF namespaces, and response encoding | CPU |
-| Schema | Keep examples and API objects compatible with adapter v1 | CPU |
-| Component | Prove base, comprehension, and TTS graphs independently | CPU/GPU as required |
-| Integration | Prove ASR, video, language, tools, thinking, and TTS routing | GPU/runtime |
-| Regression | Compare candidate against the verified base and component baselines | GPU/runtime |
-| Release | Verify local tag, pushed tag, manifests, digests, and documentation | Production-like |
+| Level | Purpose |
+|---|---|
+| Unit/schema | Validate envelopes, routes, GGUF views, sidecar manifests, and response encoding |
+| Artifact | Verify hashes, tensor inventories, metadata, and round-trip materialization |
+| Component | Execute base, projector, comprehension, and TTS pairs independently |
+| Integration | Exercise the public adapter across real component workers |
+| Regression | Confirm stock Qwen3.8 text/vision/tools/thinking remain unchanged |
+| Publication | Verify Hugging Face files and Ollama push/pull layer survival |
 
-## Repository tests
+## Repository gate
 
 ```bash
-uv run --with pytest --with httpx --with flask --with numpy --with gguf \
-  python -m pytest -q
-
-python3 -m compileall -q training_suite examples tests
+python -m pytest -q tests
+python -m compileall -q training_suite examples tests
+ruff check training_suite examples tests
 git diff --check
 ```
 
-The unit suite covers:
+The unit suite covers strict audio/video/image decoding, item and size limits,
+all four routes, Ollama field preservation, speech/tool deferral, TTS envelope
+validation, six-view GGUF packing/materialization, and custom Ollama layer
+attach/resolve/cache preparation.
 
-- 16 kHz PCM WAV validation and 24 kHz response encoding;
-- MP4/WebM and JPEG/PNG/WebP signature checks;
-- decoded-size, item-count, schema, task, and sampling validation;
-- `chat`, `transcribe`, `describe`, and `synthesize` route selection;
-- preservation of tools and thinking through the reference server;
-- speech generation and WAV validation;
-- real tiny-GGUF packing with all three tensor namespaces;
-- Flask contract and validation endpoints.
+## Artifact gate
 
-## Required fixtures
+For the release sidecar:
 
-Keep compact, redistributable fixtures with licenses and expected results:
+1. `omni-inspect` reports schema `robit.ollama-monolithic-omni.v3`.
+2. Exactly six expected view counts are nonzero.
+3. Sidecar size and SHA-256 match the release record.
+4. Every materialized view matches its pinned input SHA-256 and tensor count.
+5. The installed Ollama manifest has normal model/projector layers and exactly
+   one Robit sidecar layer with the same digest.
+6. `ollama show` loads the standard graph without seeing sidecar tensors.
 
-| Fixture | Required property |
+The sidecar itself is not sent to stock Ollama as a model layer. A successful
+GGUF parse is not evidence that heterogeneous graphs can be executed together.
+
+## Fixtures
+
+Use compact redistributable fixtures with documented expected assertions:
+
+| Fixture | Assertion |
 |---|---|
-| `silence-1s.wav` | 16 kHz mono PCM16 silence |
-| `speech-en.wav` | Clean English speech with known transcript |
-| `speech-multilingual.wav` | Supported non-English speech with known transcript |
-| `non-speech.wav` | Distinct sound events such as bell, footsteps, and music |
-| `image-text.png` | Legible text plus objects for OCR/description |
-| `temporal-events.mp4` | At least three events whose order matters |
-| `av-alignment.mp4` | Visible event and aligned audio cue/speech |
-| `direct-tts.txt` | Punctuation, digits, abbreviations, and multilingual text |
+| 16 kHz mono PCM16 speech | exact or thresholded transcript |
+| image with color/shape/text | all expected visible facts |
+| silent temporal video | event order preserved |
+| video with speech/sound | visual order plus audio assertion |
+| direct TTS sentence | positive-duration 24 kHz mono PCM16 WAV |
 
-Do not commit large or restricted fixtures. Record SHA-256, duration,
-dimensions, codec, license, and expected semantic assertions.
+Record fixture digest, size, duration/dimensions, codec, license, and expected
+result. Do not commit large or restricted media.
 
 ## Component gates
 
-### Base graph
+### Stock Ollama base
 
-- text completion is coherent;
-- `think=true` yields correctly parsed `message.thinking` where supported;
-- structured tool call has the expected name and arguments;
-- follow-up tool result produces a final answer;
-- context size and tokenizer behavior match the pre-bundle baseline;
-- native image understanding remains unchanged if included.
+- coherent completion;
+- `think=true` returns a separately parsed thinking field;
+- a tool request returns the expected structured function and arguments;
+- a native image fixture is understood correctly;
+- architecture, context, quantization, projector, and capabilities match the
+  source base tag.
 
-### Comprehension graph
+### Qwen3-Omni comprehension
 
-- clean-speech word error rate is within the selected baseline threshold;
-- non-speech caption identifies expected events without inventing speech;
-- image description/OCR covers required assertions;
-- video response preserves event order;
-- audio-video response uses both streams when requested;
-- `include_audio_from_video=false` prevents the audio track from affecting the
-  result;
-- malformed media fails without crashing or allocating unbounded memory.
+- exact clean-speech transcription;
+- image description/OCR assertions;
+- temporal video order;
+- video audio used when requested;
+- video audio ignored when disabled;
+- malformed media fails without a crash or unbounded allocation.
 
-### TTS graph
+### Qwen3-TTS
 
-- output is complete RIFF/WAVE, 24 kHz, mono, PCM16;
-- output duration is positive and bounded;
-- transcript intelligibility meets the selected ASR round-trip threshold;
-- requested supported voice is stable across repeated calls;
-- unsupported voice/language/style returns a defined error or documented
-  fallback;
-- empty input and excessive text are rejected cleanly.
+- RIFF/WAVE container, PCM16, mono, 24 kHz;
+- positive and bounded duration;
+- at least two repeated requests succeed;
+- empty/excessive text and unsupported options have defined errors;
+- selected languages/voices are only advertised after their own tests.
 
 ## Route matrix
 
-| Request | Expected route | Critical assertions |
+| Request | Expected route | Critical result |
 |---|---|---|
-| text chat | `language` | No media graph load; tools/thinking unchanged |
-| audio chat, text response | `comprehension → language` | Semantic observation used; no audio output |
-| audio chat, speech response | `comprehension → language → tts` | Text plus valid WAV |
-| ASR | `comprehension` | Transcript is not paraphrased by language graph |
-| video describe | `comprehension` | Temporal ordering and frame/audio policy |
-| multimodal tool request | `comprehension → language` | Tool call preserved; TTS deferred |
-| tool-result follow-up with speech | `language → tts` | Final answer spoken, not tool JSON |
-| direct TTS | `tts` | Input text returned and synthesized exactly |
+| text chat | `language` | stock response; no media worker required |
+| image/audio/video chat | `comprehension → language` | observation used as untrusted evidence |
+| media chat with speech | `comprehension → language → tts` | text plus valid tagged WAV |
+| ASR | `comprehension` | direct transcript, no language paraphrase |
+| video describe | `comprehension` | temporal and audio policy honored |
+| direct TTS | `tts` | supplied text synthesized |
+| media tool request | `comprehension → language` | tool call preserved; TTS deferred |
+| tool-result follow-up | `language → tts` | final answer spoken, not tool JSON |
 
-## Negative tests
-
-At minimum:
+## Negative and resilience tests
 
 - missing model/messages/user message;
-- unknown explicit schema;
-- `stream:true` under v1;
-- invalid/whitespace/non-padded base64;
-- spoofed MIME versus container signature;
+- unknown explicit schema or task;
+- `stream:true` under adapter v1;
+- invalid or oversized base64;
+- MIME/container mismatch;
 - compressed or wrong-rate WAV;
-- unsupported image/video container or codec;
-- per-item and aggregate limit violations;
-- FPS, frame-count, duration, resolution, and decompression-bomb limits;
-- comprehension timeout/cancellation;
-- TTS invalid JSON or malformed WAV;
-- insufficient GPU memory and component eviction under load;
-- adapter fields submitted to an ordinary model;
-- prompt injection present in OCR, subtitles, or transcripts;
-- unresolved tool calls with speech requested.
+- unsupported image/video container;
+- invalid sampling FPS/frame count;
+- ffmpeg, comprehension, language, and TTS timeout;
+- prompt injection in OCR/transcript/subtitles;
+- unresolved tools with speech requested;
+- insufficient memory, cancellation, and repeated worker restart;
+- adapter media fields sent to an ordinary model without a sidecar.
 
-Errors must not echo media or secrets.
-
-## One-GGUF conformance
-
-For the production artifact, verify:
-
-1. Exactly one model GGUF is referenced by the Modelfile.
-2. Its digest equals the release manifest.
-3. `omni-inspect` finds nonzero base, comprehension, and TTS tensor counts.
-4. Each filtered view matches its pre-pack component tensor inventory.
-5. Stock base tensors do not expose `a.c.*` or `s.t.*` to the text loader.
-6. All contexts map the same physical file; no undisclosed weight sidecar is
-   required.
-7. Text-only loading does not allocate comprehension/TTS execution state.
-8. Lazy component load and eviction do not corrupt later base requests.
-
-## Performance and reliability
-
-Record cold and warm measurements for:
-
-- component load time;
-- time to first transcript/description;
-- language time to first token and total tokens per second;
-- TTS time to first waveform and real-time factor;
-- peak CPU RAM and VRAM by component;
-- video decode and preprocessing time;
-- maximum stable concurrent audio, video, and text requests;
-- cancellation latency and memory reclamation;
-- repeated load/evict cycles.
-
-Set release thresholds from a measured baseline. Do not publish guessed latency
-or VRAM figures.
+Errors must be typed and must not echo raw media, secrets, thinking, or tool
+arguments unnecessarily.
 
 ## Publication gate
 
-All boxes are required for a capability-complete tag:
+- [ ] source revisions, licenses, sizes, and hashes recorded;
+- [ ] llama.cpp and repository commits recorded;
+- [ ] unit, compile, lint, and diff checks pass;
+- [ ] six-view artifact round trip passes;
+- [ ] stock text/vision/thinking/tools pass;
+- [ ] ASR, image, video, and video-audio tests pass;
+- [ ] direct and repeated TTS pass;
+- [ ] adapter output envelope validates;
+- [ ] repository documentation is pushed;
+- [ ] Hugging Face GGUF/model card/report are remotely verified;
+- [ ] Ollama `q4km` and `latest` are remotely verified;
+- [ ] pulled Ollama tag retains the custom sidecar digest;
+- [ ] temporary CUDA services are stopped and leases released;
+- [ ] cleanup is measured and performed only after every preceding gate.
 
-- [ ] component sources, revisions, licenses, and digests recorded;
-- [ ] custom Ollama fork commit and binary digest recorded;
-- [ ] pack report and final GGUF SHA-256 recorded;
-- [ ] unit/schema suite green;
-- [ ] base text/tools/thinking regressions green;
-- [ ] audio comprehension/ASR gates green;
-- [ ] image and video comprehension gates green;
-- [ ] TTS format and intelligibility gates green;
-- [ ] combined media → language → TTS route green;
-- [ ] tool-call speech deferral green;
-- [ ] malformed media and resource-limit gates green;
-- [ ] local Ollama tag verified;
-- [ ] remote tag push completed and remote manifest/digest verified;
-- [ ] model page links to protocol, examples, runtime requirement, limitations,
-  provenance, licenses, and test report;
-- [ ] run-local safetensors and conversion intermediates cleaned only after all
-  preceding checks.
-
-If one modality fails, do not advertise that modality. A successful
-`ollama create`, visible tensor prefix, or accepted request is not evidence of
-correct inference.
+If any modality fails, remove that claim or block the release. An accepted
+request, tensor prefix, local model creation, or successful upload command is
+not enough on its own.

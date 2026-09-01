@@ -2,9 +2,9 @@
 
 ## Change Summary
 
-Add compatibility-gated planning, a monolithic multi-graph GGUF packer, and
-byte-level audio contracts while retaining Qwen3.8/Ornith as the primary
-Ollama language graph.
+Add compatibility-gated planning, a namespaced multi-graph GGUF sidecar,
+custom Ollama manifest-layer handling, and byte-level media contracts while
+retaining Qwen3.8/Ornith as the stock-runnable language graph.
 
 ## Component Impact
 
@@ -13,8 +13,8 @@ Ollama language graph.
 | Model intake | Detect `audio-input` and `audio-output` from HF/GGUF metadata | Additive |
 | GGUF inspection | Detect audio encoder and Talker/code2wav pairs | Additive |
 | Bundle planner | Generate native-Omni or monolithic-router plans | New component |
-| Monolithic packer | Embed base, comprehension, and TTS GGUFs under isolated namespaces | New component |
-| Ollama packaging | Import one GGUF with one `FROM`; custom handler executes embedded graphs | Extended |
+| Sidecar packer | Preserve six base/projector/comprehension/TTS views under isolated namespaces | New component |
+| Ollama packaging | Attach one custom GGUF layer to a normal runnable manifest; resolve and materialize views | Extended |
 | REST API | Adds versioned audio/image/video/TTS contracts, validation, plan, and reference routing endpoints | Additive |
 | Adapter examples | Adds reference sidecar plus Python and JavaScript clients | New component |
 | Dashboard | Displays audio-input/audio-output capability pills | Additive |
@@ -31,6 +31,7 @@ Ollama language graph.
 | TTS output is not parseable | Medium | Require 24 kHz mono PCM16 WAV response envelope |
 | Disk growth from multi-component weights | High | Existing post-verification session cleanup policy applies |
 | Text-only quantizer drops embedded tensors | High | Quantize components before packing; inspect final namespaces |
+| Registry strips unknown custom layer | Critical | Push/pull round-trip and digest verification before release |
 | Media prompt injection reaches tools | High | Delimit semantic observations as untrusted evidence; preserve tool schemas separately |
 | Video decoder resource exhaustion | High | Sandboxed decoder plus size, FPS, frame, pixel, duration, and timeout limits |
 
@@ -38,5 +39,6 @@ Ollama language graph.
 
 Construction of large artifacts is allowed only after a plan reports either
 `native-omni` or `ready-for-monolithic-pack`. Publication remains blocked until
-every component digest is recorded and live audio input/output, video/vision,
-tools, and thinking probes pass on the custom Ollama runtime.
+every component digest is recorded, live audio input/output, video/vision,
+tools, and thinking pass from the installed sidecar, and both Hugging Face and
+Ollama registry artifacts are verified remotely.

@@ -1,249 +1,196 @@
 # Omni Adapter Examples
 
-These examples implement the public `robit.ollama.omni-adapter.v1` request and
-response format intended for the combined Qwen3.8/Ornith Omni model.
+These examples expose one Ollama-shaped endpoint for a logical model tag while
+routing audio/video/TTS through component views stored in that tag's custom
+GGUF sidecar layer.
 
-- `server.py` is a readable HTTP sidecar that routes comprehension, Ollama
-  language generation, and TTS while the in-process custom Ollama runner is
-  being developed.
-- `client.py` sends ASR, direct TTS, video-description, or combined chat
-  requests and writes returned speech to WAV.
-- `javascript_client.mjs` demonstrates an audio-in/audio-out chat with Node.js
-  built-ins.
+Files:
 
-The sidecar and final custom runner use the same API contract. The sidecar uses
-separate HTTP component servers and therefore does not prove that a monolithic
-GGUF executes inside stock Ollama.
+- `server.py` — request parser and comprehension→Ollama→TTS router;
+- `tts_server.py` — serial reference wrapper for llama.cpp `llama-tts`;
+- `client.py` — Python CLI for ASR, video, direct TTS, and combined chat;
+- `javascript_client.mjs` — dependency-free Node audio-chat example.
 
-## Install
+The example is a conformance/development runtime. It is not a claim that stock
+Ollama itself accepts audio/video fields or produces waveform bytes.
 
-From the repository root:
+## 1. Pull and prepare the model
 
 ```bash
-python3 training_suite/app.py bootstrap
+ollama pull robit/qwen3.8-27b-e03-obliterated-omni:q4km
+
+MODEL=robit/qwen3.8-27b-e03-obliterated-omni:q4km
+CACHE=/srv/omni-runtime/qwen38-q4km
+
+python -m training_suite omni-resolve "$MODEL"
+python -m training_suite omni-prepare "$MODEL" --out "$CACHE"
 ```
 
-Or create a small example environment containing Flask and HTTPX. The examples
-must be launched from the repository root so the `training_suite` package is on
-the Python import path.
+The cache is disposable. It can always be reconstructed from the installed
+sidecar and should be removed after every worker using it stops.
 
-## Configure the reference server
+## 2. Start Qwen3-Omni comprehension
+
+Build the pinned llama.cpp tools and start `llama-server` with the extracted
+pair:
+
+```bash
+./training_suite/vendor/llama.cpp/build/bin/llama-server \
+  -m "$CACHE/comprehension-model.gguf" \
+  --mmproj "$CACHE/comprehension-projector.gguf" \
+  --host 127.0.0.1 --port 8901 \
+  --jinja -ngl 99 -c 8192
+```
+
+On a broker-managed CUDA host, do not run that command anonymously. First run
+`docker gpu discover`, then wrap it with the scoped `docker gpu run` protocol
+from `/usr/local/share/ollama-unify/AGENTS.md`.
+
+The current llama.cpp request translations are:
+
+- audio → `{"type":"input_audio","input_audio":{"data":"<raw base64>"}}`;
+- image → `image_url` data URI;
+- video → `{"type":"input_video","input_video":{"data":"<raw base64>"}}`.
+
+For video with sound, `server.py` also demuxes the first audio stream using
+ffmpeg and submits 16 kHz mono PCM16 WAV as a separate audio part.
+
+## 3. Start TTS
+
+The wrapper can resolve the installed model itself:
+
+```bash
+export OMNI_OLLAMA_MODEL="$MODEL"
+export OMNI_COMPONENT_CACHE="$CACHE"
+export LLAMA_TTS_BIN=./training_suite/vendor/llama.cpp/build/bin/llama-tts
+export OMNI_TTS_PORT=8892
+python examples/omni_adapter/tts_server.py
+```
+
+Set `OMNI_TTS_GPU_LAYERS=0` for a CPU-only functional test. CUDA services must
+use the host's GPU broker. The wrapper is serial and reloads the model on each
+request; it is intentionally simple, not production throughput code.
+
+## 4. Start the unified adapter
 
 ```bash
 export OMNI_COMPREHENSION_URL=http://127.0.0.1:8901/v1/chat/completions
-export OMNI_COMPREHENSION_MODEL=Qwen/Qwen3-Omni-30B-A3B-Instruct
+export OMNI_COMPREHENSION_MODEL=local-qwen3-omni
 export OMNI_LANGUAGE_URL=http://127.0.0.1:11434
-export OMNI_TTS_URL=http://127.0.0.1:8091/synthesize
-export OMNI_ADAPTER_PORT=11435
+export OMNI_TTS_URL=http://127.0.0.1:8892/synthesize
+export OMNI_ADAPTER_PORT=8910
+python examples/omni_adapter/server.py
 ```
 
-The comprehension endpoint receives OpenAI-style multimodal content parts:
+Health and contract:
 
-- `audio_url.url`: base64 WAV data URI;
-- `image_url.url`: base64 JPEG/PNG/WebP data URI;
-- `video_url.url`: base64 MP4/WebM data URI plus optional `sampling`;
-- `mm_processor_kwargs.use_audio_in_video`: requested video-audio policy.
+```bash
+curl -fsS http://127.0.0.1:8910/healthz
+curl -fsS http://127.0.0.1:8910/api/omni/adapter/contract
+```
 
-Qwen3-Omni's official vLLM Serve example documents image and audio URL parts,
-while its native Transformers/vLLM processor path documents video input and
-`use_audio_in_video`. A selected server may require a small translation at
-`build_comprehension_payload()` for video. Do not assume every generic
-OpenAI-compatible server accepts `video_url` or processor kwargs.
+## Python client
 
-The TTS endpoint receives:
+Global options must precede the subcommand.
+
+```bash
+# ASR
+python examples/omni_adapter/client.py \
+  --endpoint http://127.0.0.1:8910/api/chat \
+  --model "$MODEL" \
+  asr ./speech-16khz-mono.wav
+
+# Video comprehension, including its audio track
+python examples/omni_adapter/client.py \
+  --endpoint http://127.0.0.1:8910/api/chat \
+  --model "$MODEL" \
+  video ./events.mp4 --fps 2 --max-frames 96 --include-audio
+
+# Direct TTS
+python examples/omni_adapter/client.py \
+  --endpoint http://127.0.0.1:8910/api/chat \
+  --model "$MODEL" \
+  --output-audio ./speech.wav \
+  tts "Read this sentence."
+
+# Media → Qwen3.8 reasoning → speech
+python examples/omni_adapter/client.py \
+  --endpoint http://127.0.0.1:8910/api/chat \
+  --model "$MODEL" \
+  --output-audio ./answer.wav \
+  chat --audio ./question.wav --speak \
+  --prompt "Answer the recorded question."
+```
+
+The client writes decoded audio to `--output-audio` and redacts the large
+base64 value from normal stdout. Use `--print-audio-base64` only when the raw
+JSON transport value is specifically needed.
+
+## Request shape
 
 ```json
 {
-  "text": "Text to synthesize",
-  "output": {
-    "mime_type": "audio/wav",
-    "container": "wav",
-    "codec": "pcm_s16le",
-    "sample_rate_hz": 24000,
-    "channels": 1,
-    "sample_width_bits": 16
+  "model": "robit/qwen3.8-27b-e03-obliterated-omni:q4km",
+  "messages": [{
+    "role": "user",
+    "content": "What did I say?",
+    "audios": [{
+      "mime_type": "audio/wav",
+      "encoding": "base64",
+      "data": "<16 kHz mono PCM16 WAV>"
+    }]
+  }],
+  "omni": {
+    "schema": "robit.ollama.omni-adapter.v1",
+    "task": "chat"
   },
-  "voice": "optional voice identifier"
+  "response_modalities": ["text", "audio"],
+  "speech_mode": "always",
+  "think": true,
+  "stream": false
 }
 ```
 
-It must return raw `audio/wav` bytes or the JSON audio envelope documented in
-the [wire protocol](../../docs/omni-adapter/protocol.md).
+Image envelopes use `message.images`; video envelopes use `message.videos`
+with `mime_type`, `encoding`, `data`, and optional `sampling` containing `fps`,
+`max_frames`, and `include_audio`.
 
-Before starting any CUDA component service on the managed host, run
-`docker gpu discover` and use the scoped reservation protocol in
-`/usr/local/share/ollama-unify/AGENTS.md`.
+Output speech appears at `message.audio`:
 
-Start the adapter:
-
-```bash
-training_suite/.venv/bin/python examples/omni_adapter/server.py
-curl -s http://127.0.0.1:11435/healthz
+```json
+{
+  "type": "audio",
+  "mime_type": "audio/wav",
+  "encoding": "base64",
+  "sample_rate_hz": 24000,
+  "channels": 1,
+  "sample_width_bits": 16,
+  "data": "<base64 RIFF/WAVE>"
+}
 ```
 
-## Normalize audio
+## Tools and thinking
 
-Adapter v1 accepts 16 kHz mono PCM16 WAV:
+For `task=chat`, normal `tools` and `think` are forwarded to stock Ollama. The
+adapter preserves `message.thinking` and structured `tool_calls`. If unresolved
+tool calls are present, it does not synthesize their JSON; speech can resume
+after the client submits tool results and receives final assistant text.
 
-```bash
-ffmpeg -i recording.m4a -ac 1 -ar 16000 -c:a pcm_s16le speech.wav
-```
+Direct `transcribe`/`describe` routes return comprehension output without a
+second Qwen3.8 pass. Direct `synthesize` returns the input text plus audio.
 
-## Python examples
-
-### ASR without language-model paraphrasing
-
-```bash
-training_suite/.venv/bin/python examples/omni_adapter/client.py \
-  --model robit/qwen3.8-omni:latest \
-  asr ./speech.wav
-```
-
-This selects `omni.task=transcribe` and executes only comprehension.
-
-### Direct TTS
+## JavaScript
 
 ```bash
-training_suite/.venv/bin/python examples/omni_adapter/client.py \
-  --model robit/qwen3.8-omni:latest \
-  --voice speaker-1 \
-  --output-audio ./direct.wav \
-  tts "Read this sentence exactly as written."
+OMNI_ADAPTER_URL=http://127.0.0.1:8910/api/chat \
+OMNI_MODEL="$MODEL" \
+node examples/omni_adapter/javascript_client.mjs \
+  ./speech-16khz-mono.wav ./answer.wav
 ```
 
-This selects `omni.task=synthesize`, bypasses the language model, and writes the
-returned 24 kHz PCM16 WAV.
+## Shutdown
 
-### Video comprehension
-
-```bash
-training_suite/.venv/bin/python examples/omni_adapter/client.py \
-  --model robit/qwen3.8-omni:latest \
-  video ./events.mp4 \
-  --fps 2 \
-  --max-frames 96 \
-  --include-audio \
-  --prompt "Describe the events and quote any spoken question."
-```
-
-Use `--no-include-audio` to test vision-only temporal comprehension.
-
-### Combined audio question, tools/thinking-capable language, and TTS
-
-```bash
-training_suite/.venv/bin/python examples/omni_adapter/client.py \
-  --model robit/qwen3.8-omni:latest \
-  --output-audio ./answer.wav \
-  chat \
-  --audio ./question.wav \
-  --prompt "Answer the recorded question concisely." \
-  --speak
-```
-
-The client defaults to `think=true`. The adapter preserves normal Ollama tool
-definitions if a calling application includes them. When a response contains
-unresolved `tool_calls`, TTS is deferred until the client sends tool results and
-receives final assistant text.
-
-### Mixed image, video, and audio
-
-```bash
-training_suite/.venv/bin/python examples/omni_adapter/client.py \
-  --model robit/qwen3.8-omni:latest \
-  chat \
-  --image ./reference.png \
-  --video ./events.mp4 \
-  --audio ./question.wav \
-  --prompt "Relate the recording and reference image to the video timeline."
-```
-
-## JavaScript example
-
-Node.js 18 or newer provides `fetch`:
-
-```bash
-OMNI_MODEL=robit/qwen3.8-omni:latest \
-OMNI_ADAPTER_URL=http://127.0.0.1:11435/api/chat \
-node examples/omni_adapter/javascript_client.mjs ./question.wav ./answer.wav
-```
-
-## Curl example
-
-Create request JSON without putting binary data on the shell command line:
-
-```bash
-python3 - <<'PY' > /tmp/omni-request.json
-import base64
-import json
-from pathlib import Path
-
-audio = base64.b64encode(Path("speech.wav").read_bytes()).decode("ascii")
-print(json.dumps({
-    "model": "robit/qwen3.8-omni:latest",
-    "messages": [{
-        "role": "user",
-        "content": "Transcribe this recording.",
-        "audios": [{
-            "mime_type": "audio/wav",
-            "encoding": "base64",
-            "data": audio,
-        }],
-    }],
-    "omni": {
-        "schema": "robit.ollama.omni-adapter.v1",
-        "task": "transcribe",
-    },
-    "response_modalities": ["text"],
-    "speech_mode": "never",
-    "stream": False,
-}))
-PY
-
-curl -s http://127.0.0.1:11435/api/chat \
-  -H 'content-type: application/json' \
-  --data-binary @/tmp/omni-request.json
-```
-
-The `/tmp` request contains the media and should be deleted when the test is
-complete.
-
-## Validate without component servers
-
-The Fine-Tuning Suite exposes the same parser without running inference:
-
-```bash
-training_suite/.venv/bin/python -m training_suite web --port 7860
-
-curl -s http://127.0.0.1:7860/api/omni/adapter/validate \
-  -H 'content-type: application/json' \
-  --data-binary @/tmp/omni-request.json
-```
-
-The response shows input modalities, normalized media metadata, and the selected
-route but never returns the base64 payload.
-
-## Adapting a component server
-
-If a backend expects another multimodal syntax, change only
-`build_comprehension_payload()` in `server.py`. Keep the public adapter request
-stable. Common translations include:
-
-- `audio_url` to `input_audio`;
-- `video_url` to a server-side uploaded object identifier;
-- video to sampled `image_url` parts plus a separately demuxed `audio_url`;
-- backend-specific frame-rate or `use_audio_in_video` processor options.
-
-The final in-process runner replaces these HTTP translations with direct tensor
-views from the one GGUF, but it must produce the same response shape.
-
-## Limits
-
-- Adapter v1 is turn-based and requires `stream:false`.
-- The example server is for trusted local development; add authentication,
-  request limits, decoder isolation, and production WSGI serving before remote
-  exposure.
-- Base64 increases request size. Production proxies must configure body limits
-  above the chosen decoded-media limits while still enforcing bounded input.
-- The example does not download or convert any model weights.
-- Stock Ollama does not understand `audios`, `videos`, `omni`, or
-  `message.audio`; use the sidecar or the documented custom build.
+Stop the adapter, TTS wrapper, and comprehension worker; verify broker leases
+are released; then delete only the explicit cache path. Do not manually delete
+the installed Ollama blob or manifest. Use `ollama rm` only when intentionally
+uninstalling the model.

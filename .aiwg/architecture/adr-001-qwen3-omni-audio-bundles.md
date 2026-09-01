@@ -65,14 +65,16 @@ of scope.
 
 - Voice-to-voice inference requires an orchestration sidecar today.
 - Cascade mode loses the native Omni Talker's direct hidden-state conditioning.
-- A single Ollama registry tag cannot yet represent the complete audio-output
-  execution graph.
+- Stock Ollama cannot execute the complete audio-output graph by itself. A
+  custom sidecar layer can carry that graph under one registry tag, but an
+  adapter must resolve and schedule its component views.
 
 ## Migration
 
 1. Generate plans with `python -m training_suite omni-plan`.
 2. Validate audio requests through `/api/omni/audio/validate`.
-3. Add llama.cpp audio-understanding and independent TTS process adapters.
+3. Attach the namespaced sidecar described by ADR-002 and add llama.cpp
+   audio-understanding and independent TTS process adapters.
 4. Gate each runtime with transcript, semantic-audio, waveform, tools, thinking,
    and vision tests.
 5. Replace the sidecar only after Ollama exposes native audio input/output and a

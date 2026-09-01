@@ -4,19 +4,33 @@ import argparse
 import json
 from pathlib import Path
 
-from training_suite.core.config import DEFAULT_TARGET_CAPABILITIES, PATHS, PROJECT_ROOT, safe_model_tag, slugify
-from training_suite.core.jobs import JobRunner
+from training_suite.core.config import DEFAULT_TARGET_CAPABILITIES, PATHS
 from training_suite.core.state import StateStore
 from training_suite.evals.runner import capability_gate, omni_audio_smoke, tool_smoke
 from training_suite.models.intake import inspect_intake
+from training_suite.models.ollama import (
+    ModelfileSpec,
+    generate_modelfile,
+    show_model,
+    write_modelfile,
+)
+from training_suite.models.ollama_sidecar import (
+    RUNTIME_VIEWS,
+    attach_ollama_sidecar,
+    prepare_ollama_sidecar,
+    resolve_ollama_sidecar,
+)
 from training_suite.models.omni import (
     QWEN3_OMNI_INSTRUCT,
     load_config_reference,
     plan_omni_bundle,
     write_omni_bundle,
 )
-from training_suite.models.single_gguf import inspect_monolithic_gguf, pack_monolithic_gguf
-from training_suite.models.ollama import ModelfileSpec, generate_modelfile, show_model, write_modelfile
+from training_suite.models.single_gguf import (
+    inspect_monolithic_gguf,
+    materialize_component_view,
+    pack_monolithic_gguf,
+)
 
 
 def cmd_web(args: argparse.Namespace) -> None:
@@ -142,34 +156,46 @@ def cmd_omni_pack(args: argparse.Namespace) -> None:
     out = Path(args.out).expanduser().resolve()
     report = pack_monolithic_gguf(
         base_gguf=Path(args.base_gguf),
+        base_projector_gguf=Path(args.base_projector_gguf) if args.base_projector_gguf else None,
         comprehension_gguf=Path(args.comprehension_gguf),
+        comprehension_projector_gguf=(
+            Path(args.comprehension_projector_gguf)
+            if args.comprehension_projector_gguf
+            else None
+        ),
         tts_gguf=Path(args.tts_gguf),
+        tts_projector_gguf=Path(args.tts_projector_gguf) if args.tts_projector_gguf else None,
         out_gguf=out,
         base_source=args.base_source,
+        base_projector_source=args.base_projector_source,
         comprehension_source=args.comprehension_source,
+        comprehension_projector_source=args.comprehension_projector_source,
         tts_source=args.tts_source,
+        tts_projector_source=args.tts_projector_source,
         overwrite=args.overwrite,
     )
     report_path = out.with_suffix(out.suffix + ".report.json")
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    modelfile = out.with_name("Modelfile")
-    write_modelfile(
-        modelfile,
-        ModelfileSpec(
-            from_ref=f"./{out.name}",
-            renderer=args.renderer,
-            parser=args.parser,
-            requires=args.requires,
-            parameters={
-                "num_ctx": args.num_ctx,
-                "temperature": 0.6,
-                "top_p": 0.95,
-                "top_k": 20,
+    layer_descriptor = out.with_name("ollama-sidecar-layer.json")
+    layer_descriptor.write_text(
+        json.dumps(
+            {
+                "mediaType": "application/vnd.robit.ollama.omni.bundle.v1+gguf",
+                "path": str(out),
+                "size": out.stat().st_size,
+                "note": (
+                    "Attach this sidecar to a stock-runnable Ollama manifest; "
+                    "do not use it as a Modelfile FROM target."
+                ),
             },
-        ),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
     )
     report["report"] = str(report_path)
-    report["modelfile"] = str(modelfile)
+    report["ollama_sidecar_layer"] = str(layer_descriptor)
     print(json.dumps(report, indent=2, sort_keys=True))
 
 
@@ -178,6 +204,44 @@ def cmd_omni_inspect(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2, sort_keys=True))
     if not report["valid"]:
         raise SystemExit(1)
+
+
+def cmd_omni_unpack(args: argparse.Namespace) -> None:
+    report = materialize_component_view(
+        bundle_gguf=Path(args.gguf),
+        view=args.view,
+        out_gguf=Path(args.out),
+        overwrite=args.overwrite,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
+def cmd_omni_attach(args: argparse.Namespace) -> None:
+    report = attach_ollama_sidecar(
+        model=args.model,
+        bundle_gguf=Path(args.gguf),
+        models_dir=Path(args.models_dir) if args.models_dir else None,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
+def cmd_omni_resolve(args: argparse.Namespace) -> None:
+    report = resolve_ollama_sidecar(
+        model=args.model,
+        models_dir=Path(args.models_dir) if args.models_dir else None,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
+def cmd_omni_prepare(args: argparse.Namespace) -> None:
+    report = prepare_ollama_sidecar(
+        model=args.model,
+        output_dir=Path(args.out),
+        views=tuple(args.view) if args.view else RUNTIME_VIEWS,
+        models_dir=Path(args.models_dir) if args.models_dir else None,
+        overwrite=args.overwrite,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -268,19 +332,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     omni_pack = sub.add_parser(
         "omni-pack",
-        help="Pack language, comprehension, and TTS GGUFs into one custom Ollama artifact",
+        help="Pack language, comprehension, and TTS GGUFs into one custom Ollama sidecar",
     )
     omni_pack.add_argument("--base-gguf", required=True, help="Qwen3.8/Ornith Ollama-compatible GGUF")
+    omni_pack.add_argument("--base-projector-gguf", help="Original base vision projector GGUF")
     omni_pack.add_argument(
         "--comprehension-gguf",
         required=True,
         help="Self-contained audio/video understanding GGUF",
     )
+    omni_pack.add_argument(
+        "--comprehension-projector-gguf",
+        help="Audio/vision projector for the comprehension model",
+    )
     omni_pack.add_argument("--tts-gguf", required=True, help="Text-conditioned TTS GGUF")
-    omni_pack.add_argument("--out", required=True, help="Output monolithic .gguf path")
+    omni_pack.add_argument("--tts-projector-gguf", help="TTS codec/waveform projector GGUF")
+    omni_pack.add_argument("--out", required=True, help="Output namespaced sidecar .gguf path")
     omni_pack.add_argument("--base-source", help="Provenance label for the base model")
+    omni_pack.add_argument("--base-projector-source", help="Provenance label for base projector")
     omni_pack.add_argument("--comprehension-source", help="Provenance label for the comprehension model")
+    omni_pack.add_argument(
+        "--comprehension-projector-source",
+        help="Provenance label for the comprehension projector",
+    )
     omni_pack.add_argument("--tts-source", help="Provenance label for the TTS model")
+    omni_pack.add_argument("--tts-projector-source", help="Provenance label for TTS projector")
     omni_pack.add_argument("--renderer", default="qwen3.8")
     omni_pack.add_argument("--parser", default="qwen3.5")
     omni_pack.add_argument("--requires", help="Minimum custom Ollama build version")
@@ -290,10 +366,69 @@ def build_parser() -> argparse.ArgumentParser:
 
     omni_inspect = sub.add_parser(
         "omni-inspect",
-        help="Inspect and validate a monolithic audio/video/TTS GGUF bundle",
+        help="Inspect and validate a namespaced audio/video/TTS GGUF sidecar",
     )
     omni_inspect.add_argument("gguf")
     omni_inspect.set_defaults(func=cmd_omni_inspect)
+
+    omni_unpack = sub.add_parser(
+        "omni-unpack",
+        help="Materialize one executable model/projector view from a sidecar",
+    )
+    omni_unpack.add_argument("gguf")
+    omni_unpack.add_argument(
+        "--view",
+        required=True,
+        choices=[
+            "base",
+            "base_projector",
+            "comprehension_model",
+            "comprehension_projector",
+            "tts_model",
+            "tts_projector",
+        ],
+    )
+    omni_unpack.add_argument("--out", required=True)
+    omni_unpack.add_argument("--overwrite", action="store_true")
+    omni_unpack.set_defaults(func=cmd_omni_unpack)
+
+    omni_attach = sub.add_parser(
+        "omni-attach",
+        help="Attach an Omni GGUF sidecar layer to an existing runnable Ollama tag",
+    )
+    omni_attach.add_argument("model", help="Existing local Ollama tag")
+    omni_attach.add_argument("gguf", help="Validated namespaced Omni GGUF")
+    omni_attach.add_argument("--models-dir", help="Override the Ollama model store")
+    omni_attach.set_defaults(func=cmd_omni_attach)
+
+    omni_resolve = sub.add_parser(
+        "omni-resolve",
+        help="Resolve and inspect the Omni sidecar attached to a local Ollama tag",
+    )
+    omni_resolve.add_argument("model")
+    omni_resolve.add_argument("--models-dir", help="Override the Ollama model store")
+    omni_resolve.set_defaults(func=cmd_omni_resolve)
+
+    omni_prepare = sub.add_parser(
+        "omni-prepare",
+        help="Materialize disposable media-runtime views from an installed Omni tag",
+    )
+    omni_prepare.add_argument("model")
+    omni_prepare.add_argument("--out", required=True, help="Disposable component cache directory")
+    omni_prepare.add_argument(
+        "--view",
+        action="append",
+        choices=[
+            "comprehension_model",
+            "comprehension_projector",
+            "tts_model",
+            "tts_projector",
+        ],
+        help="Runtime view to materialize; repeat to select a subset",
+    )
+    omni_prepare.add_argument("--models-dir", help="Override the Ollama model store")
+    omni_prepare.add_argument("--overwrite", action="store_true")
+    omni_prepare.set_defaults(func=cmd_omni_prepare)
 
     audio_smoke = sub.add_parser(
         "omni-audio-smoke",

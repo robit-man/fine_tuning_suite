@@ -1,133 +1,126 @@
-# Ollama Model Page Template: Qwen3.8 27B E03 Obliterated Omni
+# Model Card Template: Qwen3.8 27B E03 Obliterated Omni
 
-> Release template. Replace every `<...>` value from the verified release
-> report. Do not publish the capability list until all gates in
-> [testing.md](testing.md) pass against the pushed tag.
+Replace bracketed release-state values only after their verification gates
+pass. Never describe the sidecar GGUF as a directly loadable stock model.
 
-# Qwen3.8-27B-E03-Obliterated-Omni (`<quantization>`)
+# Qwen3.8-27B-E03-Obliterated-Omni (Q4_K_M)
 
-Qwen3.8-27B-E03-Obliterated combined with independently executable
-audio/image/video comprehension and text-to-speech graphs in one physical GGUF.
-The base language model retains thinking and structured tool behavior. Media is
-handled through the versioned Robit Omni adapter.
+One logical Ollama model combining Qwen3.8 text reasoning, thinking, structured
+tools, and native image vision with Qwen3-Omni audio/video comprehension and
+Qwen3-TTS speech output.
 
-## Runtime requirement
+## Important runtime boundary
 
-This model uses `robit.ollama.omni-adapter.v1` and requires the custom Ollama
-runtime build `<runtime-version>` at commit `<runtime-commit>`. Unmodified
-Ollama may import or execute only the base language view and does not understand
-the added audio/video/TTS request fields.
+The Ollama tag contains normal stock model/projector layers plus one custom
+namespaced GGUF sidecar layer. Unmodified Ollama executes text, image vision,
+thinking, and tools. Audio input, video input, and TTS require the Robit Omni
+Adapter, which resolves and executes component views from the same installed
+tag.
 
-- Adapter documentation:
-  https://github.com/robit-man/fine_tuning_suite/tree/main/docs/omni-adapter
-- Python, JavaScript, and server examples:
-  https://github.com/robit-man/fine_tuning_suite/tree/main/examples/omni_adapter
-- Request schema:
-  https://github.com/robit-man/fine_tuning_suite/blob/main/docs/omni-adapter/schema/request-v1.schema.json
+The Hugging Face GGUF is the custom sidecar payload, not a standalone
+single-architecture model for `ollama create FROM`.
 
-## Verified capabilities
-
-Publish only the rows that passed the release report `<report-url>`.
-
-| Capability | Result | Test fixture/report |
-|---|---|---|
-| Text completion | `<PASS>` | `<link>` |
-| Thinking | `<PASS>` | `<link>` |
-| Structured tool calls | `<PASS>` | `<link>` |
-| Image comprehension | `<PASS>` | `<link>` |
-| ASR/audio comprehension | `<PASS>` | `<link>` |
-| Video comprehension | `<PASS>` | `<link>` |
-| Direct TTS | `<PASS>` | `<link>` |
-| Audio → reasoning → TTS | `<PASS>` | `<link>` |
-
-Video generation is not included.
+- Adapter docs: <https://github.com/robit-man/fine_tuning_suite/tree/main/docs/omni-adapter>
+- Examples: <https://github.com/robit-man/fine_tuning_suite/tree/main/examples/omni_adapter>
+- Request schema: <https://github.com/robit-man/fine_tuning_suite/blob/main/docs/omni-adapter/schema/request-v1.schema.json>
 
 ## Pull
 
 ```bash
-ollama pull robit/qwen3.8-27b-e03-obliterated-omni:<tag>
+ollama pull robit/qwen3.8-27b-e03-obliterated-omni:q4km
 ```
 
-## Text, thinking, and tools
+## Capability matrix
 
-Use Ollama's normal `/api/chat` fields. Set `think:true` (or a supported effort)
-and provide normal Ollama `tools`. Media additions are optional, so text-only
-clients retain the standard request shape.
+| Capability | Executor | Result/report |
+|---|---|---|
+| Text completion | stock Ollama Qwen3.8 | `[PASS]` |
+| Thinking | stock Ollama Qwen3.8 | `[PASS]` |
+| Structured tools | stock Ollama Qwen3.8 | `[PASS]` |
+| Image understanding | stock Ollama projector | `[PASS]` |
+| Audio/ASR | adapter + Qwen3-Omni sidecar | `[PASS]` |
+| Video understanding | adapter + Qwen3-Omni sidecar | `[PASS]` |
+| TTS | adapter + Qwen3-TTS sidecar | `[PASS]` |
 
-## ASR
+Video generation and streaming audio are not included.
+
+## Prepare adapter views
 
 ```bash
+python -m training_suite omni-resolve \
+  robit/qwen3.8-27b-e03-obliterated-omni:q4km
+python -m training_suite omni-prepare \
+  robit/qwen3.8-27b-e03-obliterated-omni:q4km \
+  --out ./runtime-cache
+```
+
+Follow the linked runtime guide to start the pinned llama.cpp comprehension and
+TTS workers plus the unified adapter endpoint.
+
+## Examples
+
+```bash
+# ASR
 python examples/omni_adapter/client.py \
-  --model robit/qwen3.8-27b-e03-obliterated-omni:<tag> \
+  --model robit/qwen3.8-27b-e03-obliterated-omni:q4km \
   asr ./speech-16khz-mono.wav
-```
 
-## Video comprehension
-
-```bash
+# Video plus its audio track
 python examples/omni_adapter/client.py \
-  --model robit/qwen3.8-27b-e03-obliterated-omni:<tag> \
+  --model robit/qwen3.8-27b-e03-obliterated-omni:q4km \
   video ./events.mp4 --fps 2 --max-frames 96 --include-audio
-```
 
-## Direct TTS
-
-```bash
+# Direct TTS
 python examples/omni_adapter/client.py \
-  --model robit/qwen3.8-27b-e03-obliterated-omni:<tag> \
+  --model robit/qwen3.8-27b-e03-obliterated-omni:q4km \
   --output-audio ./speech.wav \
   tts "Read this sentence."
 ```
 
-## Combined audio-in/audio-out chat
-
-```bash
-python examples/omni_adapter/client.py \
-  --model robit/qwen3.8-27b-e03-obliterated-omni:<tag> \
-  --output-audio ./answer.wav \
-  chat --audio ./question.wav --speak \
-  --prompt "Answer the recorded question."
-```
-
-Adapter v1 accepts 16 kHz mono PCM16 WAV audio, JPEG/PNG/WebP images, and bounded
-MP4/WebM video. Speech output is base64 24 kHz mono PCM16 WAV under
-`message.audio`. It is a turn-based API and requires `stream:false`.
+Adapter v1 accepts 16 kHz mono PCM16 WAV, JPEG/PNG/WebP, and bounded
+MP4/WebM. Output audio is tagged base64 RIFF/WAVE, PCM16, mono, 24 kHz under
+`message.audio`. Adapter v1 is turn-based and requires `stream:false`.
 
 ## Artifact layout
 
-One GGUF contains:
+The sidecar uses schema `robit.ollama-monolithic-omni.v3`:
 
-- unprefixed Qwen3.8 language tensors;
-- `a.c.*` comprehension tensors;
-- `s.t.*` text-conditioned speech tensors.
+- unprefixed: base model;
+- `b.p.*`: base projector;
+- `a.c.m.*` / `a.c.p.*`: comprehension model/projector;
+- `s.t.m.*` / `s.t.p.*`: TTS model/codec projector.
 
-This is a multi-graph runtime with a semantic-text bridge, not an unsupported
-hidden-state tensor splice.
+This is a multi-graph semantic router, not a hidden-state tensor graft.
 
 ## Provenance
 
-| Component | Source and immutable revision | Quantization | SHA-256 |
+| Component | Source/revision | Quantization | SHA-256 |
 |---|---|---|---|
-| Language | `manitcor/Qwen3.8-27B-Obliterated-E03@<revision>` | `<type>` | `<digest>` |
-| Comprehension | `<repo@revision>` | `<type>` | `<digest>` |
-| TTS | `<repo@revision>` | `<type>` | `<digest>` |
-| Combined GGUF | `<release>` | mixed/component-specific | `<digest>` |
+| Base | `[repo@revision]` | Q4_K_M | `[digest]` |
+| Base projector | `[source]` | `[type]` | `[digest]` |
+| Comprehension | `[repo@revision:file]` | Q4_K_M | `[digest]` |
+| Comprehension projector | `[repo@revision:file]` | Q8_0 | `[digest]` |
+| TTS | `[repo@revision:file]` | Q4_K_M | `[digest]` |
+| TTS projector | `[repo@revision:file]` | Q8_0 | `[digest]` |
+| Sidecar GGUF | `[filename]` | mixed | `[digest]` |
 
-## Limitations and safety
+## Limitations
 
-- Requires the custom runtime version above.
-- Media observations are treated as untrusted evidence before language/tool
-  routing.
-- TTS is deferred when the assistant returns unresolved tool calls.
-- Accuracy, latency, VRAM, context, languages, voices, and maximum media duration
-  are exactly those measured in `<release-report>`; do not infer upstream model
-  claims that were not retested after conversion and quantization.
-- Review all component licenses and terms before redistribution or commercial
-  use.
+- Media routes require the adapter; stock Ollama silently ignores the custom
+  layer and does not parse `audios`, `videos`, or `message.audio`.
+- Comprehension crosses into Qwen3.8 as untrusted semantic text, so dense
+  cross-modal information is not preserved.
+- The reference TTS wrapper is serial and reloads `llama-tts`; production
+  deployments should use a persistent worker.
+- Current video-audio handling demuxes the audio track separately and does not
+  promise sample-accurate alignment.
+- Only capabilities demonstrated by the linked release record are claimed.
+- Review all component licenses and usage terms before redistribution or
+  commercial use.
 
-## Build and test
+## Reproducibility
 
 Built with [Fine-Tuning Suite](https://github.com/robit-man/fine_tuning_suite).
-The reproducible commands, runtime patch requirements, test matrix, and cleanup
-procedure are in the
-[build/release runbook](https://github.com/robit-man/fine_tuning_suite/blob/main/docs/omni-adapter/build-and-release.md).
+See the [build and release runbook](https://github.com/robit-man/fine_tuning_suite/blob/main/docs/omni-adapter/build-and-release.md)
+and `[release-record-url]` for exact revisions, hashes, validation results, and
+cleanup evidence.

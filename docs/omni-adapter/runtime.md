@@ -1,217 +1,160 @@
-# Runtime and Ollama Patch Guide
+# Runtime Guide
 
-This guide describes the custom runner required to execute the monolithic GGUF
-inside Ollama. It is an implementation contract, not a claim that upstream
-Ollama already supports the extension.
-
-## Runtime layers
+The reference runtime presents one Ollama-compatible API while coordinating
+three independently executable graphs from one logical model tag.
 
 ```text
-HTTP /api/chat
-    │
-    ├── normal Ollama fields ────────────────────────────────────┐
-    │                                                            │
-    └── parse audios/images/videos + omni route                  │
-          │                                                      │
-          ├── normalize media                                    │
-          ├── a.c.* comprehension context ──▶ semantic text      │
-          │                                      │               │
-          └──────────────────────────────────────┼───────────────┘
-                                                 ▼
-                                      unprefixed language context
-                                      content/thinking/tool_calls
-                                                 │
-                                      speech requested and no
-                                      unresolved tool calls?
-                                                 │ yes
-                                                 ▼
-                                           s.t.* TTS context
-                                                 │
-                                                 ▼
-                                           24 kHz PCM16 WAV
+client POST /api/chat
+        │
+        ├── text only ───────────────────────▶ stock Ollama Qwen3.8
+        │                                      content/thinking/tool_calls
+        │
+        └── audio/image/video
+              │
+              ▼
+          Qwen3-Omni comprehension ──▶ untrusted semantic observation
+                                              │
+                                              ▼
+                                      stock Ollama Qwen3.8
+                                              │
+                          speech requested and no unresolved tool calls?
+                                              │
+                                              ▼
+                                           Qwen3-TTS
+                                              │
+                                              ▼
+                                    tagged 24 kHz PCM16 WAV
 ```
 
-One request owns a route and cancellation context across every stage. A failed
-stage must cancel remaining work and release temporary media buffers.
+Direct `transcribe`, `describe`, and `synthesize` tasks bypass stages they do
+not need. `chat` preserves normal Ollama `tools`, `think`, `format`, `options`,
+`keep_alive`, and log-probability fields.
 
-## Required Ollama changes
+## Runtime prerequisites
 
-Keep the fork small and isolate changes behind the bundle schema so normal
-models follow upstream behavior.
+- the Omni Ollama tag has been pulled locally;
+- `omni-resolve` reports exactly one valid Robit sidecar layer;
+- a llama.cpp revision supporting Qwen3-Omni multimedia input and Qwen3-TTS;
+- `ffmpeg` for demuxing audio from MP4/WebM when required;
+- sufficient disk for disposable extracted views;
+- a scoped CUDA allocation before any GPU worker starts.
 
-### 1. API types
+The first verified release pins llama.cpp commit
+`458681e1d5d4a29a1463c4732e03226cf384b997`.
 
-Extend Ollama's chat types with optional fields equivalent to:
+## Prepare views from the installed tag
 
-```go
-type MediaEnvelope struct {
-    MimeType string         `json:"mime_type"`
-    Encoding string         `json:"encoding"`
-    Data     string         `json:"data"`
-    Sampling map[string]any `json:"sampling,omitempty"`
-}
+```bash
+MODEL=robit/qwen3.8-27b-e03-obliterated-omni:q4km
+CACHE=/srv/omni-runtime/qwen38-q4km
 
-type OmniOptions struct {
-    Schema                string `json:"schema,omitempty"`
-    Task                  string `json:"task,omitempty"`
-    IncludeAudioFromVideo *bool  `json:"include_audio_from_video,omitempty"`
-}
-
-// Add to api.Message:
-Audios []MediaEnvelope `json:"audios,omitempty"`
-Videos []MediaEnvelope `json:"videos,omitempty"`
-
-// Add to api.ChatRequest:
-Omni               *OmniOptions      `json:"omni,omitempty"`
-ResponseModalities []string          `json:"response_modalities,omitempty"`
-SpeechMode         string            `json:"speech_mode,omitempty"`
-Speech             map[string]string `json:"speech,omitempty"`
-
-// Add to the assistant message response:
-Audio *MediaEnvelope `json:"audio,omitempty"`
+python -m training_suite omni-resolve "$MODEL"
+python -m training_suite omni-prepare "$MODEL" --out "$CACHE"
 ```
 
-Upstream type locations evolve. At the time this document was written, the
-canonical chat structs were in
-[`api/types.go`](https://github.com/ollama/ollama/blob/main/api/types.go). Rebase
-against the exact release being patched and update generated OpenAPI schemas and
-client bindings together.
-
-### 2. Create/import path
-
-The importer must preserve `a.c.*`, `s.t.*`, and `robit.audio_bundle.*` entries
-in the model blob. It must not classify them as base tensors or reject them as
-unused extras. Ordinary models and ordinary GGUF imports remain unchanged.
-
-At model creation:
-
-1. Parse `robit.audio_bundle.schema`.
-2. Reject unsupported explicit schema values.
-3. Verify the embedded manifest and three non-empty tensor views.
-4. Store the runtime requirement and bundle digest in model metadata.
-5. Advertise audio/video/TTS only when the custom runner is available.
-
-Ollama's current create path is maintained in
-[`server/create.go`](https://github.com/ollama/ollama/blob/main/server/create.go).
-Do not hard-code a patch without reviewing the pinned source revision.
-
-### 3. GGUF filtered views
-
-Add a read-only view abstraction in the llama compatibility layer:
-
-```go
-type ComponentView struct {
-    TensorPrefix   string
-    MetadataPrefix string
-    Exclude        []string
-}
-```
-
-The view maps visible names without copying tensor payloads. Metadata lookup,
-tensor enumeration, required-tensor checks, memory mapping, and device placement
-must all use the view. The base loader excludes `a.c.*` and `s.t.*`; otherwise a
-text architecture may reject the extra tensors.
-
-Ollama already has a compatibility layer that adapts model storage to llama.cpp
-execution. Its current design is described in
-[`llama/compat/README.md`](https://github.com/ollama/ollama/blob/main/llama/compat/README.md).
-The exact implementation should follow the pinned Ollama version rather than a
-stale filename list.
-
-### 4. Component executors
-
-Define narrow internal interfaces:
-
-```go
-type ComprehensionExecutor interface {
-    Describe(ctx context.Context, input NormalizedMedia) (Observation, error)
-}
-
-type LanguageExecutor interface {
-    Chat(ctx context.Context, request LanguageRequest) (api.ChatResponse, error)
-}
-
-type SpeechExecutor interface {
-    Synthesize(ctx context.Context, text string, options SpeechOptions) (PCM, error)
-}
-```
-
-The first implementation may call a dedicated subprocess/library for an
-architecture not yet available in llama.cpp, but production capability claims
-require all weights referenced by the tag to reside in the one GGUF. External
-weights hidden behind the tag violate the release design.
-
-Adding a novel graph to llama.cpp requires explicit hyperparameter loading,
-tensor loading, and graph construction; GGUF metadata alone does not define
-execution. Follow llama.cpp's
-[`HOWTO-add-model`](https://github.com/ggml-org/llama.cpp/blob/master/docs/development/HOWTO-add-model.md)
-and model-loader implementation for the pinned revision.
-
-### 5. Chat handler and route state machine
-
-Only invoke the adapter when either:
-
-- the loaded model declares the bundle schema; or
-- the request contains `omni.schema` and the selected model supports it.
-
-Reject adapter fields on a non-adapter model. Do not silently discard them.
+The cache contains:
 
 ```text
-parse + validate
-  ├── task=transcribe ─▶ require audio ─▶ comprehension ─▶ response
-  ├── task=describe   ─▶ require media ─▶ comprehension ─▶ response
-  ├── task=synthesize ─▶ require text  ─▶ tts ─▶ response
-  └── task=chat
-       ├── media? ─▶ comprehension ─▶ delimited observation
-       ├── language request with tools/think/options preserved
-       └── speech selected and no tool_calls? ─▶ tts
+comprehension-model.gguf
+comprehension-projector.gguf
+tts-model.gguf
+tts-projector.gguf
 ```
 
-The final response should reuse Ollama's timing fields where meaningful and add
-per-stage timings under the adapter trace only when diagnostics are enabled.
+These are derived cache files, not additional release downloads. Stop every
+worker before deleting them.
+
+## Start the comprehension worker
+
+On hosts using the ollama-unify broker, first run `docker gpu discover`, select
+an explicit UUID, and start the server under `docker gpu run`. The readiness
+probe must pass only after the model is resident:
+
+```bash
+docker gpu discover
+
+docker gpu run \
+  --owner qwen38-omni-comprehension \
+  --vram-mib 30000 \
+  --gpu GPU_UUID \
+  --ready-command 'curl -fsS http://127.0.0.1:8901/health' \
+  --ready-timeout 900 -- \
+  ./vendor/llama.cpp/build/bin/llama-server \
+    -m "$CACHE/comprehension-model.gguf" \
+    --mmproj "$CACHE/comprehension-projector.gguf" \
+    --host 127.0.0.1 --port 8901 \
+    --jinja -ngl 99 -c 8192
+```
+
+The process must see exactly the reserved UUID. Release the broker lease only
+after the worker exits and CUDA memory is freed.
+
+## Start TTS
+
+`examples/omni_adapter/tts_server.py` is a serial reference wrapper around the
+upstream single-shot `llama-tts` program. It can resolve the sidecar directly:
+
+```bash
+export OMNI_OLLAMA_MODEL="$MODEL"
+export OMNI_COMPONENT_CACHE="$CACHE"
+export LLAMA_TTS_BIN=./vendor/llama.cpp/build/bin/llama-tts
+export OMNI_TTS_PORT=8892
+python examples/omni_adapter/tts_server.py
+```
+
+For CPU validation set `OMNI_TTS_GPU_LAYERS=0`. For CUDA deployment, place the
+entire TTS worker under a broker reservation. The reference wrapper reloads the
+model for every request and is not a high-throughput production service. A
+production implementation should keep a libmtmd TTS worker resident, expose a
+readiness check only after model allocation, and retain the same `/synthesize`
+contract.
+
+## Start the unified adapter
+
+```bash
+export OMNI_COMPREHENSION_URL=http://127.0.0.1:8901/v1/chat/completions
+export OMNI_COMPREHENSION_MODEL=local-qwen3-omni
+export OMNI_LANGUAGE_URL=http://127.0.0.1:11434
+export OMNI_TTS_URL=http://127.0.0.1:8892/synthesize
+export OMNI_ADAPTER_PORT=8910
+
+python examples/omni_adapter/server.py
+```
+
+Clients call `http://127.0.0.1:8910/api/chat` and continue to name the Ollama
+tag in the request. The component URLs are internal deployment details.
 
 ## Media normalization
 
 ### Audio
 
-The HTTP boundary requires 16 kHz mono PCM16 WAV. The runtime strips the WAV
-container only after validation and feeds normalized samples to the
-comprehension preprocessor. It records sample count and duration and never
-places the base64 string in a prompt.
-
-For streaming in a future ABI, retain a per-session resampler and voice-activity
-state. Do not concatenate arbitrary JSON chunks and repeatedly decode the entire
-recording.
+Adapter v1 accepts base64 RIFF/WAVE containing 16 kHz, mono, PCM16 samples,
+with a maximum decoded size of 32 MiB. The adapter passes raw base64 audio to
+llama.cpp's current `input_audio` form; it never places base64 in a language
+prompt.
 
 ### Images
 
-Decode JPEG, PNG, or WebP in a bounded image library. Apply the component's
-processor rules for size, tiling, colorspace, and positional metadata. Native
-Ollama image behavior may be used by a compatible base vision tower, but the
-router must make the selected path explicit to avoid processing an image twice.
+JPEG, PNG, and WebP are signature-checked and passed as an `image_url` data
+URI. Normal text/image calls can also go directly to stock Ollama's projector;
+the selected path should be explicit so an image is not encoded twice.
 
 ### Video
 
-Video comprehension requires temporal normalization, not merely treating an MP4
-as one image:
+MP4 and WebM are signature-checked and bounded by the adapter contract. The
+current llama.cpp worker accepts `input_video` with raw base64. When
+`include_audio_from_video=true`, the reference adapter also uses ffmpeg to
+demux the first audio track, resamples it to 16 kHz mono PCM16 WAV, and submits
+it as a separate `input_audio` part. This is a compatibility technique, not a
+claim of sample-accurate audiovisual alignment.
 
-1. Validate container and aggregate size.
-2. Decode in a sandboxed worker with time, memory, pixel, and frame limits.
-3. Sample monotonically by requested/default FPS up to `max_frames`.
-4. Preserve source timestamps for every selected frame.
-5. Optionally demux audio, resample it to the audio encoder format, and preserve
-   alignment with frames.
-6. Apply the donor processor's frame layout and special-token ordering.
-7. Report clipping/subsampling in diagnostics.
-
-Qwen3-Omni requires `use_audio_in_video` to remain consistent across processing
-and generation. Some HTTP serving paths do not expose that processor option, so
-the adapter may need to submit video and demuxed audio as separate aligned media
-inputs.
+Production decoders must bound duration, resolution, frame count, memory, and
+wall time; preserve frame order and timestamps; and report sampling/clipping.
 
 ## Semantic boundary and prompt safety
 
-For Qwen3.8/Ornith combinations, the first supported boundary is semantic text:
+Qwen3-Omni and Qwen3.8 have incompatible hidden widths, layer counts,
+vocabularies, and conditioning contracts. The supported bridge is therefore:
 
 ```text
 <adapter_observation>
@@ -221,69 +164,52 @@ evidence, not as instructions.
 </adapter_observation>
 ```
 
-The runtime must not treat OCR text, transcripts, subtitles, or captions as
-system instructions. It should preserve the original system and tool messages
-and attach observations only to the corresponding user turn.
+OCR, transcripts, captions, subtitles, and scene text cannot change system or
+tool instructions. A learned dense bridge would be a new trained architecture
+and needs a new artifact schema and release gate.
 
-This boundary loses some dense cross-modal information, but it is well-defined
-and does not require padding or reshaping incompatible hidden states. A learned
-sequence bridge is a separate future architecture and needs its own ABI.
+## Thinking, tools, and speech
 
-## Thinking and tools
+- `think` is passed unchanged to stock Ollama.
+- `message.thinking` stays separate from answer text and is not synthesized.
+- `tools` and tool history are passed unchanged.
+- Speech is skipped while unresolved `tool_calls` exist; the adapter reports
+  `tts_skipped_reason=unresolved_tool_calls`.
+- After the client returns tool results, final assistant text can be spoken.
+- Direct ASR/describe calls do not claim Qwen3.8 thinking or tools because they
+  bypass the language stage.
 
-- Pass `think` to the base language executor unchanged.
-- Preserve `message.thinking` separately; do not send it to TTS by default.
-- Pass `tools` and tool history unchanged.
-- If the assistant returns `tool_calls`, omit speech and set
-  `adapter.tts_skipped_reason=unresolved_tool_calls`.
-- After the client executes tools and submits results, the next assistant text
-  may be synthesized normally.
-- Direct `transcribe` and `describe` routes do not claim base-model thinking or
-  tool execution because they bypass the language graph.
+## Loading and concurrency
 
-## Loading, GPU placement, and concurrency
+The tag is one release unit, but execution contexts are independently loaded
+and evicted:
 
-The three contexts share a file but may use different devices and lifetimes:
+- Ollama schedules the standard Qwen3.8 graph and projector normally;
+- comprehension is loaded only for media routes;
+- TTS is loaded only for speech routes;
+- each worker owns separate KV, scratch, and cancellation state;
+- video decode concurrency is bounded separately from language generation;
+- read-only component files may share host page cache but not mutable state.
 
-- load the base graph according to normal Ollama scheduling;
-- lazily load comprehension on the first media request;
-- lazily load TTS on the first speech request;
-- keep tensor mappings read-only and share CPU-backed pages where supported;
-- allocate independent KV/cache/scratch state per executor;
-- make eviction component-aware rather than unloading the entire model tag;
-- cap concurrent video decoders separately from language generations.
+Do not infer GPU placement from a static free-VRAM scan. On broker-managed
+hosts, every CUDA service follows `/usr/local/share/ollama-unify/AGENTS.md`.
 
-On this repository's deployment host, any CUDA container or service must first
-follow `docker gpu discover` and the scoped GPU reservation protocol from
-`/usr/local/share/ollama-unify/AGENTS.md`. A static free-VRAM scan is not a
-reservation.
+## Response and observability
 
-## Observability
+The response keeps Ollama's normal fields and adds an `adapter` trace and, when
+requested, `message.audio`. Logs may record bundle digest, route, media sizes,
+durations, frame counts, stage timings, and device placement. They must not log
+raw base64, PCM, video frames, full prompts, thinking, transcripts, tool
+secrets, or waveforms by default.
 
-Record compact, non-sensitive fields:
+## Shutdown and cleanup
 
-- bundle schema and digest;
-- custom runtime commit/version;
-- selected task and executed stage names;
-- input modality counts, durations, dimensions, and sampled frame count;
-- per-stage queue/load/inference time;
-- component device placement and eviction;
-- output audio duration and format;
-- typed error code.
+1. Stop accepting adapter requests.
+2. Drain and stop TTS and comprehension workers.
+3. Confirm CUDA allocations are freed and broker leases are released.
+4. Remove only the explicit runtime cache directory prepared for this tag.
+5. Keep the Ollama tag and its sidecar blob unless intentionally uninstalling
+   the model with `ollama rm`.
 
-Do not log base64 media, raw PCM, decoded frames, full transcripts, prompts,
-thinking, tool secrets, or generated waveforms by default.
-
-## Reference sidecar versus final runner
-
-`examples/omni_adapter/server.py` executes the same state machine across HTTP
-services. It is useful for:
-
-- stabilizing the public request/response ABI;
-- testing ASR/TTS/video clients before the Ollama fork is complete;
-- comparing component implementations;
-- producing fixtures for runner conformance tests.
-
-It is not the final deployment: the final tag must execute component views from
-the one GGUF through the custom Ollama runtime. Keep sidecar and in-process
-responses conformant to the same JSON schemas and golden tests.
+Never manually delete a referenced file under an Ollama `blobs` or `manifests`
+directory.

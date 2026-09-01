@@ -12,7 +12,6 @@ from training_suite.models.gguf import compatible_for_splice, inspect_gguf
 from training_suite.models.ollama import capability_delta, show_model
 from training_suite.models.omni import architecture_signature
 
-
 HF_MODEL_RE = re.compile(r"huggingface\.co/([^/\s]+/[^/\s?#]+)")
 
 
@@ -151,11 +150,11 @@ def build_repair_plan(
             actions.append("provide matching raw multimodal weights before vision splice")
     if "audio-input" in delta["missing"]:
         actions.append(
-            "pack a self-contained Qwen3-Omni/Qwen3-ASR comprehension GGUF under a.c.* or train a compatible bridge"
+            "attach a self-contained Qwen3-Omni/Qwen3-ASR model/projector under a.c.m.*/a.c.p.* or train a compatible bridge"
         )
     if "audio-output" in delta["missing"]:
         actions.append(
-            "pack an independently text-conditioned TTS GGUF under s.t.* and return tagged base64 PCM WAV"
+            "attach independently text-conditioned TTS model/projector views under s.t.m.*/s.t.p.* and return tagged base64 PCM WAV"
         )
     if "video-input" in delta["missing"]:
         actions.append("preserve the Omni vision/video projector and frame-interleave contract")
@@ -255,7 +254,7 @@ def inspect_intake(
             metadata["hf_gguf"] = gguf
             if gguf.get("total"):
                 tensor_count = tensor_count or None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - optional remote/reader backends vary
             metadata["hf_error"] = f"{type(exc).__name__}: {exc}"
 
     if raw_source:
@@ -264,7 +263,7 @@ def inspect_intake(
             try:
                 raw_config = hf_raw_json(raw_repo, "config.json")
                 metadata["raw_config_signature"] = _config_signature(raw_config)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - optional remote backends vary
                 metadata["raw_error"] = f"{type(exc).__name__}: {exc}"
 
     if gguf_path:

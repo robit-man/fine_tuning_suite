@@ -1,0 +1,79 @@
+{
+  "artifact_sha256": "3270f146bae9499b2e40ad230cceeccfc9caa018740c75cfc1856c1abda6ff78",
+  "artifact_schema": "robit.ollama-monolithic-omni.v3",
+  "gates": [
+    {
+      "assertion": "Six views, 3,313 tensors, no schema errors",
+      "name": "sidecar_inspection",
+      "status": "pass"
+    },
+    {
+      "assertion": "All five materialized non-base files matched their pinned source SHA-256 values",
+      "name": "materialized_digest_round_trip",
+      "status": "pass"
+    },
+    {
+      "assertion": "Exact OMNI BASE OK sentinel",
+      "name": "stock_text",
+      "status": "pass"
+    },
+    {
+      "assertion": "Non-empty parsed thinking field",
+      "name": "stock_thinking",
+      "status": "pass"
+    },
+    {
+      "assertion": "get_weather tool call with location=Seattle",
+      "name": "stock_structured_tool",
+      "status": "pass"
+    },
+    {
+      "assertion": "Fixture read as BLUE 42",
+      "name": "stock_image_vision",
+      "status": "pass"
+    },
+    {
+      "assertion": "Exact transcription: The verification phrase is copper lighthouse seven.",
+      "name": "qwen3_omni_asr",
+      "status": "pass"
+    },
+    {
+      "assertion": "Blue triangle and number 42 reached the Qwen3.8 language stage",
+      "name": "image_to_language_routing",
+      "status": "pass"
+    },
+    {
+      "assertion": "Red-to-blue temporal order plus exact spoken phrase",
+      "name": "qwen3_omni_video_and_audio",
+      "status": "pass"
+    },
+    {
+      "assertion": "24 kHz mono PCM16 WAV, 3.28 seconds",
+      "name": "qwen3_tts_direct",
+      "status": "pass"
+    },
+    {
+      "assertion": "Tagged base64 24 kHz mono PCM16 WAV",
+      "name": "adapter_tts",
+      "status": "pass"
+    },
+    {
+      "assertion": "Second valid 24 kHz mono PCM16 WAV, 3.60 seconds",
+      "name": "adapter_tts_repeat",
+      "status": "pass"
+    },
+    {
+      "assertion": "42 tests passed; compileall and changed-file Ruff gate passed",
+      "name": "repository_tests",
+      "status": "pass"
+    },
+    {
+      "assertion": "All temporary workers stopped and broker reported no active leases",
+      "name": "cuda_release",
+      "status": "pass"
+    }
+  ],
+  "model": "robit/qwen3.8-27b-e03-obliterated-omni:q4km",
+  "schema": "robit.ollama.omni-validation.v1",
+  "wire_schema": "robit.ollama.omni-adapter.v1"
+}

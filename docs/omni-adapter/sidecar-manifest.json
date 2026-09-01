@@ -1,0 +1,70 @@
+{
+  "artifact": {
+    "filename": "qwen3.8-27b-e03-obliterated-omni-q4km.gguf",
+    "format": "robit-namespaced-multigraph-gguf-v1",
+    "media_type": "application/vnd.robit.ollama.omni.bundle.v1+gguf",
+    "schema": "robit.ollama-monolithic-omni.v3",
+    "sha256": "3270f146bae9499b2e40ad230cceeccfc9caa018740c75cfc1856c1abda6ff78",
+    "size_bytes": 38843038144,
+    "tensor_count": 3313
+  },
+  "components": {
+    "base": {
+      "architecture": "qwen35",
+      "sha256": "91804f5668d8e5deef47cced0e4ecff9d30da6e965418307d92f3a2822be4248",
+      "size_bytes": 16547400480,
+      "source": "manitcor/Qwen3.8-27B-Obliterated-E03@6104397d699fed901e2d4521c3b0fefc9f837d90",
+      "tensor_count": 851,
+      "tensor_prefix": ""
+    },
+    "base_projector": {
+      "architecture": "clip",
+      "sha256": "ac3714bfdddeca31351f2752bf1a63f266f4df87c0b68c895e44945ca704448e",
+      "size_bytes": 931146016,
+      "source": "robit/qwen3.8-27b-obliterated-e03:27b@sha256-ac3714bfdddeca31351f2752bf1a63f266f4df87c0b68c895e44945ca704448e",
+      "tensor_count": 334,
+      "tensor_prefix": "b.p."
+    },
+    "comprehension_model": {
+      "architecture": "qwen3vlmoe",
+      "sha256": "d9e2876556e7873e02c0359f832432ee2d67ab7dd0cee3efe0f77fd7a1f4dd85",
+      "size_bytes": 18557053952,
+      "source": "ggml-org/Qwen3-Omni-30B-A3B-Instruct-GGUF@6e35a28f4a19b18730f8949b0c579c6429649ab8:q4_k_m",
+      "tensor_count": 579,
+      "tensor_prefix": "a.c.m."
+    },
+    "comprehension_projector": {
+      "architecture": "clip",
+      "sha256": "1104376db833f1e89c84834144ac3863340c2cd1ddaeddb39cb0247fb5c20c8d",
+      "size_bytes": 1325020128,
+      "source": "ggml-org/Qwen3-Omni-30B-A3B-Instruct-GGUF@6e35a28f4a19b18730f8949b0c579c6429649ab8:mmproj-q8_0",
+      "tensor_count": 860,
+      "tensor_prefix": "a.c.p."
+    },
+    "tts_model": {
+      "architecture": "qwen3tts",
+      "sha256": "8d18c94acb2addd042f97da63c98be144eafa76d0d9495177eab65130cf85129",
+      "size_bytes": 1035965280,
+      "source": "ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF@ca27d74bc954b73dadab5b71ca265d87fc861a7c:q4_k_m",
+      "tensor_count": 311,
+      "tensor_prefix": "s.t.m."
+    },
+    "tts_projector": {
+      "architecture": "clip",
+      "sha256": "6fd65188839bcd6ecc91b277ad471e22a0edfada4699a0fe82f1165c18cfcce2",
+      "size_bytes": 446422912,
+      "source": "ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF@ca27d74bc954b73dadab5b71ca265d87fc861a7c:mmproj-q8_0",
+      "tensor_count": 378,
+      "tensor_prefix": "s.t.p."
+    }
+  },
+  "llama_cpp_revision": "458681e1d5d4a29a1463c4732e03226cf384b997",
+  "ollama": {
+    "minimum_version": "0.32.12",
+    "tags": [
+      "robit/qwen3.8-27b-e03-obliterated-omni:q4km",
+      "robit/qwen3.8-27b-e03-obliterated-omni:latest"
+    ]
+  },
+  "wire_schema": "robit.ollama.omni-adapter.v1"
+}

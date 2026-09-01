@@ -1,67 +1,107 @@
 # Ollama Omni Adapter
 
-The Ollama Omni Adapter is the runtime and wire specification for serving one
-Ollama model tag backed by one physical GGUF that contains:
+The Robit Omni Adapter adds turn-based audio input, video comprehension, and
+speech output to an otherwise normal Ollama model tag. The first target is:
 
 ```text
-unprefixed tensors   Qwen3.8 or Ornith language/reasoning/tools graph
-a.c.* tensors        self-contained audio/image/video comprehension graph
-s.t.* tensors        independently text-conditioned speech synthesis graph
+robit/qwen3.8-27b-e03-obliterated-omni:q4km
 ```
 
-The file is monolithic; execution is not. A custom Ollama build must expose
-filtered views of the three tensor namespaces and route semantic text between
-the graphs. This prevents unsafe hidden-state splicing between architectures
-whose widths, vocabularies, layer counts, or conditioning contracts differ.
+Callers use one model name and one `/api/chat`-shaped endpoint. Stock Ollama
+continues to execute Qwen3.8 completion, native image vision, parsed thinking,
+and structured tools. The adapter resolves the same tag's custom media layer
+for Qwen3-Omni comprehension and Qwen3-TTS synthesis.
+
+## What “one model” means
+
+An Ollama model is an OCI-style manifest, not necessarily one filesystem blob.
+This design deliberately uses one logical model tag with these layers:
+
+```text
+Ollama manifest: robit/qwen3.8-27b-e03-obliterated-omni:q4km
+  ├── standard Ollama model layer       Qwen3.8 language/reasoning/tools
+  ├── standard Ollama projector layer   native Qwen3.8 image vision
+  ├── template, parameters, and license
+  └── Robit Omni sidecar layer           one namespaced multi-graph GGUF
+       ├── unprefixed                     byte-identical base model view
+       ├── b.p.*                          byte-identical base projector view
+       ├── a.c.m.* + a.c.p.*             Qwen3-Omni comprehension pair
+       └── s.t.m.* + s.t.p.*             Qwen3-TTS model/codec pair
+```
+
+The custom layer media type is:
+
+```text
+application/vnd.robit.ollama.omni.bundle.v1+gguf
+```
+
+This gives users one pull, one tag, and one public request contract. It does
+not mean that unmodified Ollama executes every graph internally. Unknown OCI
+layers are ignored by stock Ollama; the reference adapter finds the layer in
+the local manifest, validates it, materializes disposable component views,
+and runs those views with the pinned llama.cpp multimedia tools.
+
+## Why the layer boundary is necessary
+
+GGUF has one architecture metadata set and one contiguous tensor inventory.
+Stock Ollama/llama.cpp validates that inventory against the selected graph.
+Combining unrelated Qwen3.8, Qwen3-Omni, and Qwen3-TTS tensors as one directly
+loaded model therefore fails required-tensor accounting. Appending unindexed
+bytes is also unsuitable because Ollama normalizes the imported model blob,
+while large opaque metadata is loaded eagerly and wastes tens of gigabytes of
+RAM.
+
+The sidecar remains one valid GGUF container and retains all six reproducible
+views, but it is attached as a custom manifest layer rather than used as the
+stock model layer. This is the only tested arrangement that preserves native
+Ollama behavior and ships all media weights under the same tag without unsafe
+hidden-state splicing.
+
+## Capability ownership
+
+| Capability | Executor | Stock Ollama alone? |
+|---|---|---|
+| Text completion | Qwen3.8 standard model layer | Yes |
+| Thinking | Qwen3.8 renderer/parser | Yes |
+| Structured tools | Qwen3.8 renderer/parser | Yes |
+| Image understanding | standard Qwen3.8 projector | Yes |
+| Audio understanding / ASR | Qwen3-Omni sidecar views through adapter | No |
+| Video understanding | Qwen3-Omni sidecar views through adapter | No |
+| TTS | Qwen3-TTS sidecar views through adapter | No |
+| Video generation | not included | No |
+
+The media boundary between comprehension and Qwen3.8 is semantic text. Media
+output is treated as untrusted evidence and never as a system instruction.
+TTS is independently text-conditioned; the Qwen3-Omni Talker cannot consume a
+different Thinker's hidden states without a trained bridge.
 
 ## Status
 
 | Deliverable | Status |
 |---|---|
-| One-file GGUF packer and inspector | Implemented and unit tested |
-| Versioned request/response parser | Implemented as `robit.ollama.omni-adapter.v1` |
-| Audio, image, and video envelope validation | Implemented |
-| ASR, media-description, chat, and TTS routes | Specified and exercised by the reference server |
-| Python and JavaScript clients | Implemented under `examples/omni_adapter/` |
-| HTTP sidecar reference adapter | Implemented for development and integration tests |
-| Patched Ollama in-process loader/executor | Design specified; implementation pending in an Ollama fork |
-| Production Qwen3-Omni comprehension GGUF converter | Pending |
-| Production Qwen3-TTS GGUF converter/executor | Pending |
+| Six-view GGUF v3 packer, inspector, and materializer | Implemented and tested |
+| Ollama sidecar attach, resolve, and cache preparation | Implemented and tested |
+| Wire schema `robit.ollama.omni-adapter.v1` | Implemented and tested |
+| Audio/image/video parsing and bounded validation | Implemented and tested |
+| ASR, describe, chat, and synthesize routes | Implemented in reference adapter |
+| Python and JavaScript clients | Implemented |
+| Qwen3-Omni audio/image/video inference | Live-tested with pinned llama.cpp |
+| Qwen3-TTS 24 kHz PCM16 output | Live-tested with pinned llama.cpp |
+| Native in-process audio/video/TTS in upstream Ollama | Not available |
+| Streaming audio/video ABI | Not included in adapter v1 |
 
-The sidecar proves the protocol and component boundaries. It does not make
-stock Ollama execute the embedded `a.c.*` or `s.t.*` tensors.
-
-## Documentation map
-
-- [Wire protocol](protocol.md) — request fields, media envelopes, tasks,
-  responses, errors, and compatibility rules.
-- [GGUF ABI](gguf-abi.md) — tensor namespaces, metadata keys, filtered model
-  views, quantization order, and validation.
-- [Runtime and Ollama patch guide](runtime.md) — router state machine, required
-  Ollama changes, component interfaces, video normalization, and lifecycle.
-- [Build and release runbook](build-and-release.md) — source selection,
-  conversion, packing, Ollama creation, publication, rollback, and cleanup.
-- [Test plan](testing.md) — unit, component, integration, live capability, and
-  release gates.
-- [Ollama model-page template](model-page-template.md) — release description,
-  runtime warning, examples, provenance, and verified-capability table.
-- [Runnable examples](../../examples/omni_adapter/README.md) — sidecar,
-  Python client, JavaScript client, and curl requests.
-- [Request JSON Schema](schema/request-v1.schema.json) and
-  [response JSON Schema](schema/response-v1.schema.json).
-
-## Contract in one request
+## Request and response
 
 ```json
 {
-  "model": "robit/qwen3.8-omni:latest",
+  "model": "robit/qwen3.8-27b-e03-obliterated-omni:q4km",
   "messages": [{
     "role": "user",
-    "content": "Answer the question in the recording and speak the answer.",
+    "content": "Answer the recording and speak the answer.",
     "audios": [{
       "mime_type": "audio/wav",
       "encoding": "base64",
-      "data": "<base64 16 kHz mono PCM16 RIFF/WAVE>"
+      "data": "<base64 16 kHz mono PCM16 WAV>"
     }]
   }],
   "omni": {
@@ -75,86 +115,44 @@ stock Ollama execute the embedded `a.c.*` or `s.t.*` tensors.
 }
 ```
 
-The response remains Ollama-shaped. The extension adds `message.audio` and an
-`adapter` trace:
+The response remains Ollama-shaped. Speech is added under `message.audio` as a
+tagged base64 RIFF/WAVE envelope: PCM16, mono, 24 kHz. Base64 is a transport
+encoding for bytes, not a bitmap. Adapter v1 requires `stream:false`.
 
-```json
-{
-  "model": "robit/qwen3.8-omni:latest",
-  "message": {
-    "role": "assistant",
-    "content": "The answer is ...",
-    "thinking": "...",
-    "audio": {
-      "type": "audio",
-      "mime_type": "audio/wav",
-      "encoding": "base64",
-      "sample_rate_hz": 24000,
-      "channels": 1,
-      "sample_width_bits": 16,
-      "data": "<base64 RIFF/WAVE>"
-    }
-  },
-  "adapter": {
-    "schema": "robit.ollama.omni-adapter.v1",
-    "task": "chat",
-    "route": ["comprehension", "language", "tts"]
-  },
-  "done": true
-}
-```
+## Installed-tag workflow
 
-JSON transports waveform bytes as base64. This is a byte-preserving transport
-encoding, not a bitmap conversion. A future streaming revision may carry
-binary audio frames, but adapter v1 intentionally requires `stream: false`.
-
-## Reference implementation
-
-Validate the protocol without inference:
+Inspect and prepare the media views directly from the one installed tag:
 
 ```bash
-curl -s http://127.0.0.1:7860/api/omni/adapter/contract
-curl -s http://127.0.0.1:7860/api/omni/adapter/validate \
-  -H 'content-type: application/json' \
-  --data-binary @request.json
+python -m training_suite omni-resolve \
+  robit/qwen3.8-27b-e03-obliterated-omni:q4km
+
+python -m training_suite omni-prepare \
+  robit/qwen3.8-27b-e03-obliterated-omni:q4km \
+  --out ./runtime-cache
 ```
 
-Run the sidecar example after configuring comprehension and TTS component
-servers:
+`runtime-cache` is derived data. Delete it after the runtime stops; the next
+session can reconstruct it from the tag's sidecar layer.
 
-```bash
-training_suite/.venv/bin/python examples/omni_adapter/server.py
-training_suite/.venv/bin/python examples/omni_adapter/client.py \
-  --model robit/qwen3.8-omni:latest \
-  asr ./speech-16khz-mono.wav
-```
+## Documentation map
 
-See the [examples guide](../../examples/omni_adapter/README.md) for all routes.
+- [Wire protocol](protocol.md)
+- [GGUF and Ollama layer ABI](gguf-abi.md)
+- [Runtime guide](runtime.md)
+- [Build and release runbook](build-and-release.md)
+- [Test plan](testing.md)
+- [First release record](qwen38-27b-e03-release.md)
+- [Hugging Face model card](huggingface-model-card.md)
+- [Machine-readable first-release manifest](sidecar-manifest.json)
+- [Machine-readable validation report](validation-report.json)
+- [Ollama custom-layer descriptor](ollama-sidecar-layer.json)
+- [Model-page template](model-page-template.md)
+- [Runnable examples](../../examples/omni_adapter/README.md)
+- [Request schema](schema/request-v1.schema.json) and
+  [response schema](schema/response-v1.schema.json)
 
-## Compatibility position
-
-The adapter extends Ollama's native `/api/chat` shape rather than replacing it:
-
-- normal `model`, `messages`, `tools`, `think`, `format`, `options`,
-  `keep_alive`, and log-probability fields pass through to the language graph;
-- native `message.images` remains accepted;
-- `message.audios`, `message.videos`, `omni`, `response_modalities`, `speech_mode`,
-  and `speech` are additive fields handled by the custom adapter;
-- `thinking` and `tool_calls` are preserved in the response;
-- speech generation is deferred when unresolved tool calls are returned.
-
-Official Ollama currently documents images, tools, and thinking on `/api/chat`,
-but not these audio/video/TTS extensions. See the
-[chat API](https://docs.ollama.com/api/chat),
-[model import guide](https://docs.ollama.com/import), and
-[Modelfile reference](https://docs.ollama.com/modelfile). The additions in this
-repository therefore require the documented custom runner or the sidecar.
-
-Qwen3-Omni's official implementation processes interleaved text, images,
-audio, and video and can produce 24 kHz audio. Its serving limitations and
-`use_audio_in_video` behavior are documented in the
-[Qwen3-Omni repository](https://github.com/QwenLM/Qwen3-Omni). The independent
-speech component in this design follows the text-conditioned
-[Qwen3-TTS project](https://github.com/QwenLM/Qwen3-TTS), because an Omni Talker
-conditioned on a different Thinker cannot safely consume Qwen3.8/Ornith hidden
-states.
+Official Ollama supports images, tools, and thinking but does not currently
+define these audio/video/TTS fields. Clients requiring media must call the
+adapter endpoint described here; ordinary Ollama clients can use the same tag
+for its native capabilities.

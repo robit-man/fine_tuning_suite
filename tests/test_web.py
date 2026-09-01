@@ -41,7 +41,7 @@ def test_omni_audio_contract_and_validation_endpoints(tmp_path) -> None:
         "audios",
         "videos",
     ]
-    assert router.get_json()["artifact"]["comprehension_tensor_view"].startswith("a.c.")
+    assert router.get_json()["artifact"]["comprehension_tensor_views"].startswith("a.c.")
 
     adapter = client.get("/api/omni/adapter/contract")
     assert adapter.status_code == 200

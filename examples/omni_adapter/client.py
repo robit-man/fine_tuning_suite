@@ -93,6 +93,19 @@ def build_request(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def printable_response(data: dict[str, Any], *, include_audio_base64: bool) -> dict[str, Any]:
+    """Keep normal CLI output readable while retaining an opt-in raw payload view."""
+    if include_audio_base64:
+        return data
+    printable = json.loads(json.dumps(data))
+    message = printable.get("message")
+    audio = message.get("audio") if isinstance(message, dict) else None
+    if isinstance(audio, dict) and isinstance(audio.get("data"), str):
+        encoded_chars = len(audio["data"])
+        audio["data"] = f"<base64 omitted; {encoded_chars} characters>"
+    return printable
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--endpoint", default="http://127.0.0.1:11435/api/chat")
@@ -101,6 +114,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--voice")
     parser.add_argument("--think", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--output-audio", default="response.wav")
+    parser.add_argument(
+        "--print-audio-base64",
+        action="store_true",
+        help="include the potentially large message.audio.data value in stdout",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     asr = sub.add_parser("asr", help="transcribe a 16 kHz mono PCM16 WAV")
@@ -148,7 +166,13 @@ def main() -> None:
     response = httpx.post(args.endpoint, json=payload, timeout=args.timeout)
     response.raise_for_status()
     data = response.json()
-    print(json.dumps(data, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            printable_response(data, include_audio_base64=args.print_audio_base64),
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
     message = data.get("message") or {}
     audio = message.get("audio")

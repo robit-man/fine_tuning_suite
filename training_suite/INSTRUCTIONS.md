@@ -293,15 +293,18 @@ the published model is proven recoverable.
 
 Do not delete weight files until all of these checks pass:
 
-1. `ollama create` succeeded for the final local tag.
+1. The final local Ollama tag was created/attached and resolves every expected
+   standard and custom layer.
 2. The required evaluation suite passed. For multimodal agentic models, verify
    an actual image response, structured `tool_calls`, and a populated
    `message.thinking` field.
-3. `ollama push` succeeded for each requested remote tag.
-4. Fetch the public model page or remote registry manifest and confirm the
-   expected tag, model layer, vision projector, renderer, and parser.
-5. Record the source repository and revision, quantization, Modelfile, license,
-   remote tag, layer digests, and evaluation results.
+3. The final GGUF/model card was uploaded to Hugging Face when requested, and
+   the remote file inventory was fetched and verified.
+4. `ollama push` succeeded for each requested remote tag.
+5. Pull or fetch the public Ollama manifest and confirm the expected standard
+   layers, custom sidecar digest, projector, renderer, and parser.
+6. Record source revisions, quantization, Modelfile, licenses, remote URLs,
+   layer/file digests, runtime commit, and evaluation results.
 
 ### Inventory Before Deletion
 
@@ -327,6 +330,7 @@ find "$cleanup_run_dir" -type f \
   \( -name '*.safetensors' -o \
      -name '*.f16.gguf' -o \
      -name '*.bf16.gguf' -o \
+     -path '*/materialized/*.gguf' -o \
      -name '*.partial' -o \
      -name '*.incomplete' \
   \) -print
@@ -351,6 +355,12 @@ find "$cleanup_run_dir" -type f \
      -name '*.partial' -o \
      -name '*.incomplete' \
   \) -delete
+
+# For combined Omni runs, remove only the explicit materialized-view cache
+# after its workers have stopped. It is reconstructible from the installed or
+# Hugging Face/Ollama-published sidecar.
+find "$cleanup_run_dir/materialized" -maxdepth 1 -type f -name '*.gguf' -delete \
+  2>/dev/null || true
 
 du -sh "$cleanup_run_dir"
 ```

@@ -31,7 +31,8 @@ tool splicing, GGUF export, evaluation, and Ollama registry publishing.
 | `training_suite/models/audio.py` | Base64 PCM WAV request/response contract and validation |
 | `training_suite/models/omni.py` | Qwen3-Omni architecture gate and component-bundle planner |
 | `training_suite/models/omni_adapter.py` | Versioned audio/image/video/TTS wire parser and route planner |
-| `training_suite/models/single_gguf.py` | One-file component packer, inspector, and custom Ollama router contract |
+| `training_suite/models/single_gguf.py` | Six-view GGUF sidecar packer, inspector, and materializer |
+| `training_suite/models/ollama_sidecar.py` | Custom Ollama layer attach, resolve, and runtime-cache preparation |
 | `training_suite/omni_runtime.py` | Base64 audio → llama.cpp → Ollama → TTS HTTP cascade |
 | `docs/omni-adapter/` | Adapter wire/GGUF ABIs, patch guide, release runbook, schemas, and test plan |
 | `examples/omni_adapter/` | Reference sidecar and Python/JavaScript clients |
@@ -134,11 +135,11 @@ POST /api/omni/plan                 → native-Omni or monolithic-router compati
 POST /api/omni/cascade              → execute configured audio/language/TTS stages
 ```
 
-## Qwen3-Omni Monolithic Audio Bundles
+## Qwen3-Omni Logical Ollama Bundles
 
-Do not splice Qwen3-Omni audio/Talker tensors directly into Qwen3.8 or Ornith.
-The Qwen3-Omni Thinker is a 2,048-wide MoE trunk; Qwen3.8 and Ornith use
-different Qwen3.5 architectures and widths. Run the compatibility planner:
+Do not splice Qwen3-Omni audio/Talker hidden-state paths directly into Qwen3.8
+or Ornith. The architectures, widths, vocabularies, layers, special tokens, and
+speech conditioning differ. Run the compatibility planner:
 
 ```bash
 python -m training_suite omni-plan \
@@ -147,22 +148,34 @@ python -m training_suite omni-plan \
   --out training_suite/outputs/omni/qwen38-27b-experiment
 ```
 
-`native-omni` requires exact model type, hidden width, layer count, vocabulary,
-and conditioning widths. Otherwise use `monolithic-router`: pack the base
-language graph unprefixed, a self-contained comprehension graph under `a.c.*`,
-and text-conditioned TTS under `s.t.*` in one physical GGUF. The custom Ollama
-handler crosses component boundaries through semantic text; it does not pass
-incompatible hidden states between them.
+`native-omni` requires exact interfaces. Otherwise use `monolithic-router`:
+pack base model/projector, self-contained comprehension model/projector, and
+text-conditioned TTS model/projector as six namespaced views in one custom
+sidecar GGUF. The semantic text boundary is intentional.
 
-Use `python -m training_suite omni-pack` only after all three component GGUFs
-have been independently converted and quantized. Use `omni-inspect` before
-`ollama create`. Ordinary text-only quantization after packing may omit or
-corrupt embedded components, so component quantization happens before packing.
+The Ollama deployment is one logical tag, not one directly executable physical
+GGUF. Preserve normal model/projector/template/parameter/license layers so
+stock Ollama continues to provide text, native image vision, tools, and
+thinking. Attach the sidecar using `omni-attach`; never use it as a Modelfile
+`FROM` target. Stock GGUF loaders reject heterogeneous tensor inventories.
 
-Stock Ollama may import the base GGUF layout, but it does not interpret the
-custom `audios`, `response_modalities`, `speech_mode`, or `message.audio`
-fields. Never mark `audio-input`, `video-input`, or `audio-output` as live until
-the custom loader/handler and modality probes pass.
+Required workflow:
+
+```bash
+python -m training_suite omni-pack ... --out ./release/omni-sidecar.gguf
+python -m training_suite omni-inspect ./release/omni-sidecar.gguf
+python -m training_suite omni-attach robit/example-omni:q4km ./release/omni-sidecar.gguf
+python -m training_suite omni-resolve robit/example-omni:q4km
+python -m training_suite omni-prepare robit/example-omni:q4km --out ./runtime-cache
+```
+
+Quantize every component before packing. Never quantize the sidecar. Runtime
+cache files are disposable and must be removed after workers stop.
+
+Stock Ollama ignores the custom layer and does not interpret `audios`,
+`videos`, `response_modalities`, `speech_mode`, or `message.audio`. Never mark
+audio/video/TTS live until adapter probes pass against views materialized from
+the installed tag.
 
 The public request ABI is `robit.ollama.omni-adapter.v1`. Agents changing the
 adapter must update its executable parser, JSON schemas, protocol document,
@@ -179,18 +192,16 @@ Audio output is base64 RIFF/WAVE, 24 kHz mono PCM16. Preserve component digests,
 runtime revisions, the bundle manifest, and test reports; apply the normal
 end-of-session weight cleanup after successful publication and verification.
 
-The Flask cascade is the pre-integration reference runtime. It reads `TRAINING_SUITE_OMNI_ASR_URL`,
-`TRAINING_SUITE_OMNI_ASR_MODEL`, `TRAINING_SUITE_OMNI_LANGUAGE_MODEL`, and
-`TRAINING_SUITE_OMNI_TTS_URL`. The ASR service uses llama.cpp's
-`input_audio` chat-completions shape. The TTS service must return WAV bytes or
-the suite JSON audio envelope. Before starting either CUDA service, follow the
-host `docker gpu discover` and scoped lease protocol.
+The executable adapter example reads `OMNI_COMPREHENSION_URL`,
+`OMNI_COMPREHENSION_MODEL`, `OMNI_LANGUAGE_URL`, and `OMNI_TTS_URL`. The
+comprehension service uses llama.cpp `input_audio`, `image_url`, and
+`input_video`. Video audio is demuxed to a separate 16 kHz WAV when requested.
+The TTS service returns WAV bytes or the suite JSON audio envelope. Before any
+CUDA service, follow `docker gpu discover` and the scoped lease protocol.
 
-The current experiment covers video understanding only. Track that as
-`video-input`; video generation is out of scope. The versioned parser and
-reference sidecar handle bounded MP4/WebM envelopes and sampling policy. The
-legacy Flask cascade remains audio-only; the final custom runner must implement
-temporal decoding and audio/video alignment over the embedded graph.
+The experiment covers video understanding only; video generation is out of
+scope. Adapter v1 handles bounded MP4/WebM envelopes and sampling policy but
+does not promise sample-accurate audio/video alignment or streaming.
 
 ## Tool Splice Pipeline (HF → Ollama)
 
@@ -406,8 +417,10 @@ Cleanup is allowed only after all of the following are true:
 2. Required capability and behavioral tests passed, including live vision,
    tools, and thinking probes when those capabilities are expected.
 3. `ollama push` completed successfully for every requested remote tag.
-4. The public tag or remote registry manifest was fetched and verified.
-5. The source repository, revision, quantization, Modelfile, license, and test
+4. Any requested Hugging Face model/GGUF upload completed and its remote file
+   inventory/model card was fetched and verified.
+5. The public Ollama tag or remote registry manifest was fetched and verified.
+6. The source repository, revision, quantization, Modelfile, license, and test
    results needed to reproduce the build were recorded.
 
 After the gate passes:
@@ -416,8 +429,9 @@ After the gate passes:
   shards, merged checkpoints, and LoRA adapters that have already been
   distilled into and verified in the published Ollama model.
 - Remove run-local F16/BF16 GGUF intermediates, partial downloads, conversion
-  shards, and redundant quantized GGUF copies. Retain a standalone final GGUF
-  only when it is an explicit deliverable or is needed for another active run.
+  shards, redundant quantized GGUF copies, and materialized sidecar views.
+  Retain a standalone final GGUF only when it is an explicit deliverable or is
+  needed for another active run.
 - Remove only cache entries and temporary directories created for the completed
   run. Hugging Face caches and donor/base weights may be shared by other work,
   so inspect references before deleting them.

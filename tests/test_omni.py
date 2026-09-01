@@ -5,15 +5,15 @@ import io
 import json
 import wave
 
-import pytest
 import httpx
+import pytest
 
+from training_suite.evals.runner import omni_audio_smoke
 from training_suite.models.audio import (
     AudioContractError,
     encode_audio_response,
     validate_audio_input,
 )
-from training_suite.evals.runner import omni_audio_smoke
 from training_suite.models.omni import (
     architecture_signature,
     assess_native_omni_splice,
@@ -24,11 +24,11 @@ from training_suite.models.single_gguf import (
     BUNDLE_SCHEMA,
     audio_router_contract,
     inspect_monolithic_gguf,
+    materialize_component_view,
     monolithic_bundle_manifest,
     pack_monolithic_gguf,
 )
 from training_suite.omni_runtime import OmniRuntimeConfig, run_http_cascade
-
 
 QWEN38_CONFIG = {
     "architectures": ["Qwen3_5ForCausalLM"],
@@ -128,7 +128,7 @@ def test_monolithic_router_contract_tags_audio_like_a_binary_message_part() -> N
     assert contract["response"]["message"]["audio"]["sample_rate_hz"] == 24000
 
 
-def test_monolithic_manifest_is_one_physical_gguf_with_namespaced_graphs() -> None:
+def test_monolithic_manifest_is_one_physical_gguf_with_indexed_views() -> None:
     manifest = monolithic_bundle_manifest(
         base_source="qwen3.8",
         comprehension_source="qwen3-omni",
@@ -136,11 +136,11 @@ def test_monolithic_manifest_is_one_physical_gguf_with_namespaced_graphs() -> No
         base_architecture="qwen3_5_text",
     )
 
-    assert manifest["physical_artifacts"] == 1
-    assert manifest["runtime"]["custom_audio_handler_required"] is True
+    assert manifest["physical_bundle_artifacts"] == 1
+    assert manifest["runtime"]["custom_media_handler_required"] is True
     assert [component["tensor_prefix"] for component in manifest["components"]] == [
-        "a.c.",
-        "s.t.",
+        "a.c.m.",
+        "s.t.m.",
     ]
 
 
@@ -184,11 +184,80 @@ def test_monolithic_packer_writes_three_tensor_namespaces(tmp_path) -> None:
         "tts": 1,
     }
     reader = gguf.GGUFReader(str(output))
-    metadata = {key: field.contents() for key, field in reader.fields.items()}
-    assert (
-        metadata["robit.audio_bundle.component.comprehension.kv.general.architecture"]
-        == "llama"
+    assert len(reader.tensors) == 3
+    assert inspection["tensor_count"] == 3
+    assert [tensor.name for tensor in reader.tensors] == [
+        "blk.0.test.weight",
+        "a.c.m.blk.0.test.weight",
+        "s.t.m.blk.0.test.weight",
+    ]
+
+
+def test_monolithic_packer_round_trips_all_six_executable_views(tmp_path) -> None:
+    gguf = pytest.importorskip("gguf")
+    np = pytest.importorskip("numpy")
+
+    def make(path, name: str, value: float) -> None:
+        writer = gguf.GGUFWriter(str(path), arch="llama")
+        writer.add_key_value("general.name", name, gguf.GGUFValueType.STRING)
+        writer.add_key_value("llama.block_count", 1, gguf.GGUFValueType.UINT32)
+        writer.add_tensor(
+            f"{name}.weight",
+            np.asarray([[value, value + 1]], dtype=np.float32),
+        )
+        writer.write_header_to_file()
+        writer.write_kv_data_to_file()
+        writer.write_tensors_to_file()
+        writer.close()
+
+    paths = {}
+    for index, name in enumerate(
+        (
+            "base",
+            "base_projector",
+            "comprehension_model",
+            "comprehension_projector",
+            "tts_model",
+            "tts_projector",
+        ),
+        start=1,
+    ):
+        paths[name] = tmp_path / f"{name}.gguf"
+        make(paths[name], name, float(index))
+
+    bundle = tmp_path / "omni.gguf"
+    pack_monolithic_gguf(
+        base_gguf=paths["base"],
+        base_projector_gguf=paths["base_projector"],
+        comprehension_gguf=paths["comprehension_model"],
+        comprehension_projector_gguf=paths["comprehension_projector"],
+        tts_gguf=paths["tts_model"],
+        tts_projector_gguf=paths["tts_projector"],
+        out_gguf=bundle,
     )
+    inspection = inspect_monolithic_gguf(bundle)
+
+    assert inspection["valid"] is True
+    assert inspection["view_tensor_counts"] == {
+        "base": 1,
+        "base_projector": 1,
+        "comprehension_model": 1,
+        "comprehension_projector": 1,
+        "tts_model": 1,
+        "tts_projector": 1,
+    }
+    for name in inspection["view_tensor_counts"]:
+        output = tmp_path / "materialized" / f"{name}.gguf"
+        report = materialize_component_view(
+            bundle_gguf=bundle,
+            view=name,
+            out_gguf=output,
+        )
+        reader = gguf.GGUFReader(str(output))
+        assert report["tensor_count"] == 1
+        assert [tensor.name for tensor in reader.tensors] == [f"{name}.weight"]
+        assert reader.fields["general.name"].contents() == name
+        assert output.read_bytes() == paths[name].read_bytes()
 
 
 def test_qwen38_and_ornith_are_not_native_omni_splice_compatible() -> None:
@@ -227,8 +296,10 @@ def test_qwen38_plan_selects_monolithic_router_without_claiming_native_fusion() 
 
     assert plan["mode"] == "monolithic-router"
     assert plan["status"] == "ready-for-monolithic-pack"
-    assert plan["artifact_policy"]["single_gguf"] is True
-    assert plan["artifact_policy"]["custom_ollama_handler_required"] is True
+    assert plan["artifact_policy"]["one_logical_ollama_tag"] is True
+    assert plan["artifact_policy"]["single_custom_sidecar_gguf"] is True
+    assert plan["artifact_policy"]["stock_ollama_direct_sidecar_import"] is False
+    assert plan["artifact_policy"]["custom_media_adapter_required"] is True
     assert plan["runtime_support"]["ollama_0_32"]["generated_audio_response"] is False
     assert plan["deployment_profile"]["talker"]["num_code_groups"] == 16
     assert plan["runtime_support"]["vllm_omni"]["qwen3_omni_talker_output"] is True

@@ -1,0 +1,9 @@
+{
+  "annotations": {
+    "io.robit.omni.schema": "robit.ollama-monolithic-omni.v3",
+    "org.opencontainers.image.title": "qwen3.8-27b-e03-obliterated-omni-q4km.gguf"
+  },
+  "digest": "sha256:3270f146bae9499b2e40ad230cceeccfc9caa018740c75cfc1856c1abda6ff78",
+  "mediaType": "application/vnd.robit.ollama.omni.bundle.v1+gguf",
+  "size": 38843038144
+}

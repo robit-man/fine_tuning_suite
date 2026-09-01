@@ -1,182 +1,125 @@
-# ADR-002: Monolithic GGUF with custom Ollama audio routing
+# ADR-002: Logical Ollama Omni Tag with Namespaced GGUF Sidecar
 
-- Status: Accepted for experiment
+- Status: Accepted and locally validated
 - Date: 2026-08-31
-- Supersedes: ADR-001 artifact-layout decision; ADR-001 compatibility analysis remains valid
+- Decision owners: Fine-Tuning Suite maintainers
+- Schemas: `robit.ollama-monolithic-omni.v3`,
+  `robit.ollama.omni-adapter.v1`
 
 ## Context
 
-The required deliverable is one physical GGUF that Ollama can import with one
-`FROM` reference. The artifact must retain a Qwen3.8 or Ornith language model,
-understand audio and video through Qwen3-Omni-derived components, and optionally
-generate TTS audio. A custom Ollama-compatible request handler and runner are
-allowed.
+The project needs one model name and one pullable Ollama release that retains
+Qwen3.8/Ornith text, thinking, tools, and image vision while adding audio/video
+understanding and TTS. The added models do not share a compatible execution
+graph or hidden-state interface with the base language model.
 
-The component architectures are not hidden-state compatible. Qwen3-Omni audio,
-vision, Thinker, Talker, and codec tensors cannot be copied directly into a
-Qwen3.8 or Ornith language graph and expected to function. The single-file
-requirement is therefore an artifact constraint, not a requirement that all
-weights form one transformer graph.
+Experiments established these constraints:
 
-Current Ollama create/compatibility code already recognizes embedded tensor
-prefixes including `a.` and `s.` as compatibility tensors that must be
-preserved. Its llama.cpp compatibility layer also has a precedent for hiding
-embedded modality tensors from the text loader and constructing filtered views
-of a monolithic GGUF.
+1. A GGUF with all heterogeneous tensors in one inventory imports but stock
+   llama.cpp rejects it because the selected architecture expects only its own
+   tensor set.
+2. Appended bytes are discarded when Ollama normalizes a GGUF import.
+3. A pre-tensor data gap violates required contiguous tensor offsets.
+4. A tens-of-gigabytes byte array in GGUF metadata is eagerly allocated by the
+   reader and is operationally unacceptable.
+5. Qwen3-Omni hidden states and Talker conditioning cannot be safely spliced
+   into Qwen3.8/Ornith by renaming, padding, or reshaping tensors.
 
 ## Decision
 
-Build a monolithic GGUF with three executable graph namespaces:
+Ship one logical Ollama model manifest containing:
 
-| Namespace | Role |
+- standard Ollama model/projector/template/parameter/license layers that stock
+  Ollama executes normally;
+- one custom layer with media type
+  `application/vnd.robit.ollama.omni.bundle.v1+gguf`;
+- one valid GGUF v3 in that custom layer, containing six namespaced source
+  views for reproducibility and adapter execution.
+
+The tensor namespaces are:
+
+| View | Namespace |
 |---|---|
-| unprefixed | Qwen3.8 or Ornith language, reasoning, thinking, and tools |
-| `a.c.*` | Self-contained audio/video comprehension graph |
-| `s.t.*` | Independently text-conditioned TTS graph |
+| Base language | unprefixed |
+| Base projector | `b.p.*` |
+| Comprehension model/projector | `a.c.m.*`, `a.c.p.*` |
+| TTS model/projector | `s.t.m.*`, `s.t.p.*` |
 
-The base GGUF remains the primary `general.architecture`. Every embedded
-component's original metadata is copied under a component metadata namespace.
-The custom runner reconstructs a component view by stripping its tensor and
-metadata prefixes.
+Stock Ollama ignores the unknown custom layer and therefore preserves native
+completion, vision, tools, and thinking. The custom adapter resolves the layer
+from the same model tag, validates schema/digest, materializes or maps component
+views, and routes audio/video/TTS. The client sees one model name and one
+Ollama-shaped endpoint.
 
-The file carries `robit.audio_bundle.*` metadata containing the schema,
-component digests, routing contract, and source provenance. The suite's
-`omni-pack` command writes the file and `omni-inspect` validates it.
+## Routing boundary
 
-## Runtime contract
-
-The versioned wire schema is `robit.ollama.omni-adapter.v1`. The artifact schema
-remains `robit.ollama-monolithic-audio.v1`; storage and API compatibility are
-versioned independently. The complete normative contract is maintained in
-`docs/omni-adapter/protocol.md`.
-
-The custom Ollama `/api/chat` extension accepts audio in a message field modeled
-after image input:
-
-```json
-{
-  "model": "robit/combined:latest",
-  "messages": [{
-    "role": "user",
-    "content": "What happened in this recording?",
-    "audios": [{
-      "mime_type": "audio/wav",
-      "encoding": "base64",
-      "sample_rate_hz": 16000,
-      "channels": 1,
-      "sample_width_bits": 16,
-      "data": "<base64 RIFF/WAVE bytes>"
-    }]
-  }],
-  "omni": {
-    "schema": "robit.ollama.omni-adapter.v1",
-    "task": "chat"
-  },
-  "response_modalities": ["text", "audio"],
-  "speech_mode": "auto",
-  "stream": false
-}
-```
-
-When speech is selected, the response places a tagged waveform inside the
-assistant message:
-
-```json
-{
-  "message": {
-    "role": "assistant",
-    "content": "The speaker asked for a weather update.",
-    "audio": {
-      "mime_type": "audio/wav",
-      "encoding": "base64",
-      "sample_rate_hz": 24000,
-      "channels": 1,
-      "sample_width_bits": 16,
-      "data": "<base64 RIFF/WAVE bytes>"
-    }
-  }
-}
-```
-
-JSON cannot contain raw binary bytes, so turn-based responses use base64.
-Streaming may use tagged base64 PCM chunks in Ollama's NDJSON stream or a
-separate binary transport negotiated by the custom client.
-
-## Routing
-
-1. Text-only input goes directly to the base language graph.
-2. Audio/video input goes to the comprehension graph.
-3. The comprehension graph returns semantic text, which is passed to the base
-   language graph with the user's instruction.
-4. The language graph returns normal content, thinking, and tool calls.
-5. `speech_mode` and `response_modalities` determine whether the final text is
-   passed to the TTS graph.
-6. The response always retains text; generated audio is an additional tagged
-   field.
-
-An automatic model router may choose speech only when the client leaves the
-decision open. Explicit `always` and `never` requests take precedence.
-
-## Why the comprehension component is self-contained
-
-Without a trained bridge, an audio/vision encoder from Qwen3-Omni cannot feed a
-Qwen3.8 or Ornith hidden space. The initial single-file implementation embeds a
-self-contained comprehension graph and crosses the boundary through semantic
-text. A later learned adapter may replace that graph if it passes multimodal
-alignment evaluations.
-
-Likewise, the original Qwen3-Omni Talker is conditioned on its matching Thinker.
-The initial output component must therefore be a text-conditioned TTS model,
-not an unmodified Talker attached to Qwen3.8/Ornith hidden states.
-
-## Required Ollama changes
-
-The custom build must:
-
-1. recognize the `robit.audio_bundle.schema` marker;
-2. preserve `a.c.*` and `s.t.*` tensors during create/quantize/copy/push;
-3. exclude embedded component tensors from the base text loader;
-4. expose filtered metadata/tensor views for comprehension and TTS loaders;
-5. account for each component in memory scheduling and load them lazily;
-6. accept the `audios`, `response_modalities`, and `speech_mode` API fields;
-7. return tagged audio and stream it without corrupting the normal Ollama
-   response contract;
-8. keep tool calls and thinking fields intact;
-9. validate input size, WAV format, cancellation, backpressure, and timeouts.
-10. accept bounded `videos` envelopes, normalize frames in temporal order, and
-    preserve optional video-audio alignment;
-11. implement `chat`, `transcribe`, `describe`, and `synthesize` routes under the
-    versioned wire schema.
+For Qwen3.8/Ornith combinations, comprehension returns semantic text. The
+adapter inserts it as explicitly delimited untrusted evidence before the base
+language pass. TTS is independently text-conditioned. No incompatible hidden
+state crosses component boundaries.
 
 ## Consequences
 
-- The registry contains one model blob and one model tag.
-- The file can be very large because it contains multiple complete graphs.
-- Stock Ollama may import and run the base language tensors, but audio/video/TTS
-  behavior requires the custom handler and loader.
-- One physical file does not imply all components must remain resident in GPU
-  memory simultaneously.
-- Component quantization and conversion must happen before packing; ordinary
-  text-only quantizers must not be run blindly after packing.
-- Source component revisions and digests remain necessary even though the
-  published artifact is monolithic.
+### Positive
 
-## Verification gates
+- One tag/pull contains all release weights.
+- Stock Ollama remains usable for native capabilities.
+- Media graphs can evolve independently without corrupting the base loader.
+- Every component retains exact source metadata, tensor bytes, and digest.
+- Runtimes can load/evict media contexts independently.
+- The sidecar can be mirrored on Hugging Face with complete provenance.
 
-- `omni-inspect` finds non-empty base, `a.c.*`, and `s.t.*` tensor sets.
-- `ollama create` preserves the output blob and the base text model loads.
-- Text, tools, thinking, and existing vision behavior do not regress.
-- Audio comprehension passes known speech and non-speech fixtures.
-- Video comprehension preserves frame order and answers temporal questions.
-- TTS output is valid 24 kHz mono PCM16 WAV.
-- `speech_mode=never`, `always`, and `auto` route correctly.
-- Copy/push/pull produces an identical bundle digest or an explicitly recorded
-  registry-layer digest.
+### Negative
 
-## Implementation references
+- Audio/video/TTS require the adapter and are not native upstream Ollama
+  capabilities.
+- The logical model uses multiple OCI layers, not one total physical blob.
+- Materialization temporarily duplicates approximately 21 GB for the current
+  Qwen3-Omni/TTS media views.
+- Semantic routing loses dense cross-modal information.
+- Adapter v1 is turn-based; streaming needs a new protocol revision.
+- The reference TTS wrapper is serial and not a production scheduler.
 
-- `docs/omni-adapter/` — wire ABI, GGUF ABI, runtime patch guide, build/release
-  runbook, schemas, model-page template, and test plan;
-- `training_suite/models/omni_adapter.py` — executable v1 parser and route
-  planner;
-- `examples/omni_adapter/` — HTTP reference adapter and clients.
+## Rejected alternatives
+
+### Direct heterogeneous GGUF model layer
+
+Rejected after required-tensor accounting failed in stock Ollama/llama.cpp.
+
+### Trailing payload after a byte-identical base GGUF
+
+Rejected because Ollama import retained only the normalized base model blob.
+
+### Opaque metadata payload
+
+Rejected because the GGUF reader materializes metadata values in host memory.
+
+### Direct Qwen3-Omni → Qwen3.8 hidden-state splice
+
+Rejected because architectures, widths, vocabularies, special tokens, layers,
+and Talker conditioning are incompatible. A learned bridge would be a new model
+architecture and a new ADR/schema.
+
+### Multiple unrelated model names
+
+Rejected as the public contract because it does not meet one-tag deployment.
+Internally, separate execution contexts remain necessary and are hidden behind
+the adapter.
+
+## Verification
+
+A release must prove:
+
+- exact six-view tensor counts and source hashes;
+- stock text, image vision, thinking, and structured tools;
+- live audio, image, video, video-audio, and TTS from sidecar-derived views;
+- adapter response conformance;
+- Hugging Face remote availability;
+- Ollama push/pull preserving the custom layer digest;
+- temporary view cleanup only after both registries are verified.
+
+## Follow-up
+
+A future in-process implementation may add filtered mmap views and persistent
+libmtmd workers to an Ollama fork. It must preserve the same logical layer and
+wire contracts or introduce explicitly versioned successors.

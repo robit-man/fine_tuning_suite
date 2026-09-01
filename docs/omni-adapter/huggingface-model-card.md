@@ -34,6 +34,19 @@ The capabilities were tested through the exact sidecar installed in the local
 Ollama tag. This is semantic orchestration between independently executable
 graphs, not a claim that incompatible hidden states were tensor-spliced.
 
+## Published releases
+
+- Ollama: [`robit/qwen3.8-27b-e03-obliterated-omni:q4km`](https://ollama.com/robit/qwen3.8-27b-e03-obliterated-omni:q4km)
+- Ollama default alias: [`robit/qwen3.8-27b-e03-obliterated-omni:latest`](https://ollama.com/robit/qwen3.8-27b-e03-obliterated-omni)
+- Adapter and reproducibility tooling: [`robit-man/fine_tuning_suite`](https://github.com/robit-man/fine_tuning_suite)
+
+The Ollama registry was verified by deleting the disposable local `latest`
+manifest, pulling it again, resolving the custom sidecar layer, re-inspecting
+all 3,313 tensors, and running a fresh inference. The Hugging Face artifact was
+verified at repository commit `a0d82e6e076b549289264a6fe6a2625ffe2966ad`:
+its remote size is `38,843,038,144` bytes and its LFS SHA-256 is
+`3270f146bae9499b2e40ad230cceeccfc9caa018740c75cfc1856c1abda6ff78`.
+
 ## Important: custom sidecar, not a standalone model
 
 `qwen3.8-27b-e03-obliterated-omni-q4km.gguf` is a valid, contiguous GGUF that

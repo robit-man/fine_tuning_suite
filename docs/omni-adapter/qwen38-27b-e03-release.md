@@ -1,7 +1,7 @@
 # Qwen3.8-27B-E03-Obliterated-Omni Q4_K_M Release Record
 
-Status: local validation complete; repository, Hugging Face, and Ollama remote
-publication gates pending at the time of this record.
+Status: release complete. Repository, Hugging Face, Ollama registry round-trip,
+live capability, and post-release cleanup gates passed.
 
 ## Target tags
 
@@ -82,10 +82,26 @@ sidecar blob, not unrelated source paths.
 
 ## Remote verification
 
-This section must be updated after publication with:
+| Gate | Result | Evidence |
+|---|---|---|
+| GitHub `main` | PASS | Implementation and release documentation pushed through commit `243008ea8740b3ca1bf26e1ed706b7261f40c49e` before this final evidence update |
+| Hugging Face artifact | PASS | Repository commit `a0d82e6e076b549289264a6fe6a2625ffe2966ad`; remote file size `38,843,038,144`; LFS SHA-256 `3270f146bae9499b2e40ad230cceeccfc9caa018740c75cfc1856c1abda6ff78` |
+| Ollama `q4km` | PASS | Pushed to `robit/qwen3.8-27b-e03-obliterated-omni:q4km` |
+| Ollama `latest` | PASS | Pushed to `robit/qwen3.8-27b-e03-obliterated-omni:latest` |
+| Ollama registry round-trip | PASS | Removed the disposable local `latest` manifest, pulled it from the registry, resolved the custom sidecar layer, and re-inspected all six views and 3,313 tensors |
+| Pulled sidecar descriptor | PASS | Media type `application/vnd.robit.ollama.omni.bundle.v1+gguf`; digest `sha256:3270f146bae9499b2e40ad230cceeccfc9caa018740c75cfc1856c1abda6ff78`; size `38,843,038,144` |
+| Pulled stock runtime | PASS | `ollama show` retained completion, vision, tools, and thinking; fresh public-broker inference returned exact `REMOTE OLLAMA OK` |
+| Cleanup | PASS | Run directory reduced from 57 GB to 1.4 MB; `/srv` available space increased from 62 GB to 83 GB |
 
-- repository commit on `main`;
-- Hugging Face commit and remote file inventory;
-- Ollama `q4km` and `latest` push results;
-- post-pull custom layer digest;
-- cleanup before/after disk usage.
+Published locations:
+
+- [Ollama `q4km`](https://ollama.com/robit/qwen3.8-27b-e03-obliterated-omni:q4km)
+- [Ollama `latest`](https://ollama.com/robit/qwen3.8-27b-e03-obliterated-omni)
+- [Hugging Face sidecar](https://huggingface.co/cudabenchmarktest/Qwen3.8-27B-E03-Obliterated-Omni-GGUF)
+- [Fine Tuning Suite](https://github.com/robit-man/fine_tuning_suite)
+
+Cleanup removed the five materialized media-runtime views totaling
+`22,295,608,288` bytes, the completed Hugging Face staging tree, and the
+release-directory hardlink. The installed Ollama blob and both published local
+tags were preserved. This build did not create or download Safetensors, so
+there were no Safetensors to remove.

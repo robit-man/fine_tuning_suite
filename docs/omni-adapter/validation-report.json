@@ -68,8 +68,28 @@
       "status": "pass"
     },
     {
+      "assertion": "Remote file was 38,843,038,144 bytes with LFS SHA-256 3270f146bae9499b2e40ad230cceeccfc9caa018740c75cfc1856c1abda6ff78 at commit a0d82e6e076b549289264a6fe6a2625ffe2966ad",
+      "name": "hugging_face_registry_artifact",
+      "status": "pass"
+    },
+    {
+      "assertion": "Both q4km and latest were pushed; a fresh latest pull retained the 38,843,038,144-byte custom layer and all six sidecar views",
+      "name": "ollama_registry_round_trip",
+      "status": "pass"
+    },
+    {
+      "assertion": "Pulled stock runtime retained completion, vision, tools, and thinking; fresh inference returned exact REMOTE OLLAMA OK sentinel",
+      "name": "ollama_post_pull_live_probe",
+      "status": "pass"
+    },
+    {
       "assertion": "All temporary workers stopped and broker reported no active leases",
       "name": "cuda_release",
+      "status": "pass"
+    },
+    {
+      "assertion": "Five disposable views totaling 22,295,608,288 bytes were removed; run directory fell from 57 GB to 1.4 MB while both Ollama tags and the installed sidecar blob were preserved",
+      "name": "post_release_cleanup",
       "status": "pass"
     }
   ],

@@ -61,15 +61,22 @@ examples/omni_portal/start.sh --stop
 The printed URL must be opened as-is so its `#access=...` fragment reaches the
 browser. Microphone permission requires the HTTPS endpoint. Hold the microphone
 icon while speaking; release it to create a playable WAV attachment, then send.
+An unprompted audio clip runs the full comprehension-to-language route: the
+tagged ASR transcript replaces the temporary text in your bubble, environmental
+audio remains separate model evidence, and the intelligent reply appears in the
+assistant bubble. Use the adapter's explicit `omni.task="transcribe"` outside
+the composer when a transcription-only response is required.
 The speaker icon switches between text-only and text-plus-TTS replies. The
 waveform button opens Qwen3-TTS voice cloning and sampling controls. The phone
-icon starts automatic voice turns. Local VAD calibrates ambient noise for 900
-ms, requires 220 ms of sustained activity above an adaptive threshold, and
+icon starts automatic voice turns. Local VAD calibrates ambient noise for 650
+ms, requires 120 ms of sustained activity above a sensitive adaptive threshold, and
 closes after 750 ms of silence. Quiet, clicks, and elevated steady noise do not
 call remote ASR. The green waveform is translucent while inactive and opaque
-only during confirmed activity. The microphone remains active for barge-in;
-sustained speech uses a stricter threshold, cancels playback, and queues the
-interruption. Portable adapter v1 remains `stream:false`;
+only during confirmed activity. The microphone remains active while previous
+turns are queued or understanding; each later confirmed segment is submitted
+immediately instead of overwriting a single pending clip. During playback,
+sustained speech uses a stricter threshold and cancels the current audio without
+stopping capture. Portable adapter v1 remains `stream:false`;
 `/api/chat/stream` is an authenticated portal extension with stage, text,
 thinking, PCM, and one authoritative final adapter event.
 
@@ -77,12 +84,26 @@ Qwen3-TTS uses four codec frames per streaming decoder window by default,
 approximately 320 ms for the packaged 12 Hz model. The browser schedules the
 first received PCM with a 10 ms floor and queues later chunks on the Web Audio
 timeline. The final response retains a complete replayable WAV even when live
-PCM playback succeeded.
+PCM playback succeeded. `stage=tts` is a preparing state; `audio_start` is now
+emitted only with the first actual PCM chunk, so “streaming” never describes a
+request that is still in model prefill.
+The 512-frame ceiling applies to each synthesis block. Longer replies are split
+at natural text boundaries, retain one continuous PCM sequence across blocks,
+and finish as a single assembled replay WAV instead of stopping near 40 seconds.
 
 The camera icon captures device video and microphone audio with a live preview
 inside the composer. Tap again or send to finalize a 30-second-maximum MP4/WebM
 attachment. The model receives the complete bounded turn; adapter v1 does not
 continuously ingest an open camera stream.
+
+Silent MP4/WebM is valid and follows the visual-only route; absence of an audio
+stream no longer fails FFmpeg demux. Animated GIF is normalized to bounded MP4
+and remains visible as a looping preview. The paperclip also accepts multiple
+PDF, DOCX, and UTF-8 text/code documents. The portal extracts them with strict
+size/page/archive limits, creates a deterministic hashed lexical chunk index
+isolated to the Secure browser session, and adds only the most relevant bounded
+excerpts to each language turn as untrusted data. Trash clears both diagnostics
+and the document index; idle indexes expire after five minutes.
 
 Re-recording replaces the previous unsent camera capture. The exact submitted
 blob remains visible as a muted looping thumbnail in the user turn. Each media
@@ -112,7 +133,9 @@ through one GPU inference lane. The number beside **ONLINE** counts distinct
 browser sessions with active or queued work. Request bodies, streams, media,
 voice overrides, tool rounds, and responses remain request-local. Conversation
 history exists only in each browser page; the server has no shared conversation
-or media history to bleed into another user.
+or media history to bleed into another user. The optional in-memory document
+index is keyed by the hashed opaque session cookie, has independent bounds and
+expiry, and is never searched across sessions.
 
 A Secure, HttpOnly, SameSite=Strict cookie provides an opaque partition key for
 the aggregate count and ephemeral diagnostics. `/api/activity` exposes only
@@ -157,10 +180,13 @@ speaker-embedding cloning and separate VoiceDesign/CustomVoice checkpoints.
 | Device camera | live preview, bounded MP4/WebM attachment, video comprehension |
 | Speaker + microphone | transcription followed by valid spoken audio |
 | Call control | silence-delimited audio turn followed by automatic playback |
-| VAD noise rejection | quiet/click/steady-noise fixtures create zero remote requests; sustained events create one |
+| VAD sensitivity and rejection | silence/click/steady-noise fixtures create zero requests; quiet and normal sustained speech create one per segment |
 | Voice clone | recorded/uploaded WAV changes speaker timbre and remains replayable |
 | Image | non-empty visual description |
 | Video with audio | ordered visual description plus spoken content |
+| Silent video | ordered visual description without an audio extraction error |
+| Animated GIF | looping chat preview plus bounded temporal description |
+| PDF/DOCX/text | relevant extracted chunks answer the query; another session retrieves none |
 | Sequential video isolation | red → blue → red clips describe red → blue → red; `cache_prompt=false` |
 | TTS | valid 24 kHz mono PCM16 WAV playable on phone |
 | TTS first PCM | four-frame window and browser first-audio milestone recorded |

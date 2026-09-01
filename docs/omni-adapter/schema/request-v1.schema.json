@@ -124,7 +124,7 @@
           "properties": {
             "mime_type": {
               "type": "string",
-              "enum": ["video/mp4", "video/webm"],
+              "enum": ["video/mp4", "video/webm", "image/gif"],
               "default": "video/mp4"
             },
             "sampling": {

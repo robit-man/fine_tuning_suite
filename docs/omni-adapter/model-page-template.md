@@ -78,7 +78,7 @@ python examples/omni_adapter/client.py \
 ```
 
 Adapter v1 accepts 16 kHz mono PCM16 WAV, JPEG/PNG/WebP, and bounded
-MP4/WebM. Output audio is tagged base64 RIFF/WAVE, PCM16, mono, 24 kHz under
+MP4/WebM/GIF. Output audio is tagged base64 RIFF/WAVE, PCM16, mono, 24 kHz under
 `message.audio`. Adapter v1 is turn-based and requires `stream:false`.
 
 ## Artifact layout

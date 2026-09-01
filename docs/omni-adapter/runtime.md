@@ -153,10 +153,11 @@ the selected path should be explicit so an image is not encoded twice.
 
 ### Video
 
-MP4 and WebM are signature-checked and bounded by the adapter contract. The
-current llama.cpp worker accepts `input_video` with raw base64. When
+MP4, WebM, and animated GIF are signature-checked and bounded by the adapter
+contract. GIF is normalized to a bounded silent MP4 before the current
+llama.cpp worker receives `input_video` raw base64. When
 `include_audio_from_video=true`, the reference adapter also uses ffmpeg to
-demux the first audio track, resamples it to 16 kHz mono PCM16 WAV, and submits
+demux the first audio track when present, resamples it to 16 kHz mono PCM16 WAV, and submits
 it as a separate `input_audio` part. This is a compatibility technique, not a
 claim of sample-accurate audiovisual alignment.
 

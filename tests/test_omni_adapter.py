@@ -13,6 +13,8 @@ import pytest
 from examples.omni_adapter.client import printable_response
 from examples.omni_adapter.server import (
     Config,
+    _tts_text_blocks,
+    _video_audio,
     build_comprehension_payload,
     execute,
     execute_stream,
@@ -23,6 +25,7 @@ from examples.omni_adapter.tts_server import create_app as create_tts_app
 from training_suite.models.audio import decode_wav_payload
 from training_suite.models.omni_adapter import (
     ADAPTER_SCHEMA,
+    MediaItem,
     OmniAdapterError,
     adapter_contract,
     parse_adapter_request,
@@ -45,6 +48,10 @@ def _encoded(raw: bytes) -> str:
 
 def _mp4() -> bytes:
     return b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"
+
+
+def _gif() -> bytes:
+    return b"GIF89a\x01\x00\x01\x00\x00\x00\x00;"
 
 
 def _tts_config(tmp_path: Path, **overrides) -> TTSConfig:
@@ -373,6 +380,50 @@ def test_adapter_rejects_streaming_and_spoofed_video_mime() -> None:
     )
     with pytest.raises(OmniAdapterError, match="does not match"):
         parse_adapter_request(request)
+
+
+def test_adapter_accepts_animated_gif_as_video() -> None:
+    parsed = parse_adapter_request(
+        _base_request(
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Describe the animation.",
+                    "videos": [
+                        {
+                            "mime_type": "image/gif",
+                            "data": _encoded(_gif()),
+                            "sampling": {"fps": 1, "max_frames": 12},
+                        }
+                    ],
+                }
+            ]
+        )
+    )
+
+    assert parsed.media[0].mime_type == "image/gif"
+    assert "image/gif" in adapter_contract()["media"]["video"]["mime_types"]
+
+
+def test_silent_video_returns_no_audio_instead_of_failing(monkeypatch) -> None:
+    calls = []
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        return type("Completed", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
+
+    monkeypatch.setattr("examples.omni_adapter.server.subprocess.run", run)
+    media = MediaItem(
+        kind="video",
+        mime_type="video/mp4",
+        data=_mp4(),
+        message_index=0,
+        media_index=0,
+    )
+
+    assert _video_audio(media) is None
+    assert len(calls) == 1
+    assert "-select_streams" in calls[0]
 
 
 def test_reference_server_preserves_tools_thinking_and_adds_audio() -> None:
@@ -953,3 +1004,65 @@ def test_reference_server_streams_pcm_and_keeps_final_wav_envelope() -> None:
     assert decoded.frames == 3
     assert final["adapter"]["audio_streamed"] is True
     assert final["adapter"]["route"] == ["language", "tts"]
+
+
+def test_long_tts_stream_uses_multiple_blocks_and_one_complete_wav(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("OMNI_TTS_BLOCK_CHARS", "80")
+    text = (
+        "First sentence explains the long response in a calm and measured way. "
+        "Second sentence contains enough additional detail to require another block. "
+        "Third sentence proves that the final audio continues through the ending."
+    )
+    tts_texts = []
+    pcm = b"\x01\x00\x02\x00"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if request.url.host == "language":
+            return httpx.Response(
+                200,
+                content=(
+                    json.dumps(
+                        {
+                            "message": {"role": "assistant", "content": text},
+                            "done": True,
+                        }
+                    )
+                    + "\n"
+                ).encode(),
+            )
+        if request.url.host == "tts":
+            tts_texts.append(body["text"])
+            return httpx.Response(
+                200,
+                content=pcm,
+                headers={"x-audio-codec": "pcm_s16le"},
+            )
+        return httpx.Response(404)
+
+    parsed = parse_adapter_request(
+        _base_request(
+            response_modalities=["text", "audio"],
+            speech_mode="always",
+            think=False,
+        )
+    )
+    events = [
+        json.loads(chunk)
+        for chunk in execute_stream(
+            parsed,
+            Config("http://comp", "omni", "http://language", "http://tts", 30),
+            httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+    ]
+
+    assert len(tts_texts) == len(_tts_text_blocks(text, {})) == 3
+    assert " ".join(tts_texts) == text
+    assert sum(event["type"] == "audio_start" for event in events) == 1
+    assert sum(event["type"] == "audio_delta" for event in events) == 3
+    final = events[-1]["response"]
+    decoded = decode_wav_payload(final["message"]["audio"])
+    assert decoded.frames == 6
+    assert final["adapter"]["tts_blocks"] == 3

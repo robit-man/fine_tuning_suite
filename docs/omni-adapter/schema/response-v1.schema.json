@@ -44,6 +44,7 @@
           }
         },
         "speech_synthesized": {"type": "boolean"},
+        "tts_blocks": {"type": "integer", "minimum": 1, "maximum": 32},
         "observation": {"type": "string"},
         "input_transcript": {"type": "string"},
         "audio_observation": {"type": "string"},

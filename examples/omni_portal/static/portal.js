@@ -10,16 +10,16 @@
   const MAX_VIDEO_RECORD_MS = 30_000;
   function fallbackCallVad() {
     const DEFAULTS = Object.freeze({
-      calibrationMs: 900,
-      startThreshold: 0.02,
-      releaseThreshold: 0.011,
-      noiseMultiplier: 3.0,
-      releaseMultiplier: 1.65,
-      startConfirmMs: 220,
+      calibrationMs: 650,
+      startThreshold: 0.012,
+      releaseThreshold: 0.007,
+      noiseMultiplier: 2.2,
+      releaseMultiplier: 1.45,
+      startConfirmMs: 120,
       silenceMs: 750,
-      minActiveMs: 320,
-      preRollFrames: 4,
-      initialNoiseFloor: 0.004,
+      minActiveMs: 220,
+      preRollFrames: 6,
+      initialNoiseFloor: 0.003,
     });
     const resetState = (vad, now = 0, { calibrate = false } = {}) => {
       vad.readyAt = now + (calibrate ? vad.config.calibrationMs : 0);
@@ -120,6 +120,7 @@
     audio: 30 * 1024 * 1024,
     image: 18 * 1024 * 1024,
     video: Math.min(68, Math.max(8, MAX_UPLOAD_MIB - 24)) * 1024 * 1024,
+    document: 24 * 1024 * 1024,
   };
 
   const elements = {
@@ -159,6 +160,7 @@
     speak: document.getElementById("speak-toggle"),
     think: document.getElementById("think-toggle"),
     send: document.getElementById("send-button"),
+    composer: document.querySelector(".composer"),
     composerStatus: document.getElementById("composer-status"),
     clear: document.getElementById("clear-button"),
     callButton: document.getElementById("call-button"),
@@ -234,13 +236,31 @@
 
   function scrollConversationToBottom({ smooth = true } = {}) {
     if (state.scrollFrame !== null) cancelAnimationFrame(state.scrollFrame);
+    if (!smooth) {
+      // Streaming deltas must pin immediately. A CSS/smooth animation restarted
+      // on every token can remain permanently behind the newest content.
+      elements.conversation.scrollTop = elements.conversation.scrollHeight;
+    }
     state.scrollFrame = requestAnimationFrame(() => {
       state.scrollFrame = null;
-      elements.conversation.scrollTo({
-        top: elements.conversation.scrollHeight,
-        behavior: smooth ? "smooth" : "auto",
-      });
+      if (smooth) {
+        elements.conversation.scrollTo({
+          top: elements.conversation.scrollHeight,
+          behavior: "smooth",
+        });
+      } else {
+        // Run once more after Markdown, media, or audio controls finish layout.
+        elements.conversation.scrollTop = elements.conversation.scrollHeight;
+      }
     });
+  }
+
+  const layoutResizeObserver = typeof window.ResizeObserver === "function"
+    ? new window.ResizeObserver(() => scrollConversationToBottom({ smooth: false }))
+    : null;
+  if (layoutResizeObserver) {
+    layoutResizeObserver.observe(elements.conversation);
+    layoutResizeObserver.observe(elements.composer);
   }
 
   function revealMessage(record) {
@@ -399,6 +419,14 @@
   }
 
   function loopingVideo(item, { ownsUrl = false } = {}) {
+    if (item.mime === "image/gif") {
+      const image = document.createElement("img");
+      image.className = "looping-video";
+      image.alt = "Looping preview of the sent animated GIF";
+      image.src = item.previewUrl;
+      if (ownsUrl) image.dataset.objectUrl = item.previewUrl;
+      return image;
+    }
     const video = document.createElement("video");
     video.className = "looping-video";
     video.autoplay = true;
@@ -416,7 +444,8 @@
 
   function appendMessageMedia(node, media) {
     const videos = (media || []).filter(item => item.kind === "video" && item.previewUrl);
-    if (!videos.length) return;
+    const documents = (media || []).filter(item => item.kind === "document");
+    if (!videos.length && !documents.length) return;
     const gallery = document.createElement("div");
     gallery.className = "message-media";
     for (const item of videos) {
@@ -424,8 +453,18 @@
       preview.className = "message-video-preview";
       preview.appendChild(loopingVideo(item, { ownsUrl: true }));
       const badge = document.createElement("span");
-      badge.textContent = "VIDEO · LOOP";
+      badge.textContent = item.mime === "image/gif" ? "GIF · LOOP" : "VIDEO · LOOP";
       preview.appendChild(badge);
+      gallery.appendChild(preview);
+    }
+    for (const item of documents) {
+      const preview = document.createElement("div");
+      preview.className = "message-document-preview";
+      const label = document.createElement("span");
+      label.textContent = "DOCUMENT";
+      const name = document.createElement("strong");
+      name.textContent = item.name;
+      preview.append(label, name);
       gallery.appendChild(preview);
     }
     node.appendChild(gallery);
@@ -436,6 +475,7 @@
     node.classList.add(role === "user" ? "user" : "assistant");
     if (error) node.classList.add("error");
     elements.conversation.appendChild(node);
+    if (layoutResizeObserver) layoutResizeObserver.observe(node);
     const record = { node, role, error, playback: Promise.resolve() };
     updateMessage(record, { content, thinking, audio, streaming });
     appendMessageMedia(node, media);
@@ -757,10 +797,22 @@
 
   function inferKind(file) {
     const mime = (file.type || "").toLowerCase();
-    if (mime === "audio/wav" || file.name.toLowerCase().endsWith(".wav")) return "audio";
+    const name = file.name.toLowerCase();
+    if (mime === "audio/wav" || name.endsWith(".wav")) return "audio";
+    if (mime === "image/gif" || name.endsWith(".gif")) return "video";
     if (mime.startsWith("image/")) return "image";
     if (mime === "video/mp4" || mime === "video/webm") return "video";
-    throw new Error("Choose a WAV, JPEG, PNG, WebP, MP4, or WebM file");
+    if (
+      mime === "application/pdf"
+      || mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      || mime.startsWith("text/")
+      || mime === "application/json"
+      || mime === "application/xml"
+      || mime.includes("yaml")
+      || mime.includes("toml")
+      || /\.(pdf|docx|txt|md|markdown|csv|tsv|log|json|jsonl|html?|xml|ya?ml|toml|ini|cfg|rst|sql|py|m?js|cjs|tsx?|jsx|css|sh|ps1|java|go|rs|c|h|cpp|hpp)$/.test(name)
+    ) return "document";
+    throw new Error("Choose supported audio, image, video/GIF, PDF, DOCX, or UTF-8 text/code");
   }
 
   function renderAttachments() {
@@ -779,7 +831,7 @@
       } else if (item.kind === "video" && item.previewUrl) {
         preview.appendChild(loopingVideo(item));
       } else {
-        preview.textContent = item.kind === "audio" ? "WAV" : "VID";
+        preview.textContent = item.kind === "audio" ? "WAV" : "DOC";
       }
       const body = document.createElement("div");
       body.className = "attachment-body";
@@ -834,7 +886,11 @@
     const item = {
       kind,
       name: file.name || `microphone-${Date.now()}.wav`,
-      mime: kind === "audio" ? "audio/wav" : file.type,
+      mime: kind === "audio"
+        ? "audio/wav"
+        : (kind === "video" && file.name.toLowerCase().endsWith(".gif")
+          ? "image/gif"
+          : (file.type || "application/octet-stream")),
       data: dataUrl.slice(comma + 1),
       bytes: file.size,
       source,
@@ -1294,35 +1350,37 @@
     };
   }
 
-  function startPendingCallTurn(call) {
-    if (state.call !== call || !call.pendingUtterance || !call.replyComplete) return;
-    const pending = call.pendingUtterance;
-    call.pendingUtterance = null;
-    call.replyComplete = false;
-    call.discardReply = false;
-    call.busy = true;
-    void submitCallUtterance(
-      call,
-      pending.chunks,
-      pending.activeDurationMs,
-    );
+  function callListeningStatus(call) {
+    const label = state.camera ? "Video call live" : "Call live";
+    return call.inflight
+      ? `${label} · ${call.inflight} processing · keep speaking`
+      : `${label} · listening`;
   }
 
-  function completeCallTurn(call) {
+  function flushCallHistory(call) {
+    while (call.completedHistory.has(call.nextHistorySequence)) {
+      const item = call.completedHistory.get(call.nextHistorySequence);
+      call.completedHistory.delete(call.nextHistorySequence);
+      call.nextHistorySequence += 1;
+      if (!item) continue;
+      if (item.frame) state.history = [];
+      state.history.push({ role: "user", content: item.transcript });
+      if (item.reply) state.history.push({ role: "assistant", content: item.reply });
+    }
+  }
+
+  function completeCallTurn(call, turn) {
+    call.controllers.delete(turn.controller);
+    call.turns.delete(turn);
+    call.inflight = Math.max(0, call.inflight - 1);
+    if (call.playbackTurn === turn) call.playbackTurn = null;
+    if (!turn.historyQueued) {
+      call.completedHistory.set(turn.sequence, null);
+      flushCallHistory(call);
+    }
     if (state.call !== call) return;
-    call.abortController = null;
-    call.replyComplete = true;
-    if (call.pendingUtterance) {
-      startPendingCallTurn(call);
-    } else if (call.bargeActive) {
-      setComposerStatus("Call · listening to interruption…");
-    } else {
-      callVad.resetState(call.bargeVad, performance.now());
-      setVadActive(call, false);
-      call.replyComplete = false;
-      call.discardReply = false;
-      call.busy = false;
-      setComposerStatus(state.camera ? "Video call live · listening" : "Call live · listening");
+    if (!call.vadActive && !call.playbackTurn) {
+      setComposerStatus(callListeningStatus(call));
     }
   }
 
@@ -1333,14 +1391,36 @@
       ? activeDurationMs
       : capturedDurationMs;
     if (confirmedDurationMs < callVad.DEFAULTS.minActiveMs || state.call !== call) {
-      call.replyComplete = true;
-      completeCallTurn(call);
       return;
     }
 
-    const envelope = await audioEnvelope(chunks, call.context.sampleRate);
-    if (state.call !== call) return;
-    const frame = await cameraFrameEnvelope();
+    const turn = {
+      sequence: call.nextSequence,
+      controller: new AbortController(),
+      discardReply: false,
+      historyQueued: false,
+      assistant: null,
+    };
+    call.nextSequence += 1;
+    call.inflight += 1;
+    call.turns.add(turn);
+    call.controllers.add(turn.controller);
+    setComposerStatus(callListeningStatus(call));
+
+    let envelope;
+    let frame;
+    try {
+      envelope = await audioEnvelope(chunks, call.context.sampleRate);
+      frame = await cameraFrameEnvelope();
+    } catch (error) {
+      completeCallTurn(call, turn);
+      showError(error);
+      return;
+    }
+    if (state.call !== call) {
+      completeCallTurn(call, turn);
+      return;
+    }
     const message = {
       role: "user",
       content: frame
@@ -1354,14 +1434,13 @@
       : [...state.history.slice(-12), message];
     const user = addMessage({ role: "user", content: frame ? "Video call message" : "Voice message" });
     const assistant = addMessage({ role: "assistant", content: "", streaming: true });
+    turn.assistant = assistant;
     assistant.node.hidden = true;
     let streamedContent = "";
     let streamedThinking = "";
     const showThinking = reasoningEnabled();
     let pcmController = null;
     let streamedAudio = false;
-    setComposerStatus(frame ? "Video call · understanding…" : "Call · understanding speech…");
-    call.abortController = new AbortController();
     try {
       const data = await streamChat(
         {
@@ -1376,7 +1455,7 @@
           portal_auto_tools: false,
         },
         {
-          signal: call.abortController.signal,
+          signal: turn.controller.signal,
           onEvent: event => {
             if (event.type === "observation" && event.transcript) {
               user.node.querySelector(".message-content").textContent = String(event.transcript);
@@ -1398,11 +1477,23 @@
             } else if (event.type === "stage" && event.stage === "tts") {
               setComposerStatus("Call · preparing voice…");
             } else if (event.type === "audio_start") {
-              pcmController = beginPcmPlayback();
-              streamedAudio = Boolean(pcmController);
-              if (pcmController) assistant.playback = pcmController.promise;
-              setComposerStatus("Call · streaming voice… say something to interrupt");
-            } else if (event.type === "audio_delta" && !call.discardReply) {
+              if (call.vadActive) turn.discardReply = true;
+              if (!turn.discardReply) {
+                if (call.playbackTurn && call.playbackTurn !== turn) {
+                  call.playbackTurn.discardReply = true;
+                  if (call.playbackTurn.assistant) {
+                    call.playbackTurn.assistant.node.classList.add("interrupted");
+                  }
+                  stopCurrentPlayback();
+                }
+                call.playbackTurn = turn;
+                pcmController = beginPcmPlayback();
+                streamedAudio = Boolean(pcmController);
+                if (pcmController) assistant.playback = pcmController.promise;
+                setComposerStatus("Call · voice ready…");
+              }
+            } else if (event.type === "audio_delta" && !turn.discardReply) {
+              setComposerStatus("Call · streaming voice… keep speaking to interrupt");
               queuePcmPlayback(pcmController, String((event.audio || {}).data || ""));
             } else if (event.type === "audio_end") {
               endPcmPlayback(pcmController);
@@ -1421,16 +1512,21 @@
       updateMessage(assistant, {
         content: reply.content || "Spoken response",
         thinking: showThinking ? (reply.thinking || streamedThinking) : "",
-        audio: call.discardReply ? null : reply.audio,
+        audio: turn.discardReply ? null : reply.audio,
         streaming: false,
         autoplayAudio: !streamedAudio,
       });
-      if (frame) state.history = [];
-      state.history.push({ role: "user", content: transcript });
-      if (reply.content) state.history.push({ role: "assistant", content: reply.content });
-      if (call.discardReply) {
+      turn.historyQueued = true;
+      call.completedHistory.set(turn.sequence, {
+        frame: Boolean(frame),
+        transcript,
+        reply: String(reply.content || ""),
+      });
+      flushCallHistory(call);
+      if (turn.discardReply) {
         assistant.node.classList.add("interrupted");
       } else {
+        call.playbackTurn = turn;
         setComposerStatus("Call · speaking… say something to interrupt");
         await assistant.playback;
       }
@@ -1439,7 +1535,7 @@
       if (error.name !== "AbortError") showError(error);
     } finally {
       assistant.node.classList.remove("streaming");
-      completeCallTurn(call);
+      completeCallTurn(call, turn);
     }
   }
 
@@ -1489,50 +1585,53 @@
       vad: callVad.createState(performance.now()),
       bargeVad: callVad.createState(performance.now(), BARGE_VAD_OPTIONS),
       vadActive: false,
-      busy: false,
-      bargeActive: false,
-      pendingUtterance: null,
-      replyComplete: false,
-      discardReply: false,
-      abortController: null,
+      captureVad: null,
+      inflight: 0,
+      nextSequence: 0,
+      nextHistorySequence: 0,
+      completedHistory: new Map(),
+      turns: new Set(),
+      controllers: new Set(),
+      playbackTurn: null,
       animationFrame: null,
     };
     processor.onaudioprocess = event => {
       if (state.call !== call) return;
       const now = performance.now();
       const samples = new Float32Array(event.inputBuffer.getChannelData(0));
-      const detection = callVad.processFrame(call.busy ? call.bargeVad : call.vad, {
+      const detector = call.captureVad || (call.playbackTurn ? call.bargeVad : call.vad);
+      const detection = callVad.processFrame(detector, {
         level: rms(samples),
         samples,
         now,
         frameMs: samples.length / call.context.sampleRate * 1000,
       });
+      if (["candidate", "start", "active"].includes(detection.event)) {
+        call.captureVad = detector;
+      }
       if (detection.event === "start") {
         setVadActive(call, true);
-        if (call.busy) {
-          call.bargeActive = true;
-          call.discardReply = true;
+        if (call.playbackTurn) {
+          const interrupted = call.playbackTurn;
+          interrupted.discardReply = true;
+          if (interrupted.assistant) interrupted.assistant.node.classList.add("interrupted");
+          call.playbackTurn = null;
           stopCurrentPlayback();
           setComposerStatus("Call · interruption heard…");
         } else {
-          setComposerStatus("Call · listening to you…");
+          setComposerStatus(call.inflight
+            ? `Call · listening · ${call.inflight} processing`
+            : "Call · listening to you…");
         }
       }
       if (detection.event === "rejected") {
-        call.bargeActive = false;
+        call.captureVad = null;
         setVadActive(call, false);
         return;
       }
       if (detection.event !== "utterance") return;
+      call.captureVad = null;
       setVadActive(call, false);
-      if (call.busy) {
-        call.pendingUtterance = detection.utterance;
-        call.bargeActive = false;
-        setComposerStatus("Call · interruption queued…");
-        startPendingCallTurn(call);
-        return;
-      }
-      call.busy = true;
       void submitCallUtterance(
         call,
         detection.utterance.chunks,
@@ -1564,7 +1663,8 @@
     const call = state.call;
     if (!call) return;
     state.call = null;
-    if (call.abortController) call.abortController.abort();
+    for (const controller of call.controllers) controller.abort();
+    call.controllers.clear();
     cancelAnimationFrame(call.animationFrame);
     call.processor.disconnect();
     call.source.disconnect();
@@ -1594,8 +1694,9 @@
     const audios = state.attachments.filter(item => item.kind === "audio");
     const images = state.attachments.filter(item => item.kind === "image");
     const videos = state.attachments.filter(item => item.kind === "video");
+    const documents = state.attachments.filter(item => item.kind === "document");
     const hasMedia = state.attachments.length > 0;
-    const audioOnly = audios.length > 0 && !images.length && !videos.length;
+    const audioOnly = audios.length > 0 && !images.length && !videos.length && !documents.length;
     if (!typed && !state.attachments.length) throw new Error("Enter a message or attach media");
 
     let task = "chat";
@@ -1605,6 +1706,10 @@
         "Listen to this audio, use both its speech and non-speech sounds as "
         + "evidence, then reply naturally and concisely."
       );
+    } else if (!typed && documents.length) {
+      content = (audios.length || images.length || videos.length)
+        ? "Use the attached document and media together, then explain the relevant evidence."
+        : "Summarize the attached document and identify its key details.";
     } else if (!typed && (images.length || videos.length)) {
       task = "describe";
       content = "Describe this media accurately.";
@@ -1619,6 +1724,12 @@
       data: item.data,
       sampling: { fps: 1, max_frames: 24, include_audio: true },
     }));
+    if (documents.length) message.documents = documents.map(item => ({
+      name: item.name,
+      mime_type: item.mime,
+      encoding: "base64",
+      data: item.data,
+    }));
 
     const wantsSpeech = elements.speak.getAttribute("aria-pressed") === "true";
     const wantsThinking = reasoningEnabled();
@@ -1632,7 +1743,7 @@
       replaceUserWithTranscript: !typed && audioOnly,
       wantsSpeech,
       wantsThinking,
-      display: typed || (audioOnly ? "Audio clip" : "Attached media"),
+      display: typed || (audioOnly ? "Audio clip" : (documents.length ? "Attached document" : "Attached media")),
       message,
       payload: {
         model: MODEL,
@@ -1731,8 +1842,9 @@
             pcmController = beginPcmPlayback();
             streamedAudio = Boolean(pcmController);
             if (pcmController) assistant.playback = pcmController.promise;
-            setComposerStatus("Streaming spoken reply…");
+            setComposerStatus("Voice ready…");
           } else if (event.type === "audio_delta") {
+            setComposerStatus("Streaming spoken reply…");
             queuePcmPlayback(pcmController, String((event.audio || {}).data || ""));
           } else if (event.type === "audio_end") {
             endPcmPlayback(pcmController);
@@ -1839,7 +1951,9 @@
     if (event.key === " " || event.key === "Enter") endMicHold(event);
   });
   elements.mediaInput.addEventListener("change", event => {
-    addFile(event.target.files[0]).then(() => setComposerStatus("Media attached")).catch(showError);
+    Promise.all([...event.target.files].map(file => addFile(file)))
+      .then(() => setComposerStatus("Attachment ready"))
+      .catch(showError);
     event.target.value = "";
   });
   elements.cameraButton.addEventListener("click", () => {
@@ -1889,6 +2003,7 @@
       for (const media of message.querySelectorAll("[data-object-url]")) {
         URL.revokeObjectURL(media.dataset.objectUrl);
       }
+      if (layoutResizeObserver) layoutResizeObserver.unobserve(message);
       message.remove();
     }
     setComposerStatus("Conversation cleared");
@@ -1899,6 +2014,7 @@
   }
 
   window.addEventListener("beforeunload", () => {
+    if (layoutResizeObserver) layoutResizeObserver.disconnect();
     if (state.camera) state.camera.stream.getTracks().forEach(track => track.stop());
     if (state.call) state.call.stream.getTracks().forEach(track => track.stop());
     if (state.recording) state.recording.stream.getTracks().forEach(track => track.stop());

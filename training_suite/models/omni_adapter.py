@@ -185,7 +185,7 @@ def adapter_contract() -> dict[str, Any]:
                 "max_items": MAX_MEDIA_PER_REQUEST["image"],
             },
             "video": {
-                "mime_types": ["video/mp4", "video/webm"],
+                "mime_types": ["video/mp4", "video/webm", "image/gif"],
                 "encoding": "base64",
                 "max_decoded_bytes": MAX_VIDEO_BYTES,
                 "max_items": MAX_MEDIA_PER_REQUEST["video"],
@@ -284,6 +284,8 @@ def _sniff_image(raw: bytes) -> str | None:
 
 
 def _sniff_video(raw: bytes) -> str | None:
+    if raw.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
     if len(raw) >= 12 and raw[4:8] == b"ftyp":
         return "video/mp4"
     if raw.startswith(b"\x1a\x45\xdf\xa3"):
@@ -362,7 +364,7 @@ def _parse_media_item(
     allowed = (
         {"image/jpeg", "image/png", "image/webp"}
         if kind == "image"
-        else {"video/mp4", "video/webm"}
+        else {"video/mp4", "video/webm", "image/gif"}
     )
     if declared_mime not in allowed:
         raise OmniAdapterError(f"unsupported {kind} MIME type {declared_mime!r}")

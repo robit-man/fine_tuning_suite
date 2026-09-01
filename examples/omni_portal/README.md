@@ -16,11 +16,20 @@ content.
 The phone UI is deliberately a single chat surface. Press and hold the
 microphone icon to record; the live waveform disappears on release and the
 resulting 16 kHz WAV appears as a playable attachment before it is sent. The
-paperclip accepts WAV, JPEG, PNG, WebP, MP4, and WebM. The speaker icon is the
+paperclip accepts WAV, JPEG, PNG, WebP, animated GIF, MP4, WebM, PDF, DOCX, and
+bounded UTF-8 text/code files. Multiple files can be attached together. The speaker icon is the
 only output toggle: gray requests text only, while yellow requests both text
 and synthesized audio. Assistant text renders a safe Markdown subset including
 headings, emphasis, lists, block quotes, links, and fenced code. Sending a turn
 clears the composer and attachments immediately.
+
+An audio attachment sent without typed text is a conversational turn, not a
+direct-ASR result. The portal briefly shows `Audio clip`, replaces that text in
+the originating user bubble with only the adapter's tagged verbatim
+`input_transcript`, and sends the separated transcript plus non-speech acoustic
+evidence through Qwen3.8. Only Qwen3.8's answer appears in the assistant bubble.
+Clients that need transcription without a language reply can still call the
+adapter explicitly with `omni.task="transcribe"`.
 
 The brain icon controls the real Ollama `think` request field. Gray is the
 default and sends the boolean `think:false`; violet explicitly sends
@@ -43,30 +52,34 @@ this provides bounded live visual conversation without presenting an unbounded
 video stream to the model context.
 
 The phone icon at the upper right starts hands-free voice mode. Browser-side
-voice activity detection first calibrates ambient noise for 900 ms, requires
-220 ms of sustained activity above an adaptive threshold, and closes an
+voice activity detection first calibrates ambient noise for 650 ms, requires
+120 ms of sustained activity above a more sensitive adaptive threshold, and closes an
 utterance after 750 ms of silence. It submits a 16 kHz WAV only after that
 confirmed utterance; quiet, transient clicks, and elevated steady room noise do
 not call remote ASR. The waveform border, line, and label remain translucent
 while inactive and become opaque only while VAD is active. Confirmed speech is
 sent through Qwen3-Omni and Qwen3.8, response text is relayed as Ollama produces
 it, and Qwen3-TTS speech is streamed back.
-The microphone remains active during inference and playback. Sustained speech
-stops current playback, records the interruption, and queues the new turn as
-soon as the in-flight generation releases the serial inference lane. Echo
-cancellation and a higher interruption threshold reduce self-triggering. The
-live waveform and status line show whether the portal is listening,
-understanding, preparing speech, speaking, or handling an interruption.
-Tap the phone icon again to stop capture, abort an in-flight request, and stop
-playback.
+The microphone remains active during inference and playback. Every confirmed
+speech segment is submitted immediately as its own request-local turn, even
+while earlier turns are queued or understanding; a single pending slot cannot
+overwrite continued speech. Sustained speech during playback stops the current
+audio while capture continues. Echo cancellation and a higher playback-time
+interruption threshold reduce self-triggering. The live waveform and status
+line show the number of processing turns while explicitly inviting the user to
+keep speaking. Tap the phone icon again to stop capture, abort every outstanding
+turn, and stop playback.
 
 | Composer action | Adapter route |
 |---|---|
 | Text chat | Qwen3.8 language |
-| Audio attachment with no prompt | Qwen3-Omni direct transcription |
+| Audio attachment with no prompt | Qwen3-Omni transcript/acoustic evidence → Qwen3.8 reply |
 | Audio attachment with a prompt | Qwen3-Omni comprehension → Qwen3.8 |
 | Image/video with no prompt | Qwen3-Omni direct description |
 | Image/video with a prompt | Qwen3-Omni comprehension → Qwen3.8 |
+| Silent video or animated GIF | bounded visual-only comprehension |
+| PDF/DOCX/text or code | extraction → session-isolated retrieval → Qwen3.8 |
+| Documents plus media | retrieved excerpts + current media observation → Qwen3.8 |
 | Device camera capture | live local preview → MP4/WebM turn → video comprehension |
 | Camera + phone icons | current visual frame + repeated speech turns → spoken replies |
 | Speaker icon enabled | final text → streamed Qwen3-TTS PCM → replayable 24 kHz WAV |
@@ -86,8 +99,24 @@ for a stable app-like mobile layout. Conversation text and decorative content
 also disable touch/mouse selection and iOS callouts; normal editing remains
 enabled in the composer and voice configuration fields.
 
-New user and assistant messages smoothly scroll the conversation to the newest
-turn. The small number beside **ONLINE** reports distinct browser sessions with
+The TTS stage status means the speech request has started. It changes to
+streaming only after the adapter receives the first actual PCM bytes; an
+`audio_start` event is never emitted merely because a TTS HTTP request was
+opened. This makes the UI and timing journal distinguish model/prefill latency
+from network or browser playback buffering.
+
+The 512-frame voice setting is a per-generation ceiling (roughly 42.7 seconds
+at 12 Hz). Replies that would exceed it are split at natural sentence/word
+boundaries, streamed as one continuous PCM sequence with the same pinned voice
+configuration, and assembled into one complete replay WAV. This prevents the
+former approximately 40-second truncation; the final adapter trace exposes the
+number of generated `tts_blocks`.
+
+The viewport is a fixed three-row grid, so the conversation—not the page—is the
+scroll container. New user and assistant messages pin it to the newest turn;
+streaming token updates use immediate scrolling so repeated deltas cannot keep
+restarting a smooth animation behind the response. The small number beside
+**ONLINE** reports distinct browser sessions with
 an active or queued inference request; it is an aggregate only and is never
 used as conversation state.
 
@@ -99,6 +128,23 @@ available context, the adapter retries only the comprehension stage with
 progressively smaller frame caps (24/16/8/4/1 as applicable). A recorded video
 turn therefore retains temporal comprehension whenever it fits; camera-call
 mode uses one current frame per speech turn for lower latency.
+
+MP4/WebM clips without an audio track are accepted as visual-only media. The
+adapter probes for an audio stream before demux and simply omits the audio part
+when none exists. Animated GIF is shown in a loop in the originating user turn
+and normalized to a maximum 30-second, frame-bounded MP4 for the same temporal
+comprehension path.
+
+PDF, DOCX, and UTF-8 text/code uploads are handled by the portal rather than the
+portable adapter ABI. PDF extraction is capped at 200 pages, DOCX ZIP expansion
+is bounded, binary/unsupported text is rejected, and extracted text is chunked
+into a 384-dimension deterministic hashed lexical index. Retrieval is capped at
+eight chunks/12,000 characters per turn and injected as explicitly untrusted
+document data. Raw files and extracted chunks remain only in memory, are keyed
+by the opaque Secure browser-session cookie, clear with the trash button, and
+expire five minutes after activity stops. This is retrieval over extracted text,
+not a claim that PDF pixels or arbitrary office formats are natively understood
+by the GGUF.
 
 Every comprehension request explicitly sets llama.cpp `cache_prompt:false`.
 Prompt-slot reuse is safe for ordinary token prefixes but the pinned
@@ -297,8 +343,10 @@ media base64 or the access token.
   responses, streaming iterators, voice settings, and tool rounds are
   request-local.
 - Conversation history is browser-page-local. The portal stores no message,
-  media, observation, KV-cache, or generated response as server-side session
-  state, so one user's content cannot become another user's context.
+  media, observation, KV-cache, or generated response as shared server state.
+  Its only content-bearing server session state is the bounded in-memory
+  document chunk index, keyed by a hash of the opaque session cookie and never
+  addressable across sessions.
 - A random, Secure, HttpOnly, SameSite=Strict cookie partitions the aggregate
   activity count and ephemeral diagnostic journal. It is never supplied to a
   model or used to recover conversation context. `/api/activity` exposes only
@@ -311,7 +359,7 @@ media base64 or the access token.
   are purged five minutes after the session heartbeat stops.
 - The trash button aborts the page's active request/call, stops playback,
   clears browser conversation state, and deletes that session's diagnostic
-  journal immediately. A late completion from the aborted request cannot
+  journal and document index immediately. A late completion from the aborted request cannot
   recreate the deleted journal; a genuinely new request starts a new one.
 - Encoded JSON is limited to 96 MiB.
 - The browser caps decoded image, video, and audio sizes below adapter limits.
@@ -321,9 +369,10 @@ media base64 or the access token.
   `get_portal_capabilities`; unknown names return an error result and cannot
   execute programs, access files, or make network requests.
 - Media observations remain untrusted evidence at the adapter boundary.
-- During calls, only the adapter's tagged `input_transcript` is rendered in the
-  user bubble. Raw perception output is never attributed to the user, and the
-  pending assistant card remains hidden until an assistant delta is available.
+- During audio-only sends and calls, only the adapter's tagged
+  `input_transcript` is rendered in the user bubble. Raw perception output is
+  never attributed to the user, and the pending assistant card remains hidden
+  until an assistant delta is available.
 - Re-recording with the camera replaces the prior unsent camera clip, so only
   the latest captured segment enters a request. The exact submitted clip is
   retained as a muted looping video thumbnail on its user message; separately
@@ -333,11 +382,12 @@ media base64 or the access token.
   newest media turn becomes the context for subsequent text-only follow-ups.
   Visual-call turns likewise use only the current frame; audio-only calls keep
   their conversational history.
-- Audio attached with a text question performs combined ASR and environmental
-  sound analysis. Speech is exposed separately from non-speech events, ambience,
+- Every chat audio attachment performs combined ASR and environmental sound
+  analysis. Speech is exposed separately from non-speech events, ambience,
   music, speaker activity, and temporal changes, so acoustic observations reach
-  the language model without appearing as user-authored transcript text. An
-  audio-only send retains the direct, low-latency ASR behavior.
+  the language model without appearing as user-authored transcript text. For an
+  unprompted clip, the tagged speech transcript replaces the temporary user
+  placeholder and the language-model answer remains a separate assistant turn.
 
 Cloudflare Quick Tunnels are temporary development endpoints, not durable
 production ingress. Stop the portal after the phone test. For a persistent

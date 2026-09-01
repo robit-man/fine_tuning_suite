@@ -18,6 +18,7 @@ from examples.omni_portal.app import (
     create_app,
     load_voice_profile,
 )
+from examples.omni_portal.documents import SessionDocumentStore, extract_document
 
 TOKEN = "portal-test-token-with-more-than-24-characters"
 
@@ -71,6 +72,9 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
     assert b'id="voice-clone-enabled"' in response.data
     assert b'id="voice-reference-input"' in response.data
     assert b'id="active-user-count"' in response.data
+    assert b"application/pdf" in response.data
+    assert b"image/gif" in response.data
+    assert b"multiple" in response.data
     assert response.data.index(b"/assets/call_vad.js") < response.data.index(
         b"/assets/portal.js"
     )
@@ -140,17 +144,32 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert 'task === "chat" && !hasMedia' in javascript
     assert "if (built.hasMedia) state.history = []" in javascript
     assert "const callMessages = frame" in javascript
-    assert "if (frame) state.history = []" in javascript
+    assert "if (item.frame) state.history = []" in javascript
     assert "function scrollConversationToBottom" in javascript
-    assert "behavior: smooth ? \"smooth\" : \"auto\"" in javascript
+    assert 'behavior: "smooth"' in javascript
+    assert "elements.conversation.scrollTop = elements.conversation.scrollHeight" in javascript
+    assert "new window.ResizeObserver" in javascript
+    assert 'composer: document.querySelector(".composer")' in javascript
+    assert "layoutResizeObserver.observe(node)" in javascript
+    assert "scroll-behavior: smooth" not in css
+    assert ".app-shell {\n  display: flex;\n  height: 100dvh;" in css
+    assert "max-height: 100dvh;\n  overflow: hidden;" in css
     assert "callVad.processFrame" in javascript
     assert "setVadActive(call, true)" in javascript
+    assert "controllers: new Set()" in javascript
+    assert "call.controllers.add(turn.controller)" in javascript
+    assert "for (const controller of call.controllers) controller.abort()" in javascript
+    assert "pendingUtterance" not in javascript
+    assert "call.busy" not in javascript
     assert ".waveform.calling.vad-active" in css
     assert "function refreshActivity" in javascript
     assert "function reportDiagnostic" in javascript
     assert "function clearSessionDiagnostics" in javascript
     assert 'nextTime: context.currentTime + 0.02' in javascript
     assert "controller.context.currentTime + 0.01" in javascript
+    assert 'const documents = state.attachments.filter(item => item.kind === "document")' in javascript
+    assert "message.documents" in javascript
+    assert 'item.mime === "image/gif"' in javascript
 
 
 def test_mock_call_vad_harness_rejects_noise_and_accepts_confirmed_events() -> None:
@@ -169,6 +188,8 @@ def test_mock_call_vad_harness_rejects_noise_and_accepts_confirmed_events() -> N
         "elevated_room_noise": 0,
         "sustained_speech": 1,
         "sustained_alarm": 1,
+        "quiet_speech": 1,
+        "continued_speech_segments": 2,
     }
 
 
@@ -204,6 +225,9 @@ def test_portal_status_probes_all_internal_stages() -> None:
         "environmental_sound_analysis": True,
         "evidence_field": "adapter.audio_observation",
     }
+    assert response.json["documents"]["retrieval"] == (
+        "session-isolated hashed lexical embeddings"
+    )
     assert response.json["voice_profile"]["client_reference_wav"] is True
     assert response.json["requests"] == {
         "users": 0,
@@ -213,6 +237,100 @@ def test_portal_status_probes_all_internal_stages() -> None:
         "slots": 1,
         "limit": 4,
     }
+
+
+def test_document_store_retrieves_per_session_and_clears() -> None:
+    store = SessionDocumentStore(ttl_s=300)
+    first = {
+        "name": "alpha.txt",
+        "mime_type": "text/plain",
+        "encoding": "base64",
+        "data": base64.b64encode(
+            b"Orchid launch code is seven. The control room is amber."
+        ).decode("ascii"),
+    }
+    second = {
+        "name": "beta.txt",
+        "mime_type": "text/plain",
+        "encoding": "base64",
+        "data": base64.b64encode(
+            b"Marigold launch code is nine. The control room is blue."
+        ).decode("ascii"),
+    }
+
+    first_context, _ = store.prepare("session-one", [first], "orchid code")
+    second_context, _ = store.prepare("session-two", [second], "marigold code")
+
+    assert "alpha.txt" in first_context and "seven" in first_context
+    assert "beta.txt" not in first_context and "nine" not in first_context
+    assert "beta.txt" in second_context and "nine" in second_context
+    assert "alpha.txt" not in second_context and "seven" not in second_context
+    store.clear("session-one")
+    assert store.stats("session-one") == {"documents": 0, "chunks": 0, "chars": 0}
+    assert store.stats("session-two")["documents"] == 1
+
+
+def test_pdf_extraction_is_bounded_through_pdftotext(monkeypatch) -> None:
+    def run(command, **_kwargs):
+        Path(command[-1]).write_text("Extracted PDF evidence.")
+        return type("Completed", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
+
+    monkeypatch.setattr("examples.omni_portal.documents.subprocess.run", run)
+
+    assert extract_document("brief.pdf", "application/pdf", b"%PDF-1.7\n") == (
+        "Extracted PDF evidence."
+    )
+
+
+def test_portal_indexes_documents_and_sends_only_retrieved_text() -> None:
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append(body)
+        return httpx.Response(
+            200,
+            json={
+                "model": DEFAULT_MODEL,
+                "message": {"role": "assistant", "content": "Found it."},
+                "adapter": {"route": ["language"]},
+            },
+        )
+
+    app = create_app(_config(), httpx.Client(transport=httpx.MockTransport(handler)))
+    client = app.test_client()
+    client.get("/")
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    document = {
+        "name": "notes.md",
+        "mime_type": "text/markdown",
+        "encoding": "base64",
+        "data": base64.b64encode(b"The copper switch enables the archive.").decode(
+            "ascii"
+        ),
+    }
+
+    response = client.post(
+        "/api/chat",
+        headers=headers,
+        json=_request(
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Which switch enables the archive?",
+                    "documents": [document],
+                }
+            ]
+        ),
+    )
+
+    assert response.status_code == 200
+    upstream_message = seen[0]["messages"][-1]
+    assert "documents" not in upstream_message
+    assert "portal_document_context" in upstream_message["content"]
+    assert "notes.md" in upstream_message["content"]
+    assert "copper switch" in upstream_message["content"]
+    assert response.json["portal"]["documents_indexed"][0]["name"] == "notes.md"
 
 
 def test_portal_queues_concurrent_sessions_without_context_bleed() -> None:

@@ -88,6 +88,10 @@ The reference Qwen3-TTS Base worker supports `language`, trusted server-local
 MiB and 0.5–30 seconds and is removed after its generation. Other fields are
 backend capabilities, not portable guarantees. In particular, its current
 llama.cpp API has no separate natural-language style-instruction channel.
+The reference adapter treats `max_frames` as a per-block ceiling: long replies
+are split at natural text boundaries, PCM sequence numbering remains continuous,
+and the complete final WAV concatenates every block. The adapter trace reports
+the number as `tts_blocks`.
 
 ## Message media fields
 
@@ -159,9 +163,12 @@ declared type MUST match the decoded container signature.
 }
 ```
 
-Supported containers are MP4 and WebM. Container support does not imply every
-codec is decodable; the runtime SHOULD use FFmpeg or another sandboxed decoder
-and return a media error for unsupported streams.
+Supported inputs are MP4, WebM, and animated GIF. The reference runtime
+normalizes GIF to a bounded, silent MP4 before comprehension. MP4/WebM clips
+with no audio stream are valid visual-only inputs; optional audio demux MUST
+return no audio part rather than failing the video turn. Container support does
+not imply every codec is decodable; the runtime SHOULD use FFmpeg or another
+sandboxed decoder and return a media error for unsupported streams.
 
 Sampling fields:
 
@@ -173,6 +180,13 @@ Sampling fields:
 The runtime MUST preserve frame order and SHOULD record source timestamps. If
 it clips or subsamples due to context limits, the response adapter trace SHOULD
 report the actual frame count and covered time range.
+
+Documents are intentionally not part of adapter v1. A portal or application
+MAY extract and retrieve document text before forwarding a normal text message,
+but it MUST remove raw document envelopes, mark retrieved excerpts as untrusted
+data, bound the inserted context, and isolate any retrieval index per user
+session. This keeps the portable adapter concerned with model-native media
+while allowing PDF/DOCX/text workflows in the reference portal.
 
 ## Tasks and routes
 

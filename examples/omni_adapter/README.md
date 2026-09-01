@@ -95,7 +95,7 @@ accepts these `speech`/`POST /synthesize` fields:
 | `top_k` | Semantic-token top-k, default `40` |
 | `top_p` | Semantic-token nucleus threshold, default `0.9` |
 | `seed` | Fixed integer for reproducibility; default `42`, `-1` is random |
-| `max_frames` | Maximum generated codec frames, capped by the server |
+| `max_frames` | Maximum generated codec frames per bounded synthesis block, capped by the server |
 
 The installed llama.cpp Qwen3-TTS Base path exposes speaker-embedding cloning
 but not the official Python runtime's `ref_audio + ref_text` in-context clone
@@ -197,6 +197,19 @@ turns add `audio_start`, base64 `audio_delta` PCM16 chunks, and `audio_end`
 before the final event. The final message still contains a complete WAV for
 replay and compatibility. Clients must not interpret NDJSON or HTTP transport
 chunk boundaries as codec-frame boundaries.
+
+`audio_start` is emitted only when the first real PCM bytes have arrived from
+Qwen3-TTS. The preceding `stage=tts` event means synthesis has started but is
+not a promise that playback data is ready. Clients should show a preparing
+state for the stage event and switch to streaming/playback on the first audio
+event or delta.
+
+Long text is split at sentence/word boundaries before the per-generation codec
+frame ceiling. Each block uses the same voice, seed, and sampling controls;
+stream sequence numbers continue across blocks, and the final response contains
+one WAV assembled from every PCM block. `adapter.tts_blocks` reports the block
+count. `OMNI_TTS_BLOCK_CHARS` defaults to 420 (bounded to 80–2,000), and one
+request is limited to 32 blocks.
 
 For media `chat`, comprehension is perception-only: it cannot answer the user.
 Its output uses `<speech_transcript>`, `<audio_observation>`, and

@@ -25,7 +25,7 @@ IMAGE_MIME = {
     ".png": "image/png",
     ".webp": "image/webp",
 }
-VIDEO_MIME = {".mp4": "video/mp4", ".webm": "video/webm"}
+VIDEO_MIME = {".mp4": "video/mp4", ".webm": "video/webm", ".gif": "image/gif"}
 
 
 def _envelope(path: Path, mime_type: str, **extra: Any) -> dict[str, Any]:

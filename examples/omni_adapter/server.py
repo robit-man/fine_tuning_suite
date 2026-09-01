@@ -93,6 +93,9 @@ class AdapterStageError(RuntimeError):
 
 MAX_VIDEO_FRAMES = 32
 MAX_VIDEO_FPS = 2.0
+MAX_GIF_SECONDS = 30
+DEFAULT_TTS_BLOCK_CHARS = 420
+MAX_TTS_BLOCKS = 32
 THINK_OPEN = "<think>"
 THINK_CLOSE = "</think>"
 THINK_BLOCK = re.compile(r"<think>(.*?)</think>", re.IGNORECASE | re.DOTALL)
@@ -274,12 +277,40 @@ class _ThinkingTagStream:
         return "".join(visible), "".join(thinking)
 
 
+def _video_has_audio(source: Path) -> bool:
+    completed = subprocess.run(
+        [
+            os.environ.get("FFPROBE_BIN", "ffprobe"),
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=index",
+            "-of",
+            "csv=p=0",
+            str(source),
+        ],
+        check=False,
+        capture_output=True,
+        timeout=float(os.environ.get("OMNI_FFMPEG_TIMEOUT_S", "120")),
+    )
+    if completed.returncode != 0:
+        diagnostic = completed.stderr.decode("utf-8", errors="replace")[-1000:]
+        raise AdapterStageError(f"video stream probe failed: {diagnostic}")
+    return bool(completed.stdout.strip())
+
+
 def _video_audio(media: MediaItem) -> str | None:
+    if media.mime_type == "image/gif":
+        return None
     suffix = ".mp4" if media.mime_type == "video/mp4" else ".webm"
     with tempfile.TemporaryDirectory(prefix="robit-omni-video-") as temp_dir:
         source = Path(temp_dir) / ("input" + suffix)
         output = Path(temp_dir) / "audio.wav"
         source.write_bytes(media.data)
+        if not _video_has_audio(source):
+            return None
         completed = subprocess.run(
             [
                 os.environ.get("FFMPEG_BIN", "ffmpeg"),
@@ -290,7 +321,7 @@ def _video_audio(media: MediaItem) -> str | None:
                 "-i",
                 str(source),
                 "-map",
-                "0:a:0?",
+                "0:a:0",
                 "-vn",
                 "-ac",
                 "1",
@@ -310,6 +341,54 @@ def _video_audio(media: MediaItem) -> str | None:
         if not output.is_file() or output.stat().st_size <= 44:
             return None
         return base64.b64encode(output.read_bytes()).decode("ascii")
+
+
+def _normalized_video_data(
+    media: MediaItem,
+    *,
+    fps: float,
+    max_frames: int,
+) -> bytes:
+    if media.mime_type != "image/gif":
+        return media.data
+    with tempfile.TemporaryDirectory(prefix="robit-omni-gif-") as temp_dir:
+        source = Path(temp_dir) / "input.gif"
+        output = Path(temp_dir) / "output.mp4"
+        source.write_bytes(media.data)
+        completed = subprocess.run(
+            [
+                os.environ.get("FFMPEG_BIN", "ffmpeg"),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(source),
+                "-t",
+                str(MAX_GIF_SECONDS),
+                "-vf",
+                f"fps={fps:g},scale='min(1280,iw)':-2:flags=lanczos",
+                "-frames:v",
+                str(max_frames),
+                "-an",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                str(output),
+            ],
+            check=False,
+            capture_output=True,
+            timeout=float(os.environ.get("OMNI_FFMPEG_TIMEOUT_S", "120")),
+        )
+        if completed.returncode != 0:
+            diagnostic = completed.stderr.decode("utf-8", errors="replace")[-1000:]
+            raise AdapterStageError(f"GIF normalization failed: {diagnostic}")
+        if not output.is_file() or output.stat().st_size == 0:
+            raise AdapterStageError("GIF normalization returned no video")
+        return output.read_bytes()
 
 
 def _content_parts(
@@ -341,9 +420,14 @@ def _content_parts(
             )
         except (TypeError, ValueError) as exc:
             raise AdapterStageError("video sampling values must be numeric") from exc
+        normalized = _normalized_video_data(
+            media,
+            fps=float(sampling["fps"]),
+            max_frames=int(sampling["max_frames"]),
+        )
         video_part: dict[str, Any] = {
             "type": "input_video",
-            "input_video": {"data": base64.b64encode(media.data).decode("ascii")},
+            "input_video": {"data": base64.b64encode(normalized).decode("ascii")},
             "sampling": sampling,
         }
         parts.append(video_part)
@@ -593,6 +677,87 @@ def _tts_wav(response: httpx.Response) -> bytes:
         raise AdapterStageError(f"tts returned invalid audio: {exc}") from exc
 
 
+def _tts_text_blocks(text: str, speech: Mapping[str, Any]) -> list[str]:
+    """Split speech at natural boundaries before a per-generation frame cap."""
+
+    normalized = re.sub(r"[ \t\r\f\v]+", " ", text).strip()
+    if not normalized:
+        return []
+    try:
+        configured = int(
+            os.environ.get("OMNI_TTS_BLOCK_CHARS", str(DEFAULT_TTS_BLOCK_CHARS))
+        )
+        max_frames = int(speech.get("max_frames", 512))
+    except (TypeError, ValueError) as exc:
+        raise AdapterStageError("TTS block and max-frame values must be integers") from exc
+    configured = max(80, min(2_000, configured))
+    frame_capacity = max(80, round(DEFAULT_TTS_BLOCK_CHARS * max_frames / 512))
+    limit = min(configured, frame_capacity)
+    sentences = [
+        item.strip()
+        for item in re.split(r"(?<=[.!?])\s+|\n+", normalized)
+        if item.strip()
+    ]
+    units: list[str] = []
+    for sentence in sentences:
+        remaining = sentence
+        while len(remaining) > limit:
+            split_at = remaining.rfind(" ", 0, limit + 1)
+            if split_at < limit // 2:
+                split_at = limit
+            units.append(remaining[:split_at].strip())
+            remaining = remaining[split_at:].strip()
+        if remaining:
+            units.append(remaining)
+    blocks: list[str] = []
+    for unit in units:
+        candidate = f"{blocks[-1]} {unit}" if blocks else unit
+        if blocks and len(candidate) <= limit:
+            blocks[-1] = candidate
+        else:
+            blocks.append(unit)
+    if len(blocks) > MAX_TTS_BLOCKS:
+        raise AdapterStageError(
+            f"spoken response requires {len(blocks)} blocks; limit is {MAX_TTS_BLOCKS}"
+        )
+    return blocks
+
+
+def _wav_pcm(wav_bytes: bytes) -> bytes:
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wav:
+            if (
+                wav.getcomptype() != "NONE"
+                or wav.getframerate() != 24000
+                or wav.getnchannels() != 1
+                or wav.getsampwidth() != 2
+            ):
+                raise AdapterStageError(
+                    "TTS block must be uncompressed 24 kHz mono PCM16 WAV"
+                )
+            return wav.readframes(wav.getnframes())
+    except (wave.Error, EOFError) as exc:
+        raise AdapterStageError(f"TTS block returned an invalid WAV: {exc}") from exc
+
+
+def _synthesize_wav_blocks(
+    text: str,
+    parsed: ParsedAdapterRequest,
+    config: Config,
+    client: httpx.Client,
+) -> tuple[bytes, int]:
+    blocks = _tts_text_blocks(text, parsed.speech)
+    pcm_parts: list[bytes] = []
+    for block in blocks:
+        tts_payload = {
+            "text": block,
+            "output": DEFAULT_AUDIO_CONTRACT.output.to_dict(),
+            **dict(parsed.speech),
+        }
+        pcm_parts.append(_wav_pcm(_tts_wav(client.post(config.tts_url, json=tts_payload))))
+    return _pcm16_wav(b"".join(pcm_parts)), len(blocks)
+
+
 def _finish_response(
     result: dict[str, Any],
     parsed: ParsedAdapterRequest,
@@ -610,6 +775,7 @@ def _finish_response(
     _normalize_reasoning(message, enabled=_thinking_requested(parsed))
     tool_calls = message.get("tool_calls")
     wants_tts = parsed.synthesize and not tool_calls and "tts" not in executed
+    tts_blocks = 0
     tts_skipped_reason: str | None = None
     if parsed.synthesize and tool_calls:
         tts_skipped_reason = "unresolved_tool_calls"
@@ -617,12 +783,7 @@ def _finish_response(
         text = str(message.get("content") or "").strip()
         if not text:
             raise AdapterStageError("tts route has no assistant text to synthesize")
-        tts_payload = {
-            "text": text,
-            "output": DEFAULT_AUDIO_CONTRACT.output.to_dict(),
-            **dict(parsed.speech),
-        }
-        wav = _tts_wav(client.post(config.tts_url, json=tts_payload))
+        wav, tts_blocks = _synthesize_wav_blocks(text, parsed, config, client)
         message["audio"] = encode_audio_response(wav, transcript=text)
         executed.append("tts")
 
@@ -635,6 +796,8 @@ def _finish_response(
         "text_streamed": text_streamed,
         "audio_streamed": audio_streamed,
     }
+    if tts_blocks:
+        result["adapter"]["tts_blocks"] = tts_blocks
     if observation is not None:
         result["adapter"]["observation"] = observation
         transcript = _observation_transcript(observation)
@@ -854,6 +1017,7 @@ def execute_stream(
         executed.append("language")
 
     audio_streamed = False
+    tts_block_count = 0
     message = result.get("message")
     if not isinstance(message, dict):
         raise AdapterStageError("result contains no Ollama message object")
@@ -861,61 +1025,70 @@ def execute_stream(
         text = str(message.get("content") or "").strip()
         if not text:
             raise AdapterStageError("tts route has no assistant text to synthesize")
-        yield _stream_event("stage", stage="tts")
-        yield _stream_event(
-            "audio_start",
-            audio={
-                "codec": "pcm_s16le",
-                "sample_rate_hz": 24000,
-                "channels": 1,
-                "sample_width_bits": 16,
-            },
-        )
-        tts_payload = {
-            "text": text,
-            "output": DEFAULT_AUDIO_CONTRACT.output.to_dict(),
-            **dict(parsed.speech),
-        }
+        text_blocks = _tts_text_blocks(text, parsed.speech)
+        tts_block_count = len(text_blocks)
+        yield _stream_event("stage", stage="tts", blocks=tts_block_count)
         chunks: list[bytes] = []
-        pending = b""
         sequence = 0
-        with client.stream(
-            "POST", config.tts_url.rstrip("/") + "/stream", json=tts_payload
-        ) as response:
-            if response.status_code >= 400:
-                response.read()
+        for block_index, block in enumerate(text_blocks):
+            tts_payload = {
+                "text": block,
+                "output": DEFAULT_AUDIO_CONTRACT.output.to_dict(),
+                **dict(parsed.speech),
+            }
+            pending = b""
+            with client.stream(
+                "POST", config.tts_url.rstrip("/") + "/stream", json=tts_payload
+            ) as response:
+                if response.status_code >= 400:
+                    response.read()
+                    raise AdapterStageError(
+                        f"tts stream block {block_index + 1}/{tts_block_count} "
+                        f"returned HTTP {response.status_code}: {response.text[:500]}"
+                    )
+                if response.headers.get("x-audio-codec") not in {None, "pcm_s16le"}:
+                    raise AdapterStageError("tts stream returned an unsupported codec")
+                for raw in response.iter_bytes():
+                    data = pending + raw
+                    complete = len(data) - (len(data) % 2)
+                    pending = data[complete:]
+                    chunk = data[:complete]
+                    if not chunk:
+                        continue
+                    if not audio_streamed:
+                        yield _stream_event(
+                            "audio_start",
+                            audio={
+                                "codec": "pcm_s16le",
+                                "sample_rate_hz": 24000,
+                                "channels": 1,
+                                "sample_width_bits": 16,
+                                "blocks": tts_block_count,
+                            },
+                        )
+                        audio_streamed = True
+                    chunks.append(chunk)
+                    yield _stream_event(
+                        "audio_delta",
+                        audio={
+                            "sequence": sequence,
+                            "block": block_index,
+                            "blocks": tts_block_count,
+                            "encoding": "base64",
+                            "data": base64.b64encode(chunk).decode("ascii"),
+                        },
+                    )
+                    sequence += 1
+            if pending:
                 raise AdapterStageError(
-                    f"tts stream returned HTTP {response.status_code}: "
-                    f"{response.text[:500]}"
+                    f"tts PCM stream block {block_index + 1} ended on a partial sample"
                 )
-            if response.headers.get("x-audio-codec") not in {None, "pcm_s16le"}:
-                raise AdapterStageError("tts stream returned an unsupported codec")
-            for raw in response.iter_bytes():
-                data = pending + raw
-                complete = len(data) - (len(data) % 2)
-                pending = data[complete:]
-                chunk = data[:complete]
-                if not chunk:
-                    continue
-                chunks.append(chunk)
-                yield _stream_event(
-                    "audio_delta",
-                    audio={
-                        "sequence": sequence,
-                        "encoding": "base64",
-                        "data": base64.b64encode(chunk).decode("ascii"),
-                    },
-                )
-                sequence += 1
-        if pending:
-            raise AdapterStageError("tts PCM stream ended on a partial sample")
         pcm = b"".join(chunks)
         if not pcm:
             raise AdapterStageError("tts stream returned no PCM audio")
         wav = _pcm16_wav(pcm)
         message["audio"] = encode_audio_response(wav, transcript=text)
         executed.append("tts")
-        audio_streamed = True
         yield _stream_event(
             "audio_end", samples=len(pcm) // 2, decoded_bytes=len(pcm)
         )
@@ -929,6 +1102,8 @@ def execute_stream(
         text_streamed=True,
         audio_streamed=audio_streamed,
     )
+    if tts_block_count:
+        result["adapter"]["tts_blocks"] = tts_block_count
     yield _stream_event("final", response=result)
 
 

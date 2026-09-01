@@ -63,10 +63,10 @@
         <div class="composer-box">
           <textarea id="prompt" rows="1" maxlength="12000" aria-label="Message" placeholder="Message Omni"></textarea>
           <div class="actions">
-            <label class="icon-button" for="media-input" aria-label="Attach audio, image, or video" title="Attach media">
+            <label class="icon-button" for="media-input" aria-label="Attach media or documents" title="Attach media or documents">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8.5 12.5 6.7-6.7a3 3 0 0 1 4.2 4.2l-9.2 9.2a5 5 0 0 1-7.1-7.1l9-9m-5.5 11.3 8.6-8.6"/></svg>
             </label>
-            <input id="media-input" type="file" accept="audio/wav,.wav,image/jpeg,image/png,image/webp,video/mp4,video/webm" hidden>
+            <input id="media-input" type="file" multiple accept="audio/wav,.wav,image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,text/*,.md,.markdown,.json,.jsonl,.yaml,.yml,.toml,.ini,.cfg,.rst,.sql,.py,.js,.mjs,.ts,.tsx,.jsx,.css,.sh,.ps1,.java,.go,.rs,.c,.h,.cpp,.hpp" hidden>
 
             <button class="icon-button mic-button" id="mic-button" type="button" aria-label="Hold to record microphone" title="Hold to record">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3m-4 0h8"/></svg>

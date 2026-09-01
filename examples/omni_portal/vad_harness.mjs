@@ -33,6 +33,14 @@ assert.equal(remoteRequests([...calibratedNoise, ...frames(40, 0.18), ...trailin
 assert.equal(remoteRequests([...frames(1000, 0.025), ...frames(2500, 0.026)]), 0);
 assert.equal(remoteRequests([...calibratedNoise, ...frames(720, 0.085), ...trailingSilence]), 1);
 assert.equal(remoteRequests([...calibratedNoise, ...frames(680, 0.065), ...trailingSilence]), 1);
+assert.equal(remoteRequests([...calibratedNoise, ...frames(420, 0.018), ...trailingSilence]), 1);
+assert.equal(remoteRequests([
+  ...calibratedNoise,
+  ...frames(720, 0.085),
+  ...trailingSilence,
+  ...frames(680, 0.065),
+  ...trailingSilence,
+]), 2);
 
 console.log(JSON.stringify({
   status: "passed",
@@ -42,5 +50,7 @@ console.log(JSON.stringify({
     elevated_room_noise: 0,
     sustained_speech: 1,
     sustained_alarm: 1,
+    quiet_speech: 1,
+    continued_speech_segments: 2,
   },
 }, null, 2));

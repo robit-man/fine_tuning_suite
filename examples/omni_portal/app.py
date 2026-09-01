@@ -39,6 +39,7 @@ from flask import (
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from examples.omni_portal.documents import DocumentError, SessionDocumentStore
 from training_suite.models.audio import AudioContractError, decode_wav_payload
 
 ADAPTER_SCHEMA = "robit.ollama.omni-adapter.v1"
@@ -88,6 +89,7 @@ DIAGNOSTIC_BOOLEAN_FIELDS = {
     "has_audio_input",
     "has_image_input",
     "has_video_input",
+    "has_document_input",
 }
 DIAGNOSTIC_STRING_FIELDS = {"request_id", "task", "outcome"}
 
@@ -535,6 +537,10 @@ def _request_diagnostic_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
             isinstance(message, Mapping) and bool(message.get("videos"))
             for message in message_items
         ),
+        "has_document_input": any(
+            isinstance(message, Mapping) and bool(message.get("documents"))
+            for message in message_items
+        ),
     }
 
 
@@ -655,7 +661,17 @@ def _execute_safe_tool(call: Mapping[str, Any]) -> tuple[str, str]:
         }
     elif name == "get_portal_capabilities":
         result = {
-            "input": ["text", "microphone", "wav", "image", "video"],
+            "input": [
+                "text",
+                "microphone",
+                "wav",
+                "image",
+                "video",
+                "gif",
+                "pdf",
+                "docx",
+                "utf-8 text/code",
+            ],
             "output": ["text", "thinking", "tool_calls", "audio/wav"],
             "tasks": ["chat", "transcribe", "describe", "synthesize"],
             "audio_input": "16 kHz mono PCM16 WAV",
@@ -684,6 +700,7 @@ def _without_media(messages: list[Any]) -> list[Any]:
             message.pop("audios", None)
             message.pop("images", None)
             message.pop("videos", None)
+            message.pop("documents", None)
     return cleaned
 
 
@@ -746,6 +763,7 @@ def create_app(
         directory=runtime.session_log_dir,
         ttl_s=runtime.session_log_ttl_s,
     )
+    documents = SessionDocumentStore(ttl_s=runtime.session_log_ttl_s)
     app.config["MAX_CONTENT_LENGTH"] = runtime.max_body_bytes
 
     def authorized() -> bool:
@@ -790,6 +808,39 @@ def create_app(
         if not isinstance(think, bool):
             raise PortalRequestError("portal think must be a boolean")
         payload["think"] = think
+
+    def apply_document_context(
+        payload: dict[str, Any], session_id: str
+    ) -> list[dict[str, Any]]:
+        messages = payload.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise PortalRequestError("messages must be a non-empty array")
+        last_user: dict[str, Any] | None = None
+        uploads: list[Any] = []
+        for raw_message in messages:
+            if not isinstance(raw_message, dict):
+                continue
+            raw_documents = raw_message.pop("documents", [])
+            if raw_documents:
+                if raw_message.get("role") != "user":
+                    raise PortalRequestError("documents are accepted only on user messages")
+                if not isinstance(raw_documents, list):
+                    raise PortalRequestError("message.documents must be an array")
+                uploads.extend(raw_documents)
+            if raw_message.get("role") == "user":
+                last_user = raw_message
+        if last_user is None:
+            raise PortalRequestError("messages must contain a user message")
+        query = str(last_user.get("content") or "").strip()
+        try:
+            context, accepted = documents.prepare(session_id, uploads, query)
+        except DocumentError as exc:
+            raise PortalRequestError(str(exc)) from exc
+        if context:
+            last_user["content"] = (
+                f"{context}\n\n<user_request>\n{query}\n</user_request>"
+            )
+        return accepted
 
     @app.after_request
     def secure_headers(response):
@@ -846,7 +897,8 @@ def create_app(
     def status():
         if not authorized():
             return jsonify({"error": "unauthorized"}), 401
-        diagnostics.touch(request_session_id())
+        session_id = request_session_id()
+        diagnostics.touch(session_id)
         stages = {
             "adapter": _probe(session, runtime.adapter_health_url),
             "comprehension": _probe(session, runtime.comprehension_health_url),
@@ -860,6 +912,11 @@ def create_app(
                 "schema": ADAPTER_SCHEMA,
                 "stages": stages,
                 "safe_tools": SAFE_TOOLS,
+                "documents": {
+                    "supported": ["pdf", "docx", "utf-8 text/code"],
+                    "retrieval": "session-isolated hashed lexical embeddings",
+                    **documents.stats(session_id),
+                },
                 "voice_profile": {
                     "name": str(runtime.voice_profile.get("name") or "default"),
                     "language": str(runtime.voice_profile.get("language") or "en"),
@@ -907,6 +964,7 @@ def create_app(
         session_id = request_session_id()
         if request.method == "DELETE":
             diagnostics.clear(session_id)
+            documents.clear(session_id)
             return Response(status=204)
         if request.method == "GET":
             return jsonify(diagnostics.snapshot(session_id))
@@ -944,12 +1002,14 @@ def create_app(
                 return jsonify({"error": "portal model tag is fixed"}), 400
             if payload.get("stream") is not False:
                 return jsonify({"error": "portal requires stream=false"}), 400
+            diagnostic_fields = _request_diagnostic_fields(payload)
             apply_reasoning_mode(payload)
             apply_voice_profile(payload)
+            accepted_documents = apply_document_context(payload, session_id)
             diagnostics.begin_request(
                 session_id,
                 request_id,
-                _request_diagnostic_fields(payload),
+                diagnostic_fields,
             )
             request_logged = True
             queue_started = time.monotonic()
@@ -990,6 +1050,7 @@ def create_app(
             data["portal"] = {
                 "schema": "robit.omni-phone-portal.v1",
                 "safe_tools_executed": executed,
+                "documents_indexed": accepted_documents,
             }
             outcome_status = 200
             response = jsonify(data)
@@ -1031,18 +1092,20 @@ def create_app(
             return jsonify({"error": "portal model tag is fixed"}), 400
         if payload.get("stream") is not True:
             return jsonify({"error": "stream endpoint requires stream=true"}), 400
+        session_id = request_session_id()
+        diagnostic_fields = _request_diagnostic_fields(payload)
         try:
             apply_reasoning_mode(payload)
             apply_voice_profile(payload)
+            apply_document_context(payload, session_id)
         except PortalRequestError as exc:
             return jsonify({"error": str(exc)}), 400
-        session_id = request_session_id()
         request_id = secrets.token_urlsafe(9)
         started = time.monotonic()
         diagnostics.begin_request(
             session_id,
             request_id,
-            _request_diagnostic_fields(payload),
+            diagnostic_fields,
         )
         queue_started = time.monotonic()
         ticket = inference_queue.acquire(session_id, runtime.timeout_s)

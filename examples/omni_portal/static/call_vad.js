@@ -7,16 +7,16 @@
   "use strict";
 
   const DEFAULTS = Object.freeze({
-    calibrationMs: 900,
-    startThreshold: 0.02,
-    releaseThreshold: 0.011,
-    noiseMultiplier: 3.0,
-    releaseMultiplier: 1.65,
-    startConfirmMs: 220,
+    calibrationMs: 650,
+    startThreshold: 0.012,
+    releaseThreshold: 0.007,
+    noiseMultiplier: 2.2,
+    releaseMultiplier: 1.45,
+    startConfirmMs: 120,
     silenceMs: 750,
-    minActiveMs: 320,
-    preRollFrames: 4,
-    initialNoiseFloor: 0.004,
+    minActiveMs: 220,
+    preRollFrames: 6,
+    initialNoiseFloor: 0.003,
   });
 
   function createState(startedAt = 0, overrides = {}) {

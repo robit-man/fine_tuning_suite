@@ -419,12 +419,14 @@ and [examples](examples/omni_adapter/README.md).
 
 For phone testing, the [authenticated Omni portal](examples/omni_portal/README.md)
 adds hold-to-record WAV capture, adaptive VAD, environmental-audio analysis,
-image/video uploads, a live camera preview, bounded camera-call frames, safe
-Markdown, smooth chat scrolling, native Ollama reasoning control, deterministic
+image/video/GIF uploads, silent-video handling, PDF/DOCX/text retrieval, a live
+camera preview, bounded camera-call frames, safe Markdown, viewport-bounded
+token-pinned chat scrolling, native Ollama reasoning control, deterministic
 Qwen3-TTS profiles, request-local WAV voice cloning, streamed PCM playback, and
-barge-in voice-call turns. The default four-frame TTS windows target roughly
+continuously submitted barge-in voice-call turns. The default four-frame TTS windows target roughly
 320 ms decoder chunks. Distinct browser sessions are queued through a bounded
-GPU lane with no server-side conversation history, while content-redacted
+GPU lane with no shared conversation history. Document excerpts use a bounded,
+hashed lexical index isolated to the browser session, while content-redacted
 timing journals expire five minutes after a page leaves and delete immediately
 with the trash control. The active/queued user count is shown beside **ONLINE**.
 
@@ -444,9 +446,10 @@ The planner detects the donor's `video-input` path and records a
 preserve frame order and temporal metadata, and return semantic text to the
 same Ollama language stage used by audio.
 
-The adapter accepts tagged MP4/WebM, validates container signatures, bounds
-sampling, passes raw base64 through llama.cpp's `input_video`, and optionally
-demuxes a separate 16 kHz audio part. Production deployments must additionally
+The adapter accepts tagged MP4/WebM/GIF, validates container signatures, bounds
+sampling, normalizes GIF to MP4, passes video bytes through llama.cpp's
+`input_video`, and optionally demuxes a separate 16 kHz audio part. A clip with
+no audio track remains a valid visual-only turn. Production deployments must additionally
 bound duration/resolution/decoder resources and should not claim sample-accurate
 alignment from the reference demux path.
 

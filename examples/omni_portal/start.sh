@@ -13,6 +13,7 @@ RUNTIME_ROOT=${OMNI_PORTAL_RUNTIME_ROOT:-$REPO_ROOT/training_suite/outputs/omni_
 CACHE_DIR=${OMNI_COMPONENT_CACHE:-$RUNTIME_ROOT/components}
 STATE_DIR=${OMNI_PORTAL_STATE_DIR:-$RUNTIME_ROOT/state}
 LOG_DIR=${OMNI_PORTAL_LOG_DIR:-$RUNTIME_ROOT/logs}
+SESSION_LOG_DIR=${OMNI_PORTAL_SESSION_LOG_DIR:-$RUNTIME_ROOT/session-logs}
 
 COMP_PORT=${OMNI_COMPREHENSION_PORT:-8901}
 TTS_PORT=${OMNI_TTS_PORT:-8892}
@@ -169,6 +170,19 @@ cleanup_cache() {
   rmdir "$CACHE_DIR" 2>/dev/null || true
 }
 
+cleanup_session_logs() {
+  [[ -d "$SESSION_LOG_DIR" ]] || return
+  local file
+  shopt -s nullglob
+  for file in "$SESSION_LOG_DIR"/*.json "$SESSION_LOG_DIR"/*.tmp; do
+    if [[ -f "$file" ]]; then
+      unlink "$file"
+    fi
+  done
+  shopt -u nullglob
+  rmdir "$SESSION_LOG_DIR" 2>/dev/null || true
+}
+
 cleanup() {
   if (( CLEANING_UP )); then
     return
@@ -188,6 +202,7 @@ cleanup() {
     docker gpu release "$LEASE_TOKEN" >/dev/null 2>&1 || true
     LEASE_TOKEN=""
   fi
+  cleanup_session_logs
   cleanup_cache
   if [[ -f "$SUPERVISOR_PID_FILE" ]]; then unlink "$SUPERVISOR_PID_FILE"; fi
   if [[ -f "$ACCESS_URL_FILE" ]]; then unlink "$ACCESS_URL_FILE"; fi
@@ -420,7 +435,7 @@ run_foreground() {
   OMNI_TTS_PROJECTOR_GGUF="$CACHE_DIR/tts-projector.gguf" \
   LLAMA_TTS_BIN="$REPO_ROOT/training_suite/vendor/llama.cpp/build/bin/llama-tts" \
   OMNI_TTS_GPU_LAYERS=-1 \
-  OMNI_TTS_STREAM_FRAMES="${OMNI_TTS_STREAM_FRAMES:-12}" \
+  OMNI_TTS_STREAM_FRAMES="${OMNI_TTS_STREAM_FRAMES:-4}" \
   OMNI_TTS_GPU_UUID="$gpu_uuid" \
   OMNI_TTS_ACTIVE_PID_FILE="$TTS_ACTIVE_PID_FILE" \
   OMNI_TTS_HOST=127.0.0.1 \
@@ -458,6 +473,7 @@ run_foreground() {
   OMNI_ADAPTER_HEALTH_URL="http://127.0.0.1:$ADAPTER_PORT/healthz" \
   OMNI_COMPREHENSION_HEALTH_URL="http://127.0.0.1:$COMP_PORT/health" \
   OMNI_TTS_HEALTH_URL="http://127.0.0.1:$TTS_PORT/healthz" \
+  OMNI_PORTAL_SESSION_LOG_DIR="$SESSION_LOG_DIR" \
   OMNI_PORTAL_HOST=127.0.0.1 \
   OMNI_PORTAL_PORT="$PORTAL_PORT" \
   "$PYTHON_BIN" "$REPO_ROOT/examples/omni_portal/app.py" \

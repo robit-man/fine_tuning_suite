@@ -26,7 +26,10 @@ git diff --check
 The unit suite covers strict audio/video/image decoding, item and size limits,
 all four routes, Ollama field preservation, speech/tool deferral, TTS envelope
 validation, six-view GGUF packing/materialization, and custom Ollama layer
-attach/resolve/cache preparation.
+attach/resolve/cache preparation. Portal tests additionally cover native
+reasoning-off routing, adaptive call VAD, smooth message handling, concurrent
+session isolation, content-redacted diagnostic expiry/deletion, and streamed
+PCM relay.
 
 ## Artifact gate
 
@@ -114,7 +117,11 @@ result. Do not commit large or restricted media.
 - prompt injection in OCR/transcript/subtitles;
 - unresolved tools with speech requested;
 - insufficient memory, cancellation, and repeated worker restart;
-- adapter media fields sent to an ordinary model without a sidecar.
+- adapter media fields sent to an ordinary model without a sidecar;
+- sequential distinct clips with llama.cpp prompt caching accidentally enabled;
+- quiet/click/steady-noise VAD fixtures causing remote ASR requests;
+- two concurrent browser sessions receiving one another's marker or journal;
+- trash followed by a late aborted-request event recreating diagnostic data.
 
 Errors must be typed and must not echo raw media, secrets, thinking, or tool
 arguments unnecessarily.
@@ -127,7 +134,11 @@ arguments unnecessarily.
 - [ ] six-view artifact round trip passes;
 - [ ] stock text/vision/thinking/tools pass;
 - [ ] ASR, image, video, and video-audio tests pass;
+- [ ] sequential red → blue → red video isolation passes with
+      `cache_prompt=false` and no stale media embedding;
 - [ ] direct and repeated TTS pass;
+- [ ] phone VAD, concurrent-session isolation, and diagnostic TTL/delete
+      harnesses pass;
 - [ ] adapter output envelope validates;
 - [ ] repository documentation is pushed;
 - [ ] Hugging Face GGUF/model card/report are remotely verified;

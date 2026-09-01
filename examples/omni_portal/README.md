@@ -100,6 +100,12 @@ progressively smaller frame caps (24/16/8/4/1 as applicable). A recorded video
 turn therefore retains temporal comprehension whenever it fits; camera-call
 mode uses one current frame per speech turn for lower latency.
 
+Every comprehension request explicitly sets llama.cpp `cache_prompt:false`.
+Prompt-slot reuse is safe for ordinary token prefixes but the pinned
+multimodal worker can otherwise retain a previous clip's decoded embeddings.
+The regression gate submits red → blue → red videos and requires red → blue →
+red answers. Do not remove this setting as a performance optimization.
+
 ## Voice configuration and cloning
 
 The TTS weights are Qwen3-TTS 12 Hz 1.7B Base, not LuxTTS. Tap the waveform
@@ -242,12 +248,14 @@ continue through broker-owned GPU lanes.
 | `OMNI_COMPREHENSION_CONTEXT_TOKENS` | `65536` | Native comprehension worker context; propagated to the adapter |
 | `OMNI_PORTAL_TOKEN` | generated | At least 24 characters |
 | `OMNI_VOICE_PROFILE` | `examples/omni_portal/voice-profile.json` | Validated server-side Qwen3-TTS profile |
-| `OMNI_TTS_STREAM_FRAMES` | `12` | Codec frames per live PCM decode window; 12 is about one second of audio |
+| `OMNI_TTS_STREAM_FRAMES` | `4` | Codec frames per live PCM decode window; four is about 320 ms and lowers first-audio latency |
 | `OMNI_TTS_BROKER_TRANSITION_TIMEOUT_S` | `330` | Maximum wait for scoped prepare/ready transitions |
 | `OMNI_KEEP_CACHE` | `0` | Keep materialized views after stop |
 | `OMNI_PORTAL_MAX_BODY_BYTES` | 96 MiB | Same-origin JSON request cap |
 | `OMNI_PORTAL_INFERENCE_SLOTS` | `1` | Simultaneous upstream inference lanes; keep at one for the shared single-lane GPU stack |
 | `OMNI_PORTAL_MAX_INFLIGHT_REQUESTS` | `4` | Active plus queued portal requests before a bounded 503 response |
+| `OMNI_PORTAL_SESSION_LOG_DIR` | runtime `session-logs` | Content-redacted, per-session timing journals |
+| `OMNI_PORTAL_SESSION_LOG_TTL_S` | `300` | Inactive-session diagnostic retention; five minutes by default |
 
 Ports `8901`, `8892`, `8910`, and `8920` are loopback-only. The Cloudflare
 metrics endpoint defaults to loopback port `49312`.
@@ -291,9 +299,20 @@ media base64 or the access token.
 - Conversation history is browser-page-local. The portal stores no message,
   media, observation, KV-cache, or generated response as server-side session
   state, so one user's content cannot become another user's context.
-- A random, Secure, HttpOnly, SameSite=Strict cookie is used only to count
-  distinct sessions with active or queued work. `/api/activity` exposes only
+- A random, Secure, HttpOnly, SameSite=Strict cookie partitions the aggregate
+  activity count and ephemeral diagnostic journal. It is never supplied to a
+  model or used to recover conversation context. `/api/activity` exposes only
   aggregate counts and requires the same bearer token as inference.
+- Per-session diagnostics contain request IDs, modality flags, queue/transport
+  timings, status codes, and browser milestones such as first text and first
+  PCM. They never contain prompts, replies, transcripts, thinking, media,
+  waveforms, bearer tokens, IP addresses, or user-agent strings. Journals are
+  stored under hashed filenames, are inaccessible across browser sessions, and
+  are purged five minutes after the session heartbeat stops.
+- The trash button aborts the page's active request/call, stops playback,
+  clears browser conversation state, and deletes that session's diagnostic
+  journal immediately. A late completion from the aborted request cannot
+  recreate the deleted journal; a genuinely new request starts a new one.
 - Encoded JSON is limited to 96 MiB.
 - The browser caps decoded image, video, and audio sizes below adapter limits.
 - CSP, frame denial, no-referrer, no-store, and same-origin camera/microphone

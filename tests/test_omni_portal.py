@@ -137,6 +137,10 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "setVadActive(call, true)" in javascript
     assert ".waveform.calling.vad-active" in css
     assert "function refreshActivity" in javascript
+    assert "function reportDiagnostic" in javascript
+    assert "function clearSessionDiagnostics" in javascript
+    assert 'nextTime: context.currentTime + 0.02' in javascript
+    assert "controller.context.currentTime + 0.01" in javascript
 
 
 def test_mock_call_vad_harness_rejects_noise_and_accepts_confirmed_events() -> None:
@@ -164,6 +168,7 @@ def test_portal_api_requires_bearer_token() -> None:
 
     assert client.get("/api/status").status_code == 401
     assert client.get("/api/activity").status_code == 401
+    assert client.get("/api/diagnostics").status_code == 401
     assert client.post("/api/chat", json=_request()).status_code == 401
 
 
@@ -279,6 +284,89 @@ def test_portal_queues_concurrent_sessions_without_context_bleed() -> None:
     assert results["session-two"].status_code == 200
     assert results["session-one"].json["message"]["content"] == "session-one"
     assert results["session-two"].json["message"]["content"] == "session-two"
+
+
+def test_session_diagnostics_are_isolated_redacted_clearable_and_expiring(
+    tmp_path: Path,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "model": DEFAULT_MODEL,
+                "message": {
+                    "role": "assistant",
+                    "content": body["messages"][-1]["content"],
+                },
+                "adapter": {"route": ["language"]},
+            },
+        )
+
+    app = create_app(
+        _config(session_log_dir=tmp_path, session_log_ttl_s=0.05),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    first = app.test_client()
+    second = app.test_client()
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    first.get("/")
+    second.get("/")
+
+    first_response = first.post(
+        "/api/chat",
+        headers=headers,
+        json=_request(messages=[{"role": "user", "content": "secret-one"}]),
+    )
+    second.post(
+        "/api/chat",
+        headers=headers,
+        json=_request(messages=[{"role": "user", "content": "secret-two"}]),
+    )
+    first_log = first.get("/api/diagnostics", headers=headers).json
+    second_log = second.get("/api/diagnostics", headers=headers).json
+
+    assert first_response.headers["X-Omni-Request-ID"]
+    assert first_log["events"]
+    assert second_log["events"]
+    assert first_log != second_log
+    assert "secret-one" not in json.dumps(first_log)
+    assert "secret-two" not in json.dumps(second_log)
+    assert len(list(tmp_path.glob("*.json"))) == 2
+
+    request_id = first_response.headers["X-Omni-Request-ID"]
+    telemetry = first.post(
+        "/api/diagnostics",
+        headers=headers,
+        json={
+            "event": "client_stream_timing",
+            "request_id": request_id,
+            "first_audio_delta_ms": 123.456,
+            "content": "must not persist",
+        },
+    )
+    assert telemetry.json == {"accepted": True}
+    assert "must not persist" not in json.dumps(
+        first.get("/api/diagnostics", headers=headers).json
+    )
+
+    assert first.delete("/api/diagnostics", headers=headers).status_code == 204
+    assert first.get("/api/diagnostics", headers=headers).json["events"] == []
+    assert len(list(tmp_path.glob("*.json"))) == 1
+    assert first.post(
+        "/api/diagnostics",
+        headers=headers,
+        json={
+            "event": "client_stream_timing",
+            "request_id": request_id,
+            "complete_ms": 999,
+        },
+    ).json == {"accepted": False}
+
+    deadline = time.monotonic() + 1
+    while list(tmp_path.glob("*.json")) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert list(tmp_path.glob("*.json")) == []
 
 
 def test_portal_pins_model_and_proxies_normal_response() -> None:
@@ -629,6 +717,7 @@ def test_portal_stream_route_pins_profile_and_relays_ndjson() -> None:
     assert seen[0][1]["stream"] is True
     assert seen[0][1]["think"] is True
     assert seen[0][1]["speech"] == {"language": "en", "seed": 42}
+    assert response.headers["X-Omni-Request-ID"]
 
 
 def test_mock_live_call_stream_defaults_native_reasoning_off() -> None:

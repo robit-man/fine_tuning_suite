@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import base64
 import copy
+import hashlib
 import hmac
 import json
+import math
 import os
 import secrets
 import sys
 import threading
+import time
+from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -63,6 +67,29 @@ VOICE_CLIENT_FIELDS = {
 }
 MAX_SPEAKER_REFERENCE_BYTES = 10 * 1024 * 1024
 SESSION_COOKIE_NAME = "omni_portal_session"
+DIAGNOSTIC_TTL_SECONDS = 5 * 60
+DIAGNOSTIC_NUMERIC_FIELDS = {
+    "queue_wait_ms",
+    "upstream_headers_ms",
+    "first_upstream_byte_ms",
+    "response_headers_ms",
+    "first_event_ms",
+    "first_text_ms",
+    "tts_stage_ms",
+    "audio_start_ms",
+    "first_audio_delta_ms",
+    "complete_ms",
+    "total_ms",
+    "status",
+}
+DIAGNOSTIC_BOOLEAN_FIELDS = {
+    "audio_requested",
+    "thinking_requested",
+    "has_audio_input",
+    "has_image_input",
+    "has_video_input",
+}
+DIAGNOSTIC_STRING_FIELDS = {"request_id", "task", "outcome"}
 
 SAFE_TOOLS = [
     {
@@ -159,6 +186,8 @@ class PortalConfig:
     max_body_bytes: int = 96 * 1024 * 1024
     inference_slots: int = 1
     max_inflight_requests: int = 4
+    session_log_dir: Path | None = None
+    session_log_ttl_s: float = DIAGNOSTIC_TTL_SECONDS
 
     @classmethod
     def from_environment(cls) -> PortalConfig:
@@ -200,6 +229,21 @@ class PortalConfig:
             ),
             max_inflight_requests=max(
                 1, int(os.environ.get("OMNI_PORTAL_MAX_INFLIGHT_REQUESTS", "4"))
+            ),
+            session_log_dir=Path(
+                os.environ.get(
+                    "OMNI_PORTAL_SESSION_LOG_DIR",
+                    "training_suite/outputs/omni_portal_runtime/session-logs",
+                )
+            ).expanduser(),
+            session_log_ttl_s=max(
+                1.0,
+                float(
+                    os.environ.get(
+                        "OMNI_PORTAL_SESSION_LOG_TTL_S",
+                        str(DIAGNOSTIC_TTL_SECONDS),
+                    )
+                ),
             ),
         )
 
@@ -271,6 +315,227 @@ class _InferenceQueue:
                 "slots": self.slots,
                 "limit": self.max_inflight,
             }
+
+
+@dataclass
+class _DiagnosticSession:
+    last_seen: float
+    last_seen_at: str
+    events: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=240))
+    request_ids: set[str] = field(default_factory=set)
+    timer: threading.Timer | None = None
+
+
+class _SessionDiagnostics:
+    """Short-lived, content-redacted diagnostic journals keyed by session."""
+
+    def __init__(self, directory: Path | None, ttl_s: float) -> None:
+        self.directory = directory.resolve() if directory is not None else None
+        self.ttl_s = max(0.05, ttl_s)
+        self._lock = threading.Lock()
+        self._sessions: dict[str, _DiagnosticSession] = {}
+        if self.directory is not None:
+            self.directory.mkdir(parents=True, exist_ok=True)
+            for stale in self.directory.glob("*.json"):
+                stale.unlink(missing_ok=True)
+            for stale in self.directory.glob("*.tmp"):
+                stale.unlink(missing_ok=True)
+
+    @staticmethod
+    def _key(session_id: str) -> str:
+        return hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _now_text() -> str:
+        return datetime.now().astimezone().isoformat(timespec="milliseconds")
+
+    def _schedule_locked(self, key: str, record: _DiagnosticSession) -> None:
+        if record.timer is not None:
+            return
+        timer = threading.Timer(self.ttl_s, self._expire, args=(key,))
+        timer.daemon = True
+        record.timer = timer
+        timer.start()
+
+    def _expire(self, key: str) -> None:
+        path: Path | None = None
+        with self._lock:
+            record = self._sessions.get(key)
+            if record is None:
+                return
+            record.timer = None
+            remaining = self.ttl_s - (time.monotonic() - record.last_seen)
+            if remaining > 0:
+                timer = threading.Timer(remaining, self._expire, args=(key,))
+                timer.daemon = True
+                record.timer = timer
+                timer.start()
+                return
+            self._sessions.pop(key, None)
+            if self.directory is not None:
+                path = self.directory / f"{key}.json"
+        if path is not None:
+            path.unlink(missing_ok=True)
+
+    def _persist_locked(self, key: str, record: _DiagnosticSession) -> None:
+        if self.directory is None:
+            return
+        path = self.directory / f"{key}.json"
+        temporary = self.directory / f"{key}.tmp"
+        payload = {
+            "schema": "robit.omni.session-diagnostics.v1",
+            "session": key[:16],
+            "last_seen_at": record.last_seen_at,
+            "ttl_seconds": self.ttl_s,
+            "events": list(record.events),
+        }
+        temporary.write_text(json.dumps(payload, separators=(",", ":")) + "\n")
+        temporary.replace(path)
+
+    def open_session(self, session_id: str) -> None:
+        key = self._key(session_id)
+        with self._lock:
+            now = time.monotonic()
+            record = self._sessions.get(key)
+            if record is None:
+                record = _DiagnosticSession(now, self._now_text())
+                self._sessions[key] = record
+                self._schedule_locked(key, record)
+            else:
+                record.last_seen = now
+                record.last_seen_at = self._now_text()
+
+    def touch(self, session_id: str) -> None:
+        key = self._key(session_id)
+        with self._lock:
+            record = self._sessions.get(key)
+            if record is None:
+                return
+            record.last_seen = time.monotonic()
+            record.last_seen_at = self._now_text()
+
+    def begin_request(
+        self, session_id: str, request_id: str, fields: Mapping[str, Any]
+    ) -> None:
+        self.open_session(session_id)
+        key = self._key(session_id)
+        with self._lock:
+            record = self._sessions[key]
+            record.request_ids.add(request_id)
+            self._append_locked(
+                key,
+                record,
+                "request_received",
+                {"request_id": request_id, **dict(fields)},
+            )
+
+    def record(
+        self,
+        session_id: str,
+        event: str,
+        fields: Mapping[str, Any] | None = None,
+        *,
+        request_id: str | None = None,
+    ) -> bool:
+        key = self._key(session_id)
+        with self._lock:
+            record = self._sessions.get(key)
+            if record is None:
+                return False
+            if request_id is not None and request_id not in record.request_ids:
+                return False
+            record.last_seen = time.monotonic()
+            record.last_seen_at = self._now_text()
+            self._append_locked(key, record, event, fields or {})
+            return True
+
+    def _append_locked(
+        self,
+        key: str,
+        record: _DiagnosticSession,
+        event: str,
+        fields: Mapping[str, Any],
+    ) -> None:
+        item = {"at": self._now_text(), "event": event}
+        item.update(_diagnostic_fields(fields))
+        record.events.append(item)
+        self._persist_locked(key, record)
+
+    def snapshot(self, session_id: str) -> dict[str, Any]:
+        key = self._key(session_id)
+        with self._lock:
+            record = self._sessions.get(key)
+            if record is None:
+                return {"ttl_seconds": self.ttl_s, "events": []}
+            record.last_seen = time.monotonic()
+            record.last_seen_at = self._now_text()
+            return {
+                "ttl_seconds": self.ttl_s,
+                "events": copy.deepcopy(list(record.events)),
+            }
+
+    def clear(self, session_id: str) -> None:
+        key = self._key(session_id)
+        with self._lock:
+            record = self._sessions.pop(key, None)
+            if record is not None and record.timer is not None:
+                record.timer.cancel()
+        if self.directory is not None:
+            (self.directory / f"{key}.json").unlink(missing_ok=True)
+            (self.directory / f"{key}.tmp").unlink(missing_ok=True)
+
+
+def _diagnostic_fields(raw: Mapping[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key in DIAGNOSTIC_NUMERIC_FIELDS:
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        numeric = float(value)
+        if not math.isfinite(numeric) or numeric < 0 or numeric > 86_400_000:
+            continue
+        result[key] = int(numeric) if key == "status" else round(numeric, 2)
+    for key in DIAGNOSTIC_BOOLEAN_FIELDS:
+        value = raw.get(key)
+        if isinstance(value, bool):
+            result[key] = value
+    for key in DIAGNOSTIC_STRING_FIELDS:
+        value = raw.get(key)
+        if not isinstance(value, str):
+            continue
+        value = value.strip()
+        if value and len(value) <= 64 and all(
+            character.isalnum() or character in {"-", "_", "."}
+            for character in value
+        ):
+            result[key] = value
+    return result
+
+
+def _request_diagnostic_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
+    omni = payload.get("omni")
+    task = str(omni.get("task") or "chat") if isinstance(omni, Mapping) else "chat"
+    messages = payload.get("messages")
+    message_items = messages if isinstance(messages, list) else []
+    modalities = payload.get("response_modalities")
+    output_items = modalities if isinstance(modalities, list) else []
+    return {
+        "task": task,
+        "audio_requested": "audio" in output_items,
+        "thinking_requested": payload.get("think") is True,
+        "has_audio_input": any(
+            isinstance(message, Mapping) and bool(message.get("audios"))
+            for message in message_items
+        ),
+        "has_image_input": any(
+            isinstance(message, Mapping) and bool(message.get("images"))
+            for message in message_items
+        ),
+        "has_video_input": any(
+            isinstance(message, Mapping) and bool(message.get("videos"))
+            for message in message_items
+        ),
+    }
 
 
 def _voice_override(raw: Any) -> dict[str, Any]:
@@ -477,6 +742,10 @@ def create_app(
         slots=runtime.inference_slots,
         max_inflight=runtime.max_inflight_requests,
     )
+    diagnostics = _SessionDiagnostics(
+        directory=runtime.session_log_dir,
+        ttl_s=runtime.session_log_ttl_s,
+    )
     app.config["MAX_CONTENT_LENGTH"] = runtime.max_body_bytes
 
     def authorized() -> bool:
@@ -573,6 +842,7 @@ def create_app(
     def status():
         if not authorized():
             return jsonify({"error": "unauthorized"}), 401
+        diagnostics.touch(request_session_id())
         stages = {
             "adapter": _probe(session, runtime.adapter_health_url),
             "comprehension": _probe(session, runtime.comprehension_health_url),
@@ -623,13 +893,44 @@ def create_app(
     def activity():
         if not authorized():
             return jsonify({"error": "unauthorized"}), 401
+        diagnostics.touch(request_session_id())
         return jsonify(inference_queue.snapshot())
+
+    @app.route("/api/diagnostics", methods=["GET", "POST", "DELETE"])
+    def session_diagnostics():
+        if not authorized():
+            return jsonify({"error": "unauthorized"}), 401
+        session_id = request_session_id()
+        if request.method == "DELETE":
+            diagnostics.clear(session_id)
+            return Response(status=204)
+        if request.method == "GET":
+            return jsonify(diagnostics.snapshot(session_id))
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, Mapping):
+            return jsonify({"error": "diagnostic event must be an object"}), 400
+        event = str(payload.get("event") or "").strip()
+        if event not in {"client_stream_timing", "page_leave"}:
+            return jsonify({"error": "unsupported diagnostic event"}), 400
+        request_id = str(payload.get("request_id") or "").strip() or None
+        accepted = diagnostics.record(
+            session_id,
+            event,
+            payload,
+            request_id=request_id,
+        )
+        return jsonify({"accepted": accepted})
 
     @app.post("/api/chat")
     def chat():
         if not authorized():
             return jsonify({"error": "unauthorized"}), 401
         ticket: _InferenceTicket | None = None
+        session_id = request_session_id()
+        request_id = secrets.token_urlsafe(9)
+        started = time.monotonic()
+        request_logged = False
+        outcome_status = 500
         try:
             payload = request.get_json(silent=True)
             if not isinstance(payload, dict):
@@ -641,9 +942,26 @@ def create_app(
                 return jsonify({"error": "portal requires stream=false"}), 400
             apply_reasoning_mode(payload)
             apply_voice_profile(payload)
-            ticket = inference_queue.acquire(request_session_id(), runtime.timeout_s)
+            diagnostics.begin_request(
+                session_id,
+                request_id,
+                _request_diagnostic_fields(payload),
+            )
+            request_logged = True
+            queue_started = time.monotonic()
+            ticket = inference_queue.acquire(session_id, runtime.timeout_s)
             if ticket is None:
+                outcome_status = 503
                 return jsonify({"error": "inference queue is full or timed out"}), 503
+            diagnostics.record(
+                session_id,
+                "queue_acquired",
+                {
+                    "request_id": request_id,
+                    "queue_wait_ms": (time.monotonic() - queue_started) * 1000,
+                },
+                request_id=request_id,
+            )
 
             executed: list[dict[str, str]] = []
             current_payload: dict[str, Any] = payload
@@ -651,7 +969,10 @@ def create_app(
                 upstream = session.post(runtime.adapter_url, json=current_payload)
                 data = _json_object(upstream, "adapter")
                 if upstream.status_code >= 400:
-                    return jsonify(data), upstream.status_code
+                    outcome_status = upstream.status_code
+                    response = jsonify(data)
+                    response.headers["X-Omni-Request-ID"] = request_id
+                    return response, upstream.status_code
                 if not auto_tools:
                     break
                 followup, round_tools = _tool_followup(current_payload, data)
@@ -666,14 +987,30 @@ def create_app(
                 "schema": "robit.omni-phone-portal.v1",
                 "safe_tools_executed": executed,
             }
-            return jsonify(data)
+            outcome_status = 200
+            response = jsonify(data)
+            response.headers["X-Omni-Request-ID"] = request_id
+            return response
         except PortalRequestError as exc:
+            outcome_status = 400
             return jsonify({"error": str(exc)}), 400
         except (httpx.HTTPError, PortalError) as exc:
+            outcome_status = 502
             return jsonify({"error": str(exc)}), 502
         finally:
             if ticket is not None:
                 inference_queue.release(ticket)
+            if request_logged:
+                diagnostics.record(
+                    session_id,
+                    "request_complete",
+                    {
+                        "request_id": request_id,
+                        "status": outcome_status,
+                        "total_ms": (time.monotonic() - started) * 1000,
+                    },
+                    request_id=request_id,
+                )
 
     @app.post("/api/chat/stream")
     def chat_stream():
@@ -695,25 +1032,100 @@ def create_app(
             apply_voice_profile(payload)
         except PortalRequestError as exc:
             return jsonify({"error": str(exc)}), 400
-        ticket = inference_queue.acquire(request_session_id(), runtime.timeout_s)
+        session_id = request_session_id()
+        request_id = secrets.token_urlsafe(9)
+        started = time.monotonic()
+        diagnostics.begin_request(
+            session_id,
+            request_id,
+            _request_diagnostic_fields(payload),
+        )
+        queue_started = time.monotonic()
+        ticket = inference_queue.acquire(session_id, runtime.timeout_s)
         if ticket is None:
+            diagnostics.record(
+                session_id,
+                "request_complete",
+                {
+                    "request_id": request_id,
+                    "status": 503,
+                    "total_ms": (time.monotonic() - started) * 1000,
+                },
+                request_id=request_id,
+            )
             return jsonify({"error": "inference queue is full or timed out"}), 503
+        diagnostics.record(
+            session_id,
+            "queue_acquired",
+            {
+                "request_id": request_id,
+                "queue_wait_ms": (time.monotonic() - queue_started) * 1000,
+            },
+            request_id=request_id,
+        )
 
         try:
             upstream_request = session.build_request(
                 "POST", runtime.adapter_url.rstrip("/") + "/stream", json=payload
             )
             upstream = session.send(upstream_request, stream=True)
+            diagnostics.record(
+                session_id,
+                "upstream_headers",
+                {
+                    "request_id": request_id,
+                    "status": upstream.status_code,
+                    "upstream_headers_ms": (time.monotonic() - started) * 1000,
+                },
+                request_id=request_id,
+            )
         except httpx.HTTPError as exc:
             inference_queue.release(ticket)
+            diagnostics.record(
+                session_id,
+                "request_complete",
+                {
+                    "request_id": request_id,
+                    "status": 502,
+                    "outcome": "upstream_error",
+                    "total_ms": (time.monotonic() - started) * 1000,
+                },
+                request_id=request_id,
+            )
             return jsonify({"error": str(exc)}), 502
 
         def relay():
+            first_byte = True
             try:
-                yield from upstream.iter_bytes()
+                for chunk in upstream.iter_bytes():
+                    if first_byte:
+                        first_byte = False
+                        diagnostics.record(
+                            session_id,
+                            "first_upstream_byte",
+                            {
+                                "request_id": request_id,
+                                "first_upstream_byte_ms": (
+                                    time.monotonic() - started
+                                )
+                                * 1000,
+                            },
+                            request_id=request_id,
+                        )
+                    yield chunk
             finally:
                 upstream.close()
                 inference_queue.release(ticket)
+                diagnostics.record(
+                    session_id,
+                    "request_complete",
+                    {
+                        "request_id": request_id,
+                        "status": upstream.status_code,
+                        "total_ms": (time.monotonic() - started) * 1000,
+                    },
+                    request_id=request_id,
+                )
 
         return Response(
             stream_with_context(relay()),
@@ -721,7 +1133,10 @@ def create_app(
             content_type=upstream.headers.get(
                 "content-type", "application/x-ndjson; charset=utf-8"
             ),
-            headers={"X-Accel-Buffering": "no"},
+            headers={
+                "X-Accel-Buffering": "no",
+                "X-Omni-Request-ID": request_id,
+            },
         )
 
     return app

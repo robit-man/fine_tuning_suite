@@ -63,17 +63,34 @@ browser. Microphone permission requires the HTTPS endpoint. Hold the microphone
 icon while speaking; release it to create a playable WAV attachment, then send.
 The speaker icon switches between text-only and text-plus-TTS replies. The
 waveform button opens Qwen3-TTS voice cloning and sampling controls. The phone
-icon starts automatic voice turns: local voice activity detection waits for a
-silence boundary, submits the recording, streams language deltas, and schedules
-live 24 kHz PCM synthesis chunks. The microphone remains active for barge-in;
-sustained speech cancels playback and queues the interruption. Portable adapter
-v1 remains `stream:false`; `/api/chat/stream` is an authenticated portal
-extension with one authoritative final adapter response.
+icon starts automatic voice turns. Local VAD calibrates ambient noise for 900
+ms, requires 220 ms of sustained activity above an adaptive threshold, and
+closes after 750 ms of silence. Quiet, clicks, and elevated steady noise do not
+call remote ASR. The green waveform is translucent while inactive and opaque
+only during confirmed activity. The microphone remains active for barge-in;
+sustained speech uses a stricter threshold, cancels playback, and queues the
+interruption. Portable adapter v1 remains `stream:false`;
+`/api/chat/stream` is an authenticated portal extension with stage, text,
+thinking, PCM, and one authoritative final adapter event.
+
+Qwen3-TTS uses four codec frames per streaming decoder window by default,
+approximately 320 ms for the packaged 12 Hz model. The browser schedules the
+first received PCM with a 10 ms floor and queues later chunks on the Web Audio
+timeline. The final response retains a complete replayable WAV even when live
+PCM playback succeeded.
 
 The camera icon captures device video and microphone audio with a live preview
 inside the composer. Tap again or send to finalize a 30-second-maximum MP4/WebM
 attachment. The model receives the complete bounded turn; adapter v1 does not
 continuously ingest an open camera stream.
+
+Re-recording replaces the previous unsent camera capture. The exact submitted
+blob remains visible as a muted looping thumbnail in the user turn. Each media
+submission sends only its current media bytes and starts a new media context;
+prior media and generated descriptions are not replayed. The adapter also sets
+`cache_prompt:false` on the llama.cpp comprehension request. This is mandatory:
+multimodal prompt-slot reuse can otherwise answer a new clip from the previous
+clip's decoded embeddings.
 
 Assistant responses render a DOM-built safe Markdown subset. The composer clears
 as soon as send accepts a request, its focus border remains neutral, and the
@@ -84,8 +101,35 @@ normal cursor and editing behavior.
 Reasoning defaults off. The portal always sends a boolean Ollama `think` field:
 `false` until the brain control is explicitly enabled, then `true`. Native
 `message.thinking` deltas and fallback `<think>` blocks are separated into the
-collapsed reasoning view only while enabled. Disabled reasoning is suppressed
-before display and speech synthesis.
+collapsed reasoning view only while enabled. No reasoning-control system prompt
+or `/no_think` suffix is injected. Tagged-output sanitation is only a
+fail-closed display/TTS guard.
+
+## Multi-user isolation and diagnostics
+
+The default portal admits four simultaneous HTTP requests and serializes them
+through one GPU inference lane. The number beside **ONLINE** counts distinct
+browser sessions with active or queued work. Request bodies, streams, media,
+voice overrides, tool rounds, and responses remain request-local. Conversation
+history exists only in each browser page; the server has no shared conversation
+or media history to bleed into another user.
+
+A Secure, HttpOnly, SameSite=Strict cookie provides an opaque partition key for
+the aggregate count and ephemeral diagnostics. `/api/activity` exposes only
+aggregate queue counts. `GET /api/diagnostics` returns only the caller's timing
+journal; `POST /api/diagnostics` accepts the browser's content-redacted stream
+milestones; `DELETE /api/diagnostics` deletes only that journal. All require the
+same bearer token as inference.
+
+Diagnostic events may contain a request ID, modality flags, status,
+queue/transport time, first text, TTS-stage, first PCM, and completion timing.
+They never contain prompt/reply text, transcripts, thinking, audio, frames,
+waveforms, tokens, IP addresses, or user-agent strings. Journals use hashed
+filenames under `OMNI_PORTAL_SESSION_LOG_DIR`, expire five minutes after the
+last heartbeat, and are purged at portal startup/shutdown. The trash control
+aborts active page work, stops playback/call capture, clears browser history,
+and deletes its journal immediately. Late events from the aborted request are
+rejected; a later new request creates a fresh journal.
 
 ## Voice stability
 
@@ -113,10 +157,15 @@ speaker-embedding cloning and separate VoiceDesign/CustomVoice checkpoints.
 | Device camera | live preview, bounded MP4/WebM attachment, video comprehension |
 | Speaker + microphone | transcription followed by valid spoken audio |
 | Call control | silence-delimited audio turn followed by automatic playback |
+| VAD noise rejection | quiet/click/steady-noise fixtures create zero remote requests; sustained events create one |
 | Voice clone | recorded/uploaded WAV changes speaker timbre and remains replayable |
 | Image | non-empty visual description |
 | Video with audio | ordered visual description plus spoken content |
+| Sequential video isolation | red → blue → red clips describe red → blue → red; `cache_prompt=false` |
 | TTS | valid 24 kHz mono PCM16 WAV playable on phone |
+| TTS first PCM | four-frame window and browser first-audio milestone recorded |
+| Concurrent sessions | two users show active/queued counts and receive only their own marker |
+| Diagnostic lifecycle | journals are session-isolated; trash deletes immediately; idle data expires in 300 s |
 | CUDA scope | comprehension and each TTS process resident on reserved UUID |
 
 Use `examples/omni_portal/smoke.py` for the machine-verifiable form of these
@@ -134,3 +183,5 @@ examples/omni_portal/start.sh --stop
 This removes external ingress first, then stops local HTTP services and the
 broker-scoped worker. The Ollama model/tag and sidecar blob are retained. The
 portal-owned materialized cache is removed unless `OMNI_KEEP_CACHE=1` was set.
+Per-session diagnostic JSON is removed on shutdown regardless of component
+cache retention.

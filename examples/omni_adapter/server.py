@@ -446,6 +446,12 @@ def build_comprehension_payload(
         "model": config.comprehension_model,
         "messages": messages,
         "stream": False,
+        # llama.cpp enables prompt-slot caching by default. Its multimodal slot
+        # cache can retain decoded frames across otherwise independent video
+        # requests, causing a new clip to be answered from the prior clip.
+        # Media preprocessing is request-local, so correctness takes priority
+        # over prefix reuse at this boundary.
+        "cache_prompt": False,
         "max_tokens": min(
             config.comprehension_max_output_tokens,
             max(1, config.comprehension_context_tokens // 4),

@@ -84,6 +84,7 @@ def test_adapter_contract_separates_wire_schema_from_bundle_schema() -> None:
 
 def test_tts_stream_window_validation_and_cli_arguments(tmp_path: Path) -> None:
     config = _tts_config(tmp_path)
+    assert config.stream_frames == 4
     spec = _synthesis_spec(config, {"text": "Hello", "stream_frames": 12})
     command = _command(config, spec, tmp_path / "speech.wav", stream=True)
 
@@ -551,6 +552,7 @@ def test_comprehension_payload_tags_video_for_qwen_style_server() -> None:
         "max_frames": 32,
     }
     assert payload["mm_processor_kwargs"]["use_audio_in_video"] is False
+    assert payload["cache_prompt"] is False
     assert payload["max_tokens"] == 2048
 
 

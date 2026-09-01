@@ -110,6 +110,16 @@ residency on the reserved UUID, and calls `ready`. A production implementation
 should keep a libmtmd TTS worker resident while retaining the same
 `/synthesize` contract.
 
+The interactive wrapper default is `OMNI_TTS_STREAM_FRAMES=4`, approximately
+320 ms of codec audio per state-carrying decode window. The phone schedules the
+first PCM buffer with a 10 ms floor. A live 12-frame versus four-frame probe on
+the reference worker reduced measured first PCM from 2454.7 ms to 2253.8 ms
+for the same short sentence; total generation increased from 2933.5 ms to
+3000.9 ms. Treat those host-specific values as a latency/throughput example,
+not a universal benchmark. The larger remaining startup cost comes from the
+single-shot worker's per-request model load; a persistent libmtmd service is the
+next architectural optimization.
+
 ## Start the unified adapter
 
 ```bash
@@ -149,6 +159,13 @@ current llama.cpp worker accepts `input_video` with raw base64. When
 demux the first audio track, resamples it to 16 kHz mono PCM16 WAV, and submits
 it as a separate `input_audio` part. This is a compatibility technique, not a
 claim of sample-accurate audiovisual alignment.
+
+The adapter sends `cache_prompt:false` on every comprehension request. The
+pinned llama.cpp server otherwise enables prompt-slot caching by default, and
+multimodal prefix reuse can retain a prior clip's decoded embeddings even when
+the next request contains different base64. Media correctness requires a fresh
+slot evaluation for every audio, image, and video turn. A red → blue → red live
+regression must describe red → blue → red in that order.
 
 Production decoders must bound duration, resolution, frame count, memory, and
 wall time; preserve frame order and timestamps; and report sampling/clipping.
@@ -203,6 +220,14 @@ and evicted:
 - video decode concurrency is bounded separately from language generation;
 - read-only component files may share host page cache but not mutable state.
 
+The phone reference deployment defaults to one active upstream inference lane
+and four admitted active/queued HTTP requests. Each request owns its payload,
+upstream response, streaming iterator, voice settings, tool rounds, and queue
+ticket. Conversation history remains in the individual browser page and is
+never reconstructed from a server session. A Secure, HttpOnly, SameSite cookie
+is used only for aggregate activity accounting and an isolated diagnostic
+journal; it is not model context.
+
 Do not infer GPU placement from a static free-VRAM scan. On broker-managed
 hosts, every CUDA service follows `/usr/local/share/ollama-unify/AGENTS.md`.
 
@@ -213,6 +238,13 @@ requested, `message.audio`. Logs may record bundle digest, route, media sizes,
 durations, frame counts, stage timings, and device placement. They must not log
 raw base64, PCM, video frames, full prompts, thinking, transcripts, tool
 secrets, or waveforms by default.
+
+The phone harness adds a content-redacted per-session journal containing only
+request IDs, modality booleans, status, queue/transport durations, and browser
+milestones through first PCM and completion. The journal uses a hashed filename,
+cannot be read through another browser session, is deleted immediately by the
+trash control, and expires five minutes after its heartbeat stops. Service
+lifecycle logs remain separate and must not contain model inputs or outputs.
 
 ## Shutdown and cleanup
 

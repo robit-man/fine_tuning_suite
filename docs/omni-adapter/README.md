@@ -88,8 +88,10 @@ different Thinker's hidden states without a trained bridge.
 | Python and JavaScript clients | Implemented |
 | Qwen3-Omni audio/image/video inference | Live-tested with pinned llama.cpp |
 | Qwen3-TTS 24 kHz PCM16 output | Live-tested with pinned llama.cpp |
+| Authenticated phone/call validation portal | Implemented and live-tested |
+| Adaptive VAD, streamed PCM, voice cloning, isolated queueing, expiring diagnostics | Implemented and tested |
 | Native in-process audio/video/TTS in upstream Ollama | Not available |
-| Streaming audio/video ABI | Not included in adapter v1 |
+| Portable streaming audio/video ABI | Not included in adapter v1; portal has an authenticated NDJSON extension |
 
 ## Request and response
 

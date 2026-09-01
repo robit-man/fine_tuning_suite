@@ -28,6 +28,7 @@ their gates.
 | Audio comprehension | Validate base64 PCM WAV and route installed-sidecar Qwen3-Omni output into the language graph | Reference runtime live-tested |
 | Video comprehension | Validate MP4/WebM, demux optional audio, and route temporal media through installed-sidecar Qwen3-Omni | Reference runtime live-tested |
 | TTS | Route language or direct text through installed-sidecar Qwen3-TTS and return tagged base64 PCM WAV | Reference runtime live-tested |
+| Phone validation harness | Authenticated mobile chat/call UI with adaptive VAD, camera clips, streamed TTS, voice cloning, reasoning control, isolated multi-user queuing, and expiring timing diagnostics | Implemented and live-tested |
 | Native Qwen3-Omni grafting | Reject unsafe tensor substitution and describe the exact component/runtime boundary | Compatibility-gated research path |
 
 “Implemented” means the suite contains executable code and tests. It does not
@@ -417,14 +418,24 @@ internal deployment details. See the [runtime guide](docs/omni-adapter/runtime.m
 and [examples](examples/omni_adapter/README.md).
 
 For phone testing, the [authenticated Omni portal](examples/omni_portal/README.md)
-adds hold-to-record microphone capture with a live waveform, automatic ASR and
-media routing, image/video uploads, safe Markdown responses, deterministic
-Qwen3-TTS server profiles plus request-local recorded/uploaded WAV cloning, a
-spoken-reply toggle, streamed PCM playback, and barge-in voice-call turns. It
-also records device camera and microphone streams through a live local preview
-into bounded video turns. Its broker-compliant CUDA-only supervisor publishes a
-temporary Cloudflare HTTPS tunnel. The deployment and rollback checklist is in the
-[phone portal runbook](docs/omni-adapter/phone-portal.md).
+adds hold-to-record WAV capture, adaptive VAD, environmental-audio analysis,
+image/video uploads, a live camera preview, bounded camera-call frames, safe
+Markdown, smooth chat scrolling, native Ollama reasoning control, deterministic
+Qwen3-TTS profiles, request-local WAV voice cloning, streamed PCM playback, and
+barge-in voice-call turns. The default four-frame TTS windows target roughly
+320 ms decoder chunks. Distinct browser sessions are queued through a bounded
+GPU lane with no server-side conversation history, while content-redacted
+timing journals expire five minutes after a page leaves and delete immediately
+with the trash control. The active/queued user count is shown beside **ONLINE**.
+
+Every comprehension call disables llama.cpp prompt-slot reuse so the current
+audio/image/video bytes—not a prior media embedding—are evaluated. Camera
+re-recording replaces the prior unsent camera clip, submitted video appears as
+a looping thumbnail, and each new media turn excludes all earlier media bytes
+and descriptions. The broker-compliant CUDA-only supervisor publishes a
+temporary Cloudflare HTTPS tunnel. See the [phone portal runbook](docs/omni-adapter/phone-portal.md)
+for endpoints, lifecycle, isolation, diagnostics, and the complete verification
+matrix.
 
 #### Video comprehension
 

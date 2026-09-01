@@ -137,13 +137,13 @@ audio/pcm;rate=24000;channels=1;format=s16le` plus `X-Audio-Codec`,
 and may override `stream_frames`; `OMNI_TTS_STREAM_FRAMES` sets the server
 default.
 
-The conservative default is 72 codec frames, about six seconds of audio for
-the packaged 12 Hz model. A shorter utterance flushes once at end of speech.
-Values from 1 through 72 are accepted; for example, 12 targets roughly
-one-second decoder windows at the cost of more decoder invocations and lower
-throughput. These are real state-carrying code2wav calls, not chunks cut from a
-finished WAV. HTTP byte-chunk boundaries are not semantic decoder boundaries,
-so clients must buffer incomplete 16-bit samples.
+The interactive default is four codec frames, about 320 ms for the packaged
+12 Hz model. Values from 1 through 72 are accepted; larger windows improve
+aggregate decoder throughput, while smaller windows reduce time to first PCM
+at the cost of more decoder invocations. A shorter utterance flushes once at
+end of speech. These are real state-carrying code2wav calls, not chunks cut
+from a finished WAV. HTTP byte-chunk boundaries are not semantic decoder
+boundaries, so clients must buffer incomplete 16-bit samples.
 
 This route is experimental. If generation fails after response headers, the
 PCM stream terminates early; the final WAV is still checked server-side when

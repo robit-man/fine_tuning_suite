@@ -180,6 +180,7 @@
     playbackElement: null,
     playbackEpoch: 0,
     streamController: null,
+    requestController: null,
     scrollFrame: null,
     call: null,
     camera: null,
@@ -205,6 +206,25 @@
 
   function authHeaders(extra = {}) {
     return { Authorization: `Bearer ${state.token}`, ...extra };
+  }
+
+  function reportDiagnostic(event, fields = {}) {
+    if (!state.token) return;
+    fetch("/api/diagnostics", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ event, ...fields }),
+      keepalive: true,
+    }).catch(() => {});
+  }
+
+  function clearSessionDiagnostics() {
+    if (!state.token) return;
+    fetch("/api/diagnostics", {
+      method: "DELETE",
+      headers: authHeaders(),
+      keepalive: true,
+    }).catch(() => {});
   }
 
   function setComposerStatus(text, error = false) {
@@ -547,7 +567,7 @@
     const controller = {
       epoch: state.playbackEpoch,
       context,
-      nextTime: context.currentTime + 0.06,
+      nextTime: context.currentTime + 0.02,
       sources: new Set(),
       ended: false,
       cancelled: false,
@@ -584,7 +604,7 @@
       controller.sources.delete(source);
       maybeFinishPcmPlayback(controller);
     }, { once: true });
-    const startAt = Math.max(controller.nextTime, controller.context.currentTime + 0.03);
+    const startAt = Math.max(controller.nextTime, controller.context.currentTime + 0.01);
     source.start(startAt);
     controller.nextTime = startAt + buffer.duration;
   }
@@ -603,12 +623,16 @@
   }
 
   async function streamChat(payload, { signal, onEvent } = {}) {
+    const startedAt = performance.now();
+    const timings = {};
     const response = await fetch("/api/chat/stream", {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ ...payload, stream: true }),
       signal,
     });
+    timings.response_headers_ms = performance.now() - startedAt;
+    const requestId = response.headers.get("X-Omni-Request-ID") || "";
     if (!response.ok) {
       const data = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
       throw new Error(data.error || `HTTP ${response.status}`);
@@ -628,6 +652,20 @@
       } catch (_error) {
         throw new Error("Model returned an invalid stream event");
       }
+      const elapsed = performance.now() - startedAt;
+      if (timings.first_event_ms === undefined) timings.first_event_ms = elapsed;
+      if (event.type === "delta" && timings.first_text_ms === undefined) {
+        const message = event.message || {};
+        if (message.content || message.thinking) timings.first_text_ms = elapsed;
+      }
+      if (event.type === "stage" && event.stage === "tts"
+        && timings.tts_stage_ms === undefined) timings.tts_stage_ms = elapsed;
+      if (event.type === "audio_start" && timings.audio_start_ms === undefined) {
+        timings.audio_start_ms = elapsed;
+      }
+      if (event.type === "audio_delta" && timings.first_audio_delta_ms === undefined) {
+        timings.first_audio_delta_ms = elapsed;
+      }
       if (event.type === "error") throw new Error(event.error || "Streaming inference failed");
       if (event.type === "final") finalResponse = event.response || null;
       if (onEvent) onEvent(event);
@@ -645,6 +683,11 @@
     }
     if (buffered.trim()) consume(buffered);
     if (!finalResponse) throw new Error("Model stream ended without a final response");
+    timings.complete_ms = performance.now() - startedAt;
+    reportDiagnostic("client_stream_timing", {
+      request_id: requestId,
+      ...timings,
+    });
     return finalResponse;
   }
 
@@ -1642,8 +1685,12 @@
     let streamedThinking = "";
     let pcmController = null;
     let streamedAudio = false;
+    const requestController = new AbortController();
+    if (state.requestController) state.requestController.abort();
+    state.requestController = requestController;
     try {
       const data = await streamChat(built.payload, {
+        signal: requestController.signal,
         onEvent: event => {
           if (event.type === "delta") {
             const contentDelta = String((event.message || {}).content || "");
@@ -1699,8 +1746,9 @@
       setComposerStatus(reply.audio ? "Text and spoken reply ready" : "Text reply ready");
     } catch (error) {
       assistant.node.remove();
-      showError(error);
+      if (error.name !== "AbortError") showError(error);
     } finally {
+      if (state.requestController === requestController) state.requestController = null;
       assistant.node.classList.remove("streaming");
       elements.send.disabled = false;
       refreshStatus();
@@ -1810,6 +1858,10 @@
     }
   });
   elements.clear.addEventListener("click", () => {
+    if (state.requestController) state.requestController.abort();
+    if (state.call) stopCall().catch(showError);
+    stopCurrentPlayback();
+    clearSessionDiagnostics();
     state.history = [];
     for (const item of state.attachments) {
       if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
@@ -1838,6 +1890,9 @@
     for (const item of state.attachments) {
       if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
     }
+  });
+  window.addEventListener("pagehide", () => {
+    reportDiagnostic("page_leave");
   });
 
   state.token = accessToken();

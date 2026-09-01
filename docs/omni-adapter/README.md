@@ -147,6 +147,7 @@ session can reconstruct it from the tag's sidecar layer.
 - [Machine-readable first-release manifest](sidecar-manifest.json)
 - [Machine-readable validation report](validation-report.json)
 - [Ollama custom-layer descriptor](ollama-sidecar-layer.json)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
 - [Model-page template](model-page-template.md)
 - [Runnable examples](../../examples/omni_adapter/README.md)
 - [Request schema](schema/request-v1.schema.json) and

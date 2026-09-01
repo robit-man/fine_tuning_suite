@@ -173,6 +173,9 @@ conversions are credited to their respective `ggml-org` repositories. This
 combined package is an independent release and is not an official Qwen,
 llama.cpp, Ollama, or source-author release.
 
+See `THIRD_PARTY_NOTICES.md` for source links and attribution. The source model
+pages and their license files remain authoritative.
+
 ## Operational requirements
 
 - The Hugging Face sidecar is 38.8 GB. The full Ollama tag also carries normal

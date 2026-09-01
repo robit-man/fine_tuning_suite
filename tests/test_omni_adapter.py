@@ -74,6 +74,9 @@ def test_adapter_json_schemas_are_valid_json_and_use_v1_identifier() -> None:
     schema_dir = Path("docs/omni-adapter/schema")
     request_schema = json.loads((schema_dir / "request-v1.schema.json").read_text())
     response_schema = json.loads((schema_dir / "response-v1.schema.json").read_text())
+    voice_schema = json.loads(
+        (schema_dir / "voice-profile-v1.schema.json").read_text()
+    )
 
     assert (
         request_schema["properties"]["omni"]["properties"]["schema"]["const"]
@@ -82,6 +85,10 @@ def test_adapter_json_schemas_are_valid_json_and_use_v1_identifier() -> None:
     assert (
         response_schema["properties"]["adapter"]["properties"]["schema"]["const"]
         == ADAPTER_SCHEMA
+    )
+    assert (
+        voice_schema["properties"]["schema"]["const"]
+        == "robit.omni.voice-profile.v1"
     )
 
 
@@ -172,6 +179,75 @@ def test_direct_tasks_select_one_component(task, message, route) -> None:
     )
 
     assert parse_adapter_request(request).route == route
+
+
+def test_transcribe_with_spoken_output_routes_directly_to_tts() -> None:
+    request = _base_request(
+        messages=[
+            {
+                "role": "user",
+                "content": "Transcribe.",
+                "audios": [{"data": _encoded(_wav(16000))}],
+            }
+        ],
+        omni={"schema": ADAPTER_SCHEMA, "task": "transcribe"},
+        response_modalities=["text", "audio"],
+        speech_mode="always",
+    )
+
+    assert parse_adapter_request(request).route == ("comprehension", "tts")
+
+
+def test_transcribe_with_spoken_output_executes_tts() -> None:
+    output_wav = _wav(24000)
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.host)
+        if request.url.host == "comprehension":
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "hello from audio"}}]},
+            )
+        if request.url.host == "tts":
+            assert json.loads(request.content)["text"] == "hello from audio"
+            return httpx.Response(
+                200, content=output_wav, headers={"content-type": "audio/wav"}
+            )
+        return httpx.Response(404)
+
+    parsed = parse_adapter_request(
+        _base_request(
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Transcribe.",
+                    "audios": [{"data": _encoded(_wav(16000))}],
+                }
+            ],
+            omni={"schema": ADAPTER_SCHEMA, "task": "transcribe"},
+            response_modalities=["text", "audio"],
+            speech_mode="always",
+        )
+    )
+    config = Config(
+        "http://comprehension/v1/chat/completions",
+        "qwen3-omni",
+        "http://language",
+        "http://tts/synthesize",
+        30,
+    )
+
+    result = execute(
+        parsed,
+        config,
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert seen == ["comprehension", "tts"]
+    assert result["message"]["content"] == "hello from audio"
+    assert result["adapter"]["speech_synthesized"] is True
+    assert base64.b64decode(result["message"]["audio"]["data"]) == output_wav
 
 
 def test_adapter_rejects_streaming_and_spoofed_video_mime() -> None:
@@ -273,6 +349,42 @@ def test_reference_server_preserves_tools_thinking_and_adds_audio() -> None:
     assert result["message"]["thinking"] == "brief thought"
     assert base64.b64decode(result["message"]["audio"]["data"]) == output_wav
     assert result["adapter"]["route"] == ["comprehension", "language", "tts"]
+
+
+def test_language_backend_override_preserves_logical_model_identity() -> None:
+    logical_model = "robit/combined-omni:q4km"
+    core_model = "robit/core-language:27b"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["model"] == core_model
+        return httpx.Response(
+            200,
+            json={
+                "model": core_model,
+                "message": {"role": "assistant", "content": "Hello."},
+                "done": True,
+            },
+        )
+
+    parsed = parse_adapter_request(_base_request(model=logical_model))
+    config = Config(
+        "http://comprehension/v1/chat/completions",
+        "qwen3-omni",
+        "http://language",
+        "http://tts/synthesize",
+        30,
+        language_model=core_model,
+    )
+
+    result = execute(
+        parsed,
+        config,
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert result["model"] == logical_model
+    assert result["adapter"]["language_backend_model"] == core_model
 
 
 def test_comprehension_payload_tags_video_for_qwen_style_server() -> None:

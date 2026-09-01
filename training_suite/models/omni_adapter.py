@@ -89,7 +89,7 @@ class ParsedAdapterRequest:
     @property
     def route(self) -> tuple[str, ...]:
         if self.task in {"transcribe", "describe"}:
-            return ("comprehension",)
+            return ("comprehension", "tts") if self.synthesize else ("comprehension",)
         if self.task == "synthesize":
             return ("tts",)
         stages: list[str] = []
@@ -195,8 +195,8 @@ def adapter_contract() -> dict[str, Any]:
         },
         "routing": {
             "chat": "media -> comprehension -> semantic text -> language -> optional tts",
-            "transcribe": "audio -> comprehension -> text",
-            "describe": "audio/image/video -> comprehension -> text",
+            "transcribe": "audio -> comprehension -> text -> optional tts",
+            "describe": "audio/image/video -> comprehension -> text -> optional tts",
             "synthesize": "text -> tts -> audio",
             "speech_precedence": [
                 "speech_mode=always",
@@ -500,18 +500,14 @@ def parse_adapter_request(payload: Mapping[str, Any]) -> ParsedAdapterRequest:
         if last_user.media:
             raise OmniAdapterError("synthesize task does not accept input media")
         synthesize = True
-    if task == "transcribe":
-        if not any(item.kind == "audio" for item in last_user.media):
-            raise OmniAdapterError(
-                "transcribe task requires audio in the last user message"
-            )
-        synthesize = False
-    if task == "describe":
-        if not last_user.media:
-            raise OmniAdapterError(
-                "describe task requires media in the last user message"
-            )
-        synthesize = False
+    if task == "transcribe" and not any(
+        item.kind == "audio" for item in last_user.media
+    ):
+        raise OmniAdapterError(
+            "transcribe task requires audio in the last user message"
+        )
+    if task == "describe" and not last_user.media:
+        raise OmniAdapterError("describe task requires media in the last user message")
 
     passthrough = {
         key: value

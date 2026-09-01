@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import httpx
 
-from examples.omni_portal.app import DEFAULT_MODEL, PortalConfig, create_app
+from examples.omni_portal.app import (
+    DEFAULT_MODEL,
+    PortalConfig,
+    create_app,
+    load_voice_profile,
+)
 
 TOKEN = "portal-test-token-with-more-than-24-characters"
 
@@ -50,11 +56,30 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
     assert b"ROBIT" not in response.data
     assert b'id="waveform-canvas"' in response.data
     assert b'id="speak-toggle"' in response.data
+    assert b'id="call-button"' in response.data
+    assert b'id="camera-button"' in response.data
+    assert b'id="camera-video"' in response.data
     assert b'aria-pressed="false"' in response.data
+    assert b'maximum-scale=1' in response.data
+    assert b'user-scalable=no' in response.data
     assert TOKEN.encode() not in response.data
     assert "microphone=(self)" in response.headers["Permissions-Policy"]
     assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
     assert response.headers["Referrer-Policy"] == "no-referrer"
+
+
+def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None:
+    javascript = Path("examples/omni_portal/static/portal.js").read_text()
+    css = Path("examples/omni_portal/static/portal.css").read_text()
+
+    assert "function renderMarkdown" in javascript
+    assert "function startCall" in javascript
+    assert "function submitCallUtterance" in javascript
+    assert "function startCameraCapture" in javascript
+    assert "function stopCameraCapture" in javascript
+    assert 'elements.prompt.value = ""' in javascript
+    assert ".composer textarea:focus" in css
+    assert "box-shadow: none" in css
 
 
 def test_portal_api_requires_bearer_token() -> None:
@@ -109,6 +134,82 @@ def test_portal_pins_model_and_proxies_normal_response() -> None:
     assert good.json["message"]["content"] == "Hello back."
     assert good.json["portal"]["safe_tools_executed"] == []
     assert seen[0]["model"] == DEFAULT_MODEL
+
+
+def test_voice_profile_resolves_relative_speaker_and_validates_language(
+    tmp_path,
+) -> None:
+    speaker = tmp_path / "reference.wav"
+    speaker.write_bytes(b"RIFF")
+    profile_path = tmp_path / "voice.json"
+    profile_path.write_text(
+        json.dumps(
+            {
+                "schema": "robit.omni.voice-profile.v1",
+                "name": "studio",
+                "language": "en",
+                "speaker_file": "reference.wav",
+                "temperature": 0.5,
+                "seed": 7,
+            }
+        )
+    )
+
+    profile = load_voice_profile(profile_path)
+
+    assert profile["speaker_file"] == str(speaker.resolve())
+    assert profile["seed"] == 7
+
+    profile_path.write_text(
+        json.dumps(
+            {
+                "schema": "robit.omni.voice-profile.v1",
+                "language": "unsupported",
+            }
+        )
+    )
+    try:
+        load_voice_profile(profile_path)
+    except RuntimeError as exc:
+        assert "language must be one of" in str(exc)
+    else:
+        raise AssertionError("unsupported TTS language was accepted")
+
+
+def test_portal_enforces_server_voice_profile() -> None:
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": "Hello."}},
+        )
+
+    profile = {
+        "name": "fixed-voice",
+        "language": "en",
+        "speaker_file": "/srv/voices/fixed.wav",
+        "temperature": 0.4,
+        "top_k": 20,
+        "top_p": 0.8,
+        "seed": 42,
+        "max_frames": 512,
+    }
+    app = create_app(
+        _config(voice_profile=profile),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    response = app.test_client().post(
+        "/api/chat",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json=_request(speech={"speaker_file": "/tmp/client-choice.wav", "seed": -1}),
+    )
+
+    assert response.status_code == 200
+    assert seen[0]["speech"] == {
+        key: value for key, value in profile.items() if key != "name"
+    }
 
 
 def test_portal_executes_only_allowlisted_tool_and_strips_media_on_followup() -> None:

@@ -8,6 +8,7 @@ REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 SCRIPT_PATH="$SCRIPT_DIR/start.sh"
 PYTHON_BIN=${OMNI_PYTHON_BIN:-$REPO_ROOT/.venv-omni/bin/python}
 MODEL=${OMNI_MODEL:-robit/qwen3.8-27b-e03-obliterated-omni:q4km}
+LANGUAGE_MODEL=${OMNI_LANGUAGE_MODEL:-robit/qwen3.8-27b-obliterated-e03:27b}
 RUNTIME_ROOT=${OMNI_PORTAL_RUNTIME_ROOT:-$REPO_ROOT/training_suite/outputs/omni_portal_runtime}
 CACHE_DIR=${OMNI_COMPONENT_CACHE:-$RUNTIME_ROOT/components}
 STATE_DIR=${OMNI_PORTAL_STATE_DIR:-$RUNTIME_ROOT/state}
@@ -35,6 +36,7 @@ ADAPTER_PID=""
 PORTAL_PID=""
 TUNNEL_PID=""
 HEARTBEAT_PID=""
+SMOKE_PID=""
 LEASE_TOKEN=""
 CLEANING_UP=0
 
@@ -49,6 +51,16 @@ die() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || die "required command is missing: $1"
+}
+
+verify_language_model() {
+  local logical_sources
+  local language_sources
+  logical_sources=$(ollama show "$MODEL" --modelfile | awk '$1 == "FROM" {print $2}')
+  language_sources=$(ollama show "$LANGUAGE_MODEL" --modelfile | awk '$1 == "FROM" {print $2}')
+  [[ -n "$logical_sources" && "$logical_sources" == "$language_sources" ]] \
+    || die "OMNI_LANGUAGE_MODEL does not reference the combined tag's base/projector blobs"
+  log "verified language backend shares the combined tag's standard blobs"
 }
 
 wait_http() {
@@ -105,6 +117,24 @@ terminate_child() {
   fi
 }
 
+terminate_process_group() {
+  local pid=$1
+  local label=$2
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    log "stopping $label process group (leader $pid)"
+    kill -TERM -- "-$pid" 2>/dev/null || true
+    local started=$SECONDS
+    while kill -0 "$pid" 2>/dev/null && (( SECONDS - started < 15 )); do
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      log "$label did not stop gracefully; killing process group $pid"
+      kill -KILL -- "-$pid" 2>/dev/null || true
+    fi
+    wait "$pid" 2>/dev/null || true
+  fi
+}
+
 terminate_pid_file() {
   local file=$1
   local label=$2
@@ -145,12 +175,13 @@ cleanup() {
   CLEANING_UP=1
   trap - EXIT INT TERM
   terminate_child "$TUNNEL_PID" "Cloudflare tunnel"
+  terminate_child "$SMOKE_PID" "pre-tunnel smoke gate"
   terminate_child "$PORTAL_PID" "portal"
   terminate_child "$ADAPTER_PID" "adapter"
   terminate_child "$TTS_PID" "TTS wrapper"
   terminate_pid_file "$TTS_ACTIVE_PID_FILE" "TTS CUDA worker"
   terminate_child "$COMP_PID" "broker-scoped comprehension worker"
-  terminate_child "$HEARTBEAT_PID" "GPU lease heartbeat"
+  terminate_process_group "$HEARTBEAT_PID" "GPU lease heartbeat"
   if [[ -n "$LEASE_TOKEN" ]]; then
     log "releasing scoped GPU lease"
     docker gpu release "$LEASE_TOKEN" >/dev/null 2>&1 || true
@@ -311,6 +342,7 @@ run_foreground() {
   require_command jq
   require_command nvidia-smi
   require_command openssl
+  require_command setsid
   require_command ss
   [[ -x "$PYTHON_BIN" ]] || die "suite Python is missing: $PYTHON_BIN"
   [[ -x "$REPO_ROOT/training_suite/vendor/llama.cpp/build/bin/llama-server" ]] || die "llama-server is not built"
@@ -326,6 +358,9 @@ run_foreground() {
     log "model is not installed; pulling $MODEL"
     ollama pull "$MODEL"
   fi
+  ollama show "$LANGUAGE_MODEL" >/dev/null 2>&1 \
+    || die "language backend model is not installed: $LANGUAGE_MODEL"
+  verify_language_model
   "$PYTHON_BIN" -m training_suite omni-resolve "$MODEL" >/dev/null
   prepare_cache
 
@@ -339,7 +374,7 @@ run_foreground() {
     --token-only)
   [[ -n "$LEASE_TOKEN" ]] || die "GPU broker returned an empty lease token"
   printf '%s\n' "$LEASE_TOKEN" >"$GPU_LEASE_FILE"
-  docker gpu heartbeat "$LEASE_TOKEN" --watch \
+  setsid docker gpu heartbeat "$LEASE_TOKEN" --watch \
     >"$LOG_DIR/gpu-heartbeat.log" 2>&1 &
   HEARTBEAT_PID=$!
 
@@ -397,6 +432,7 @@ run_foreground() {
   OMNI_COMPREHENSION_URL="http://127.0.0.1:$COMP_PORT/v1/chat/completions" \
   OMNI_COMPREHENSION_MODEL=local-qwen3-omni \
   OMNI_LANGUAGE_URL=http://127.0.0.1:11434 \
+  OMNI_LANGUAGE_MODEL="$LANGUAGE_MODEL" \
   OMNI_TTS_URL="http://127.0.0.1:$TTS_PORT/synthesize" \
   OMNI_ADAPTER_HOST=127.0.0.1 \
   OMNI_ADAPTER_PORT="$ADAPTER_PORT" \
@@ -431,7 +467,10 @@ run_foreground() {
     --endpoint "http://127.0.0.1:$PORTAL_PORT" \
     --token-file "$TOKEN_FILE" \
     --model "$MODEL" --text --tts \
-    >"$LOG_DIR/pre-tunnel-smoke.log" 2>&1
+    >"$LOG_DIR/pre-tunnel-smoke.log" 2>&1 &
+  SMOKE_PID=$!
+  wait "$SMOKE_PID"
+  SMOKE_PID=""
 
   log "starting Cloudflare quick tunnel"
   cloudflared tunnel \

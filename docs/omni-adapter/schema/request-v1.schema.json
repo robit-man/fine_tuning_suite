@@ -47,7 +47,13 @@
       "properties": {
         "voice": {"type": "string"},
         "language": {"type": "string"},
-        "style": {"type": "string"}
+        "style": {"type": "string"},
+        "speaker_file": {"type": "string"},
+        "temperature": {"type": "number", "minimum": 0, "maximum": 2},
+        "top_k": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "top_p": {"type": "number", "minimum": 0, "maximum": 1},
+        "seed": {"type": "integer"},
+        "max_frames": {"type": "integer", "minimum": 1, "maximum": 2048}
       },
       "additionalProperties": true
     },

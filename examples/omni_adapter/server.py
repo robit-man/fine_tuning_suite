@@ -47,6 +47,7 @@ class Config:
     language_url: str
     tts_url: str
     timeout_s: float
+    language_model: str | None = None
 
     @classmethod
     def from_environment(cls) -> Config:
@@ -68,6 +69,9 @@ class Config:
                 "http://127.0.0.1:8091/synthesize",
             ).strip(),
             timeout_s=float(os.environ.get("OMNI_TIMEOUT_S", "900")),
+            language_model=(
+                os.environ.get("OMNI_LANGUAGE_MODEL", "").strip() or None
+            ),
         )
 
 
@@ -249,13 +253,14 @@ def _language_messages(
 def build_language_payload(
     parsed: ParsedAdapterRequest,
     observation: str | None,
+    language_model: str | None = None,
 ) -> dict[str, Any]:
     # The parsed passthrough carries normal Ollama fields such as tools, think,
     # format, options, keep_alive, and logprobs.
     payload = dict(parsed.passthrough)
     payload.update(
         {
-            "model": parsed.model,
+            "model": language_model or parsed.model,
             "messages": _language_messages(parsed, observation),
             "stream": False,
         }
@@ -322,9 +327,12 @@ def execute(
     else:
         response = client.post(
             config.language_url + "/api/chat",
-            json=build_language_payload(parsed, observation),
+            json=build_language_payload(parsed, observation, config.language_model),
         )
         result = _json_response(response, "language")
+        # Keep the external response pinned to the logical combined tag even
+        # when the language graph is loaded through its equivalent core tag.
+        result["model"] = parsed.model
         executed.append("language")
 
     message = result.get("message")
@@ -357,6 +365,8 @@ def execute(
     }
     if observation is not None:
         result["adapter"]["observation"] = observation
+    if "language" in executed and config.language_model:
+        result["adapter"]["language_backend_model"] = config.language_model
     if tts_skipped_reason:
         result["adapter"]["tts_skipped_reason"] = tts_skipped_reason
     return result

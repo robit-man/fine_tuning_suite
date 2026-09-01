@@ -73,6 +73,30 @@ scoped CUDA deployment, pass `OLLAMA_UNIFY_GPU_LEASE`, `OMNI_TTS_GPU_UUID`, and
 broker `prepare`, verifies that `llama-tts` is resident on that GPU, and calls
 `ready` for each generation. `OMNI_TTS_GPU_LAYERS=-1` enables full offload;
 `0` remains available only for explicit CPU development tests.
+`OMNI_TTS_BROKER_TRANSITION_TIMEOUT_S` defaults to 330 seconds so an unrelated
+in-flight Ollama request delays synthesis rather than forcing an anonymous CUDA
+fallback. A timed-out transition attempts to restore the stable `ready` state.
+
+### Qwen3-TTS voice controls
+
+The packaged TTS component is `Qwen3-TTS-12Hz-1.7B-Base-GGUF`. The wrapper
+accepts these `speech`/`POST /synthesize` fields:
+
+| Field | Meaning |
+|---|---|
+| `language` | Qwen3-TTS language code; portal default `en` |
+| `speaker_file` | Server-local WAV/MP3 reference for voice cloning |
+| `temperature` | Semantic-token sampling temperature, default `0.7` |
+| `top_k` | Semantic-token top-k, default `40` |
+| `top_p` | Semantic-token nucleus threshold, default `0.9` |
+| `seed` | Fixed integer for reproducibility; default `42`, `-1` is random |
+| `max_frames` | Maximum generated codec frames, capped by the server |
+
+The installed llama.cpp Qwen3-TTS Base path exposes audio-reference cloning but
+does not expose a distinct natural-language style instruction. The generic
+adapter schema retains `voice` and `style` for other backends; this reference
+worker does not claim to honor them. For a stable, specified voice, use a clean
+speaker reference plus a fixed seed and conservative sampling.
 
 ## 4. Start the unified adapter
 
@@ -80,10 +104,16 @@ broker `prepare`, verifies that `llama-tts` is resident on that GPU, and calls
 export OMNI_COMPREHENSION_URL=http://127.0.0.1:8901/v1/chat/completions
 export OMNI_COMPREHENSION_MODEL=local-qwen3-omni
 export OMNI_LANGUAGE_URL=http://127.0.0.1:11434
+export OMNI_LANGUAGE_MODEL=robit/qwen3.8-27b-obliterated-e03:27b
 export OMNI_TTS_URL=http://127.0.0.1:8892/synthesize
 export OMNI_ADAPTER_PORT=8910
 python examples/omni_adapter/server.py
 ```
+
+`OMNI_LANGUAGE_MODEL` is optional. It is appropriate when the combined tag and
+core tag reference identical normal model/projector blobs: requests and
+responses remain pinned to the logical combined tag, while Ollama loads the
+core tag without double-counting the custom sidecar for GPU placement.
 
 Health and contract:
 
@@ -149,6 +179,14 @@ JSON transport value is specifically needed.
   },
   "response_modalities": ["text", "audio"],
   "speech_mode": "always",
+  "speech": {
+    "language": "en",
+    "speaker_file": "/srv/voices/reference.wav",
+    "temperature": 0.7,
+    "top_k": 40,
+    "top_p": 0.9,
+    "seed": 42
+  },
   "think": true,
   "stream": false
 }

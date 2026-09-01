@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/robit-man/fine_tuning_suite/docs/omni-adapter/schema/voice-profile-v1.schema.json",
+  "title": "Robit Omni Qwen3-TTS voice profile v1",
+  "type": "object",
+  "required": ["schema", "language"],
+  "properties": {
+    "schema": {"const": "robit.omni.voice-profile.v1"},
+    "name": {"type": "string", "minLength": 1},
+    "language": {
+      "type": "string",
+      "enum": ["zh", "en", "de", "it", "pt", "es", "ja", "ko", "fr", "ru"]
+    },
+    "speaker_file": {
+      "type": "string",
+      "description": "Server-local WAV/MP3 reference; relative paths resolve from the profile file."
+    },
+    "temperature": {"type": "number", "minimum": 0, "maximum": 2},
+    "top_k": {"type": "integer", "minimum": 0, "maximum": 1000},
+    "top_p": {"type": "number", "minimum": 0, "maximum": 1},
+    "seed": {"type": "integer", "minimum": -1, "maximum": 2147483647},
+    "max_frames": {"type": "integer", "minimum": 1, "maximum": 2048}
+  },
+  "additionalProperties": false
+}

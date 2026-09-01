@@ -13,7 +13,7 @@ import json
 import os
 import threading
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -24,6 +24,17 @@ from flask import Flask, jsonify, render_template, request
 ADAPTER_SCHEMA = "robit.ollama.omni-adapter.v1"
 DEFAULT_MODEL = "robit/qwen3.8-27b-e03-obliterated-omni:q4km"
 MAX_TOOL_ROUNDS = 2
+VOICE_PROFILE_SCHEMA = "robit.omni.voice-profile.v1"
+QWEN3_TTS_LANGUAGES = {"zh", "en", "de", "it", "pt", "es", "ja", "ko", "fr", "ru"}
+VOICE_SPEECH_FIELDS = {
+    "language",
+    "speaker_file",
+    "temperature",
+    "top_k",
+    "top_p",
+    "seed",
+    "max_frames",
+}
 
 SAFE_TOOLS = [
     {
@@ -51,6 +62,61 @@ SAFE_TOOLS = [
 ]
 
 
+def load_voice_profile(path: Path) -> dict[str, Any]:
+    try:
+        profile = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"could not read voice profile {path}: {exc}") from exc
+    if not isinstance(profile, dict):
+        raise TypeError("voice profile must be a JSON object")
+    if profile.get("schema") != VOICE_PROFILE_SCHEMA:
+        raise RuntimeError(f"voice profile schema must be {VOICE_PROFILE_SCHEMA}")
+    unknown = set(profile) - VOICE_SPEECH_FIELDS - {"schema", "name"}
+    if unknown:
+        raise RuntimeError(f"unknown voice profile fields: {sorted(unknown)}")
+    language = str(profile.get("language") or "en").strip()
+    if language not in QWEN3_TTS_LANGUAGES:
+        supported = ", ".join(sorted(QWEN3_TTS_LANGUAGES))
+        raise RuntimeError(f"voice profile language must be one of: {supported}")
+    profile["language"] = language
+    speaker = str(profile.get("speaker_file") or "").strip()
+    if speaker:
+        speaker_path = Path(speaker).expanduser()
+        if not speaker_path.is_absolute():
+            speaker_path = path.parent / speaker_path
+        speaker_path = speaker_path.resolve()
+        if not speaker_path.is_file():
+            raise RuntimeError(f"voice profile speaker file does not exist: {speaker_path}")
+        if speaker_path.suffix.lower() not in {".wav", ".mp3"}:
+            raise RuntimeError("voice profile speaker file must be WAV or MP3")
+        profile["speaker_file"] = str(speaker_path)
+    else:
+        profile.pop("speaker_file", None)
+    numeric_ranges = {
+        "temperature": (0.0, 2.0),
+        "top_k": (0, 1000),
+        "top_p": (0.0, 1.0),
+        "max_frames": (1, 2048),
+    }
+    for key, (minimum, maximum) in numeric_ranges.items():
+        if key not in profile:
+            continue
+        value = profile[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"voice profile {key} must be numeric")
+        if not minimum <= value <= maximum:
+            raise RuntimeError(
+                f"voice profile {key} must be between {minimum} and {maximum}"
+            )
+    if "seed" in profile and (
+        isinstance(profile["seed"], bool) or not isinstance(profile["seed"], int)
+    ):
+        raise RuntimeError("voice profile seed must be an integer")
+    if not -1 <= int(profile.get("seed", 42)) <= 2_147_483_647:
+        raise RuntimeError("voice profile seed must be -1 or a 32-bit non-negative integer")
+    return profile
+
+
 @dataclass(frozen=True)
 class PortalConfig:
     adapter_url: str
@@ -60,6 +126,7 @@ class PortalConfig:
     ollama_health_url: str
     model: str
     access_token: str
+    voice_profile: Mapping[str, Any] = field(default_factory=dict)
     timeout_s: float = 1200
     max_body_bytes: int = 96 * 1024 * 1024
 
@@ -71,6 +138,12 @@ class PortalConfig:
         access_token = os.environ.get("OMNI_PORTAL_TOKEN", "").strip()
         if len(access_token) < 24:
             raise RuntimeError("OMNI_PORTAL_TOKEN must contain at least 24 characters")
+        profile_path = Path(
+            os.environ.get(
+                "OMNI_VOICE_PROFILE",
+                str(Path(__file__).resolve().parent / "voice-profile.json"),
+            )
+        ).expanduser()
         return cls(
             adapter_url=adapter_url,
             adapter_health_url=os.environ.get(
@@ -87,6 +160,7 @@ class PortalConfig:
             ).strip(),
             model=os.environ.get("OMNI_MODEL", DEFAULT_MODEL).strip(),
             access_token=access_token,
+            voice_profile=load_voice_profile(profile_path),
             timeout_s=float(os.environ.get("OMNI_PORTAL_TIMEOUT_S", "1200")),
             max_body_bytes=int(
                 os.environ.get("OMNI_PORTAL_MAX_BODY_BYTES", str(96 * 1024 * 1024))
@@ -276,6 +350,13 @@ def create_app(
                 "schema": ADAPTER_SCHEMA,
                 "stages": stages,
                 "safe_tools": SAFE_TOOLS,
+                "voice_profile": {
+                    "name": str(runtime.voice_profile.get("name") or "default"),
+                    "language": str(runtime.voice_profile.get("language") or "en"),
+                    "speaker_reference": bool(
+                        runtime.voice_profile.get("speaker_file")
+                    ),
+                },
             }
         )
 
@@ -294,6 +375,13 @@ def create_app(
                 return jsonify({"error": "portal model tag is fixed"}), 400
             if payload.get("stream") is not False:
                 return jsonify({"error": "portal requires stream=false"}), 400
+            speech = {
+                key: copy.deepcopy(value)
+                for key, value in runtime.voice_profile.items()
+                if key in VOICE_SPEECH_FIELDS
+            }
+            if speech:
+                payload["speech"] = speech
 
             executed: list[dict[str, str]] = []
             current_payload: dict[str, Any] = payload
@@ -332,4 +420,3 @@ if __name__ == "__main__":
         debug=False,
         threaded=True,
     )
-

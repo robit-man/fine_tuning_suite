@@ -55,7 +55,7 @@ clearly delimited, untrusted observation text.
 | `omni.include_audio_from_video` | No | Whether video decoding exposes its audio track; default `true` |
 | `response_modalities` | No | Non-empty subset of `text`, `audio`; default `text` |
 | `speech_mode` | No | `auto`, `always`, or `never`; default `auto` |
-| `speech` | No | Backend voice, language, and style hints |
+| `speech` | No | Backend-specific voice, language, cloning, sampling, and style hints |
 
 `speech_mode` has the following precedence:
 
@@ -63,8 +63,14 @@ clearly delimited, untrusted observation text.
 2. `never` disables TTS.
 3. `auto` requests TTS only when `response_modalities` contains `audio`.
 
-`omni.task=synthesize` always executes TTS. `transcribe` and `describe` return
-text directly and do not synthesize in v1.
+`omni.task=synthesize` always executes TTS. `transcribe` and `describe` bypass
+the language stage; they return comprehension text directly and may synthesize
+that text when `speech_mode` requests audio.
+
+The reference Qwen3-TTS Base worker supports `language`, `speaker_file`,
+`temperature`, `top_k`, `top_p`, `seed`, and `max_frames`. Other fields are
+backend capabilities, not portable guarantees. In particular, its current
+llama.cpp API has no separate natural-language style-instruction channel.
 
 ## Message media fields
 

@@ -1,0 +1,11 @@
+{
+  "schema": "robit.omni.voice-profile.v1",
+  "name": "default",
+  "language": "en",
+  "speaker_file": "",
+  "temperature": 0.7,
+  "top_k": 40,
+  "top_p": 0.9,
+  "seed": 42,
+  "max_frames": 512
+}

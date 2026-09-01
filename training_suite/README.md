@@ -101,8 +101,10 @@ See [adapter docs](../docs/omni-adapter/README.md), the
 The [phone portal](../examples/omni_portal/README.md) packages these stages as
 an authenticated, mobile-first HTTPS chat application with hold-to-record
 microphone waveform capture, automatic media routing, image/video attachments,
-and a spoken-reply toggle. Its CUDA-only supervisor uses a scoped broker lease
-and publishes only the portal through a temporary Cloudflare tunnel.
+safe Markdown responses, a spoken-reply toggle, validated Qwen3-TTS voice
+profiles/reference cloning, and silence-delimited hands-free call turns. Its
+CUDA-only supervisor uses a scoped broker lease and publishes only the portal
+through a temporary Cloudflare tunnel.
 
 ## Main modules
 

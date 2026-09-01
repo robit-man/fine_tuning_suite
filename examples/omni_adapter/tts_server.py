@@ -43,6 +43,7 @@ class Config:
     gpu_uuid: str = ""
     active_pid_file: Path | None = None
     residency_timeout_s: float = 120
+    broker_transition_timeout_s: float = 330
 
     @classmethod
     def from_environment(cls) -> Config:
@@ -104,6 +105,9 @@ class Config:
             residency_timeout_s=float(
                 os.environ.get("OMNI_TTS_RESIDENCY_TIMEOUT_S", "120")
             ),
+            broker_transition_timeout_s=float(
+                os.environ.get("OMNI_TTS_BROKER_TRANSITION_TIMEOUT_S", "330")
+            ),
         )
 
 
@@ -111,13 +115,13 @@ class TTSError(RuntimeError):
     pass
 
 
-def _broker_transition(action: str, token: str) -> None:
+def _broker_transition(action: str, token: str, timeout_s: float = 330) -> None:
     completed = subprocess.run(
         ["docker", "gpu", action, token],
         check=False,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=timeout_s,
     )
     if completed.returncode != 0:
         diagnostic = (completed.stderr or completed.stdout).strip()[-1000:]
@@ -192,6 +196,18 @@ def synthesize(config: Config, body: dict[str, Any]) -> bytes:
     language = str(body.get("language") or body.get("lang") or "en").strip()
     speaker = str(body.get("speaker_file") or "").strip()
     frames = min(int(body.get("max_frames") or config.max_frames), config.max_frames)
+    temperature = float(body.get("temperature", 0.7))
+    top_k = int(body.get("top_k", 40))
+    top_p = float(body.get("top_p", 0.9))
+    seed = int(body.get("seed", 42))
+    if not 0 <= temperature <= 2:
+        raise TTSError("temperature must be between 0 and 2")
+    if not 0 <= top_k <= 1000:
+        raise TTSError("top_k must be between 0 and 1000")
+    if not 0 <= top_p <= 1:
+        raise TTSError("top_p must be between 0 and 1")
+    if not -1 <= seed <= 2_147_483_647:
+        raise TTSError("seed must be -1 or a 32-bit non-negative integer")
 
     with tempfile.TemporaryDirectory(prefix="robit-omni-tts-") as temp_dir:
         output = Path(temp_dir) / "speech.wav"
@@ -211,13 +227,34 @@ def synthesize(config: Config, body: dict[str, Any]) -> bytes:
             str(frames),
             "--gpu-layers",
             str(config.gpu_layers),
+            "--temp",
+            str(temperature),
+            "--top-k",
+            str(top_k),
+            "--top-p",
+            str(top_p),
+            "--seed",
+            str(seed),
         ]
         if speaker:
             command.extend(["--tts-speaker-file", speaker])
         if config.lease_token and not config.gpu_uuid:
             raise TTSError("OMNI_TTS_GPU_UUID is required with a scoped GPU lease")
         if config.lease_token:
-            _broker_transition("prepare", config.lease_token)
+            try:
+                _broker_transition(
+                    "prepare",
+                    config.lease_token,
+                    config.broker_transition_timeout_s,
+                )
+            except (TTSError, subprocess.TimeoutExpired):
+                # The client can time out while the broker is still draining.
+                # Restore the stable comprehension reservation before failing.
+                try:
+                    _broker_transition("ready", config.lease_token, 60)
+                except (TTSError, subprocess.TimeoutExpired) as exc:
+                    print(f"warning: GPU broker ready rollback failed: {exc}", file=sys.stderr)
+                raise
 
         process = subprocess.Popen(
             command,
@@ -235,7 +272,11 @@ def synthesize(config: Config, body: dict[str, Any]) -> bytes:
                 _wait_for_cuda_residency(
                     process, config.gpu_uuid, config.residency_timeout_s
                 )
-                _broker_transition("ready", config.lease_token)
+                _broker_transition(
+                    "ready",
+                    config.lease_token,
+                    config.broker_transition_timeout_s,
+                )
                 broker_ready = True
             try:
                 stdout, stderr = process.communicate(timeout=config.timeout_s)
@@ -249,8 +290,8 @@ def synthesize(config: Config, body: dict[str, Any]) -> bytes:
                 try:
                     # Comprehension remains resident, so restore the scoped lease
                     # if TTS failed between prepare and its own residency signal.
-                    _broker_transition("ready", config.lease_token)
-                except TTSError as exc:
+                    _broker_transition("ready", config.lease_token, 60)
+                except (TTSError, subprocess.TimeoutExpired) as exc:
                     print(f"warning: {exc}", file=sys.stderr)
         if process.returncode != 0:
             diagnostic = (stderr or stdout)[-2000:]

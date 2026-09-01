@@ -117,6 +117,19 @@ def main() -> int:
         if not str(result["message"].get("content") or "").strip():
             raise RuntimeError("ASR returned empty text")
         checks["audio"] = "pass"
+        if args.tts:
+            payload["response_modalities"] = ["text", "audio"]
+            payload["speech_mode"] = "always"
+            result = call(client, endpoint, payload)
+            validate_wav(result["message"].get("audio") or {})
+            if (result.get("adapter") or {}).get("route") != [
+                "comprehension",
+                "tts",
+            ]:
+                raise RuntimeError(
+                    f"ASR-to-TTS route was not direct: {result.get('adapter')!r}"
+                )
+            checks["audio_tts"] = "pass"
 
     if args.image:
         mime = {".png": "image/png", ".webp": "image/webp"}.get(

@@ -418,9 +418,13 @@ and [examples](examples/omni_adapter/README.md).
 
 For phone testing, the [authenticated Omni portal](examples/omni_portal/README.md)
 adds hold-to-record microphone capture with a live waveform, automatic ASR and
-media routing, image/video uploads, a spoken-reply toggle, a broker-compliant
-CUDA-only supervisor, and a temporary Cloudflare HTTPS tunnel. The deployment
-and rollback checklist is in the
+media routing, image/video uploads, safe Markdown responses, deterministic
+Qwen3-TTS voice profiles/reference cloning, a spoken-reply toggle, and
+silence-delimited hands-free call turns. It also records device camera and
+microphone streams through a live local preview into bounded video turns. Its broker-compliant CUDA-only
+supervisor publishes a temporary Cloudflare HTTPS tunnel. Adapter v1 call mode
+automates complete half-duplex request/reply turns; it does not claim
+incremental waveform generation. The deployment and rollback checklist is in the
 [phone portal runbook](docs/omni-adapter/phone-portal.md).
 
 #### Video comprehension

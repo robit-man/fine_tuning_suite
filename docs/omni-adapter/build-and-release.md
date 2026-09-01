@@ -147,7 +147,7 @@ live.
 Create a model repository such as:
 
 ```text
-robit-man/Qwen3.8-27B-E03-Obliterated-Omni-GGUF
+cudabenchmarktest/Qwen3.8-27B-E03-Obliterated-Omni-GGUF
 ```
 
 Upload:

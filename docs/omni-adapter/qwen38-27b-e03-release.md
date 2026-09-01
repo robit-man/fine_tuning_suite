@@ -7,7 +7,7 @@ publication gates pending at the time of this record.
 
 - Ollama: `robit/qwen3.8-27b-e03-obliterated-omni:q4km`
 - Ollama alias: `robit/qwen3.8-27b-e03-obliterated-omni:latest`
-- Hugging Face: `robit-man/Qwen3.8-27B-E03-Obliterated-Omni-GGUF`
+- Hugging Face: `cudabenchmarktest/Qwen3.8-27B-E03-Obliterated-Omni-GGUF`
 
 ## Schemas and toolchain
 

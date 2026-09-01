@@ -46,6 +46,19 @@ An implementation MUST NOT include base64 media in the language prompt. It
 passes media only to the comprehension graph and injects its semantic result as
 clearly delimited, untrusted observation text.
 
+For `chat`, the comprehension graph is a perception encoder, not a second
+assistant. It MUST NOT answer the user. Audio-bearing observations SHOULD place
+verbatim speech inside `<speech_transcript>` and visual evidence inside
+`<visual_observation>`, with no conversational reply outside those tags. A
+client may attribute only the extracted transcript—not the raw observation—to
+the user's chat role.
+
+The runtime MUST withhold conversational message text from the comprehension
+graph. That text is an instruction to the language model, while the media graph
+receives only media plus a modality-specific extraction instruction. This
+separation prevents prompts such as “reply naturally” from producing a second,
+misrouted assistant answer during perception.
+
 ### Adapter fields
 
 | Field | Required | Meaning |

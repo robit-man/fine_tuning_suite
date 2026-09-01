@@ -247,13 +247,49 @@
     return record;
   }
 
-  function addMessage({ role, content, thinking, audio, error = false, streaming = false }) {
+  function loopingVideo(item, { ownsUrl = false } = {}) {
+    const video = document.createElement("video");
+    video.className = "looping-video";
+    video.autoplay = true;
+    video.loop = true;
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "metadata";
+    video.disablePictureInPicture = true;
+    video.setAttribute("aria-label", "Looping preview of the sent video clip");
+    video.src = item.previewUrl;
+    if (ownsUrl) video.dataset.objectUrl = item.previewUrl;
+    video.addEventListener("loadeddata", () => video.play().catch(() => {}), { once: true });
+    return video;
+  }
+
+  function appendMessageMedia(node, media) {
+    const videos = (media || []).filter(item => item.kind === "video" && item.previewUrl);
+    if (!videos.length) return;
+    const gallery = document.createElement("div");
+    gallery.className = "message-media";
+    for (const item of videos) {
+      const preview = document.createElement("div");
+      preview.className = "message-video-preview";
+      preview.appendChild(loopingVideo(item, { ownsUrl: true }));
+      const badge = document.createElement("span");
+      badge.textContent = "VIDEO · LOOP";
+      preview.appendChild(badge);
+      gallery.appendChild(preview);
+    }
+    node.appendChild(gallery);
+  }
+
+  function addMessage({ role, content, thinking, audio, media = [], error = false, streaming = false }) {
     const node = elements.template.content.firstElementChild.cloneNode(true);
     node.classList.add(role === "user" ? "user" : "assistant");
     if (error) node.classList.add("error");
     elements.conversation.appendChild(node);
     const record = { node, role, error, playback: Promise.resolve() };
-    return updateMessage(record, { content, thinking, audio, streaming });
+    updateMessage(record, { content, thinking, audio, streaming });
+    appendMessageMedia(node, media);
+    elements.conversation.scrollTop = elements.conversation.scrollHeight;
+    return record;
   }
 
   function base64ToBlob(data, mime) {
@@ -543,6 +579,8 @@
         image.alt = "";
         image.src = `data:${item.mime};base64,${item.data}`;
         preview.appendChild(image);
+      } else if (item.kind === "video" && item.previewUrl) {
+        preview.appendChild(loopingVideo(item));
       } else {
         preview.textContent = item.kind === "audio" ? "WAV" : "VID";
       }
@@ -569,6 +607,7 @@
       remove.textContent = "×";
       remove.setAttribute("aria-label", `Remove ${item.name}`);
       remove.addEventListener("click", () => {
+        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
         state.attachments.splice(index, 1);
         renderAttachments();
       });
@@ -586,7 +625,7 @@
     });
   }
 
-  async function addFile(file, forcedKind = null) {
+  async function addFile(file, forcedKind = null, source = "upload") {
     if (!file) return;
     const kind = forcedKind || inferKind(file);
     if (file.size > LIMITS[kind]) {
@@ -595,13 +634,22 @@
     const dataUrl = await fileDataUrl(file);
     const comma = dataUrl.indexOf(",");
     if (comma < 0) throw new Error("File could not be encoded");
-    state.attachments.push({
+    const item = {
       kind,
       name: file.name || `microphone-${Date.now()}.wav`,
       mime: kind === "audio" ? "audio/wav" : file.type,
       data: dataUrl.slice(comma + 1),
       bytes: file.size,
-    });
+      source,
+      previewUrl: kind === "video" ? URL.createObjectURL(file) : null,
+    };
+    if (source === "camera") {
+      for (const previous of state.attachments.filter(value => value.source === "camera")) {
+        if (previous.previewUrl) URL.revokeObjectURL(previous.previewUrl);
+      }
+      state.attachments = state.attachments.filter(value => value.source !== "camera");
+    }
+    state.attachments.push(item);
     renderAttachments();
   }
 
@@ -1001,6 +1049,7 @@
     if (!camera) return;
     if (camera.stopping) return camera.stopping;
     camera.stopping = (async () => {
+      elements.cameraButton.disabled = true;
       clearTimeout(camera.timer);
       if (camera.recorder.state !== "inactive") camera.recorder.stop();
       try {
@@ -1013,6 +1062,7 @@
         elements.cameraButton.setAttribute("aria-pressed", "false");
         elements.cameraButton.setAttribute("aria-label", "Start device video recording");
         elements.cameraButton.title = "Record device video";
+        elements.cameraButton.disabled = false;
         elements.micButton.disabled = false;
         elements.callButton.disabled = false;
       }
@@ -1022,7 +1072,7 @@
       if (!blob.size) throw new Error("The device video contained no recorded data");
       const extension = mime === "video/mp4" ? "mp4" : "webm";
       const file = new File([blob], `device-video-${Date.now()}.${extension}`, { type: mime });
-      await addFile(file, "video");
+      await addFile(file, "video", "camera");
       setComposerStatus(`Video attached · ${((Date.now() - camera.started) / 1000).toFixed(1)} seconds`);
     })();
     return camera.stopping;
@@ -1093,6 +1143,7 @@
     if (frame) message.images = [frame];
     const user = addMessage({ role: "user", content: frame ? "Video call message" : "Voice message" });
     const assistant = addMessage({ role: "assistant", content: "", streaming: true });
+    assistant.node.hidden = true;
     let streamedContent = "";
     let streamedThinking = "";
     const showThinking = reasoningEnabled();
@@ -1116,13 +1167,18 @@
         {
           signal: call.abortController.signal,
           onEvent: event => {
-            if (event.type === "observation" && event.content) {
-              user.node.querySelector(".message-content").textContent = String(event.content);
+            if (event.type === "observation" && event.transcript) {
+              user.node.querySelector(".message-content").textContent = String(event.transcript);
             } else if (event.type === "delta") {
-              streamedContent += String((event.message || {}).content || "");
+              const contentDelta = String((event.message || {}).content || "");
+              const thinkingDelta = showThinking
+                ? String((event.message || {}).thinking || "")
+                : "";
+              streamedContent += contentDelta;
               if (showThinking) {
-                streamedThinking += String((event.message || {}).thinking || "");
+                streamedThinking += thinkingDelta;
               }
+              if (contentDelta || thinkingDelta) assistant.node.hidden = false;
               updateMessage(assistant, {
                 content: streamedContent,
                 thinking: streamedThinking,
@@ -1145,8 +1201,12 @@
       );
       const reply = data.message || {};
       if (!(reply.audio && reply.audio.data)) throw new Error("Voice call reply contained no audio");
-      const transcript = String((data.adapter || {}).observation || "Voice message").trim();
+      const transcript = String(
+        (data.adapter || {}).input_transcript
+        || (frame ? "Video call message" : "Voice message"),
+      ).trim();
       user.node.querySelector(".message-content").textContent = transcript;
+      assistant.node.hidden = false;
       updateMessage(assistant, {
         content: reply.content || "Spoken response",
         thinking: showThinking ? (reply.thinking || streamedThinking) : "",
@@ -1163,6 +1223,7 @@
         await assistant.playback;
       }
     } catch (error) {
+      if (assistant.node.hidden) assistant.node.remove();
       if (error.name !== "AbortError") showError(error);
     } finally {
       assistant.node.classList.remove("streaming");
@@ -1399,8 +1460,13 @@
       return showError(error);
     }
 
-    const mediaSummary = state.attachments.map(item => item.kind).join(" · ");
-    addMessage({ role: "user", content: mediaSummary ? `${built.display}\n${mediaSummary}` : built.display });
+    const sentMedia = [...state.attachments];
+    const mediaSummary = sentMedia.map(item => item.kind).join(" · ");
+    addMessage({
+      role: "user",
+      content: mediaSummary ? `${built.display}\n${mediaSummary}` : built.display,
+      media: sentMedia,
+    });
     state.attachments = [];
     renderAttachments();
     elements.prompt.value = "";
@@ -1412,6 +1478,7 @@
         : (built.wantsThinking ? "Reasoning…" : "Replying…"),
     );
     const assistant = addMessage({ role: "assistant", content: "", streaming: true });
+    assistant.node.hidden = true;
     let streamedContent = "";
     let streamedThinking = "";
     let pcmController = null;
@@ -1420,10 +1487,15 @@
       const data = await streamChat(built.payload, {
         onEvent: event => {
           if (event.type === "delta") {
-            streamedContent += String((event.message || {}).content || "");
+            const contentDelta = String((event.message || {}).content || "");
+            const thinkingDelta = built.wantsThinking
+              ? String((event.message || {}).thinking || "")
+              : "";
+            streamedContent += contentDelta;
             if (built.wantsThinking) {
-              streamedThinking += String((event.message || {}).thinking || "");
+              streamedThinking += thinkingDelta;
             }
+            if (contentDelta || thinkingDelta) assistant.node.hidden = false;
             updateMessage(assistant, {
               content: streamedContent,
               thinking: streamedThinking,
@@ -1452,6 +1524,7 @@
       if (built.wantsSpeech && !(reply.audio && reply.audio.data)) {
         throw new Error("Spoken replies are enabled, but TTS returned no audio");
       }
+      assistant.node.hidden = false;
       updateMessage(assistant, {
         content: reply.content || (reply.audio ? "Spoken response" : "No response returned."),
         thinking: built.wantsThinking ? (reply.thinking || streamedThinking) : "",
@@ -1578,11 +1651,14 @@
   });
   elements.clear.addEventListener("click", () => {
     state.history = [];
+    for (const item of state.attachments) {
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+    }
     state.attachments = [];
     renderAttachments();
     for (const message of [...elements.conversation.querySelectorAll(".message")].slice(1)) {
-      for (const audio of message.querySelectorAll("audio[data-object-url]")) {
-        URL.revokeObjectURL(audio.dataset.objectUrl);
+      for (const media of message.querySelectorAll("[data-object-url]")) {
+        URL.revokeObjectURL(media.dataset.objectUrl);
       }
       message.remove();
     }
@@ -1599,6 +1675,9 @@
     if (state.recording) state.recording.stream.getTracks().forEach(track => track.stop());
     if (state.voice.recording) state.voice.recording.stream.getTracks().forEach(track => track.stop());
     if (state.voice.referenceUrl) URL.revokeObjectURL(state.voice.referenceUrl);
+    for (const item of state.attachments) {
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+    }
   });
 
   state.token = accessToken();

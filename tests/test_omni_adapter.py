@@ -549,6 +549,101 @@ def test_comprehension_payload_tags_video_for_qwen_style_server() -> None:
     assert payload["max_tokens"] == 2048
 
 
+def test_chat_comprehension_payload_forbids_conversational_media_reply() -> None:
+    parsed = parse_adapter_request(
+        _base_request(
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Reply to this recording.",
+                    "audios": [{"data": _encoded(_wav(16000))}],
+                }
+            ]
+        )
+    )
+
+    payload = build_comprehension_payload(
+        parsed,
+        Config("http://comp", "omni", "http://ollama", "http://tts", 30),
+    )
+
+    system = payload["messages"][0]
+    assert system["role"] == "system"
+    assert "not a conversational assistant" in system["content"]
+    assert "<speech_transcript>" in system["content"]
+    assert "never your response" in system["content"]
+    media_parts = payload["messages"][-1]["content"]
+    assert [part["type"] for part in media_parts] == ["input_audio", "text"]
+    assert "Reply to this recording." not in media_parts[-1]["text"]
+    assert "Transcribe the supplied speech verbatim" in media_parts[-1]["text"]
+    assert "Do not answer the speech" in media_parts[-1]["text"]
+
+
+def test_stream_exposes_only_tagged_input_transcript_to_clients() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "comprehension":
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    "<speech_transcript>Haha, same, just vibing.</speech_transcript>"
+                                    "<visual_observation>A person is visible.</visual_observation>"
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+        if request.url.host == "language":
+            body = json.loads(request.content)
+            assert "<adapter_observation>" in body["messages"][-1]["content"]
+            return httpx.Response(
+                200,
+                content=(
+                    b'{"message":{"role":"assistant","content":"What is the vibe?"},'
+                    b'"done":true}\n'
+                ),
+            )
+        return httpx.Response(404)
+
+    parsed = parse_adapter_request(
+        _base_request(
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Reply naturally.",
+                    "audios": [{"data": _encoded(_wav(16000))}],
+                }
+            ],
+            think=False,
+        )
+    )
+    events = [
+        json.loads(chunk)
+        for chunk in execute_stream(
+            parsed,
+            Config(
+                "http://comprehension/v1/chat/completions",
+                "qwen3-omni",
+                "http://language",
+                "http://tts/synthesize",
+                30,
+            ),
+            httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+    ]
+
+    observation = next(event for event in events if event["type"] == "observation")
+    assert observation["transcript"] == "Haha, same, just vibing."
+    assert "A person is visible" in observation["content"]
+    final = events[-1]["response"]
+    assert final["adapter"]["input_transcript"] == "Haha, same, just vibing."
+    assert final["message"]["content"] == "What is the vibe?"
+
+
 def test_video_context_overflow_retries_with_lower_frame_cap() -> None:
     seen_caps = []
 

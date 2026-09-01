@@ -186,7 +186,7 @@ The portable `robit.ollama.omni-adapter.v1` route remains `POST /api/chat` with
 | Event | Payload | Timing |
 |---|---|---|
 | `stage` | `stage: comprehension\|language\|tts` | Before a blocking stage |
-| `observation` | semantic media text | After comprehension |
+| `observation` | untrusted semantic media evidence | After comprehension |
 | `delta` | Ollama `message.content` and/or `message.thinking` delta | During language generation |
 | `final` | complete normal adapter response | After optional TTS |
 | `error` | safe error text and schema | If a stage fails after headers |
@@ -197,6 +197,16 @@ turns add `audio_start`, base64 `audio_delta` PCM16 chunks, and `audio_end`
 before the final event. The final message still contains a complete WAV for
 replay and compatibility. Clients must not interpret NDJSON or HTTP transport
 chunk boundaries as codec-frame boundaries.
+
+For media `chat`, comprehension is perception-only: it cannot answer the user.
+Its output uses `<speech_transcript>` and `<visual_observation>` evidence tags.
+Conversational message text is withheld from the comprehension graph and is
+sent only to the language model; the media graph receives a modality-specific
+extraction instruction instead.
+The `observation` event additionally exposes `transcript` only when a tagged
+speech transcript was produced; the authoritative final response mirrors that
+value as `adapter.input_transcript`. Clients must never display the raw semantic
+observation as a user-authored chat message.
 
 ## Python client
 

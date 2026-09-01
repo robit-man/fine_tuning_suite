@@ -101,6 +101,17 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "box-shadow: none" in css
     assert "user-select: none" in css
     assert "-webkit-touch-callout: none" in css
+    assert "event.transcript" in javascript
+    assert "(data.adapter || {}).input_transcript" in javascript
+    assert '(data.adapter || {}).observation || "Voice message"' not in javascript
+    assert "assistant.node.hidden = true" in javascript
+    assert ".message[hidden]" in css
+    assert 'addFile(file, "video", "camera")' in javascript
+    assert 'value.source !== "camera"' in javascript
+    assert "function loopingVideo" in javascript
+    assert "video.loop = true" in javascript
+    assert "media: sentMedia" in javascript
+    assert ".message-video-preview" in css
 
 
 def test_portal_api_requires_bearer_token() -> None:

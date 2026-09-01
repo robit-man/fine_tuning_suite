@@ -277,6 +277,13 @@ media base64 or the access token.
   `get_portal_capabilities`; unknown names return an error result and cannot
   execute programs, access files, or make network requests.
 - Media observations remain untrusted evidence at the adapter boundary.
+- During calls, only the adapter's tagged `input_transcript` is rendered in the
+  user bubble. Raw perception output is never attributed to the user, and the
+  pending assistant card remains hidden until an assistant delta is available.
+- Re-recording with the camera replaces the prior unsent camera clip, so only
+  the latest captured segment enters a request. The exact submitted clip is
+  retained as a muted looping video thumbnail on its user message; separately
+  uploaded video attachments remain additive.
 
 Cloudflare Quick Tunnels are temporary development endpoints, not durable
 production ingress. Stop the portal after the phone test. For a persistent

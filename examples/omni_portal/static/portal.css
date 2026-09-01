@@ -116,11 +116,36 @@ button { color: inherit; }
   animation: reveal 160ms ease-out;
 }
 
+.message[hidden] { display: none; }
+
 .message.user {
   align-self: flex-end;
   border-color: rgba(250,204,21,.2);
   border-radius: 16px 16px 4px 16px;
   background: rgba(250,204,21,.09);
+}
+
+.message-media { display: grid; gap: 8px; margin-top: 10px; }
+.message-video-preview {
+  position: relative;
+  width: min(260px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  background: #000;
+  aspect-ratio: 16 / 9;
+}
+.message-video-preview .looping-video { width: 100%; height: 100%; object-fit: cover; }
+.message-video-preview span {
+  position: absolute;
+  right: 7px;
+  bottom: 6px;
+  padding: 3px 5px;
+  border-radius: 999px;
+  background: rgba(0,0,0,.72);
+  color: rgba(255,255,255,.72);
+  font: 700 8px var(--mono);
+  letter-spacing: .06em;
 }
 
 .message.error { border-color: rgba(251,113,133,.4); color: #fecdd3; }
@@ -410,7 +435,7 @@ textarea::placeholder { color: var(--quiet); }
   text-transform: uppercase;
 }
 
-.attachment-preview img { width: 100%; height: 100%; object-fit: cover; }
+.attachment-preview img, .attachment-preview .looping-video { width: 100%; height: 100%; object-fit: cover; }
 .attachment-body { min-width: 0; }
 .attachment-name { overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-meta { color: var(--quiet); font: 9px var(--mono); text-transform: uppercase; }

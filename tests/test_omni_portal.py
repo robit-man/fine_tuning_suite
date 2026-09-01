@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
+import io
 import json
+import wave
 from pathlib import Path
 
 import httpx
@@ -56,9 +59,17 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
     assert b"ROBIT" not in response.data
     assert b'id="waveform-canvas"' in response.data
     assert b'id="speak-toggle"' in response.data
+    assert b'id="think-toggle"' in response.data
     assert b'id="call-button"' in response.data
     assert b'id="camera-button"' in response.data
     assert b'id="camera-video"' in response.data
+    assert b'id="voice-button"' in response.data
+    assert b'id="voice-clone-enabled"' in response.data
+    assert b'id="voice-reference-input"' in response.data
+    assert b'href="/assets/favicon.svg"' in response.data
+    assert response.data.index(b'id="camera-button"') < response.data.index(
+        b'id="call-button"'
+    )
     assert b'aria-pressed="false"' in response.data
     assert b'maximum-scale=1' in response.data
     assert b'user-scalable=no' in response.data
@@ -77,6 +88,12 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "function submitCallUtterance" in javascript
     assert "function startCameraCapture" in javascript
     assert "function stopCameraCapture" in javascript
+    assert "function streamChat" in javascript
+    assert "CALL_BARGE_THRESHOLD" in javascript
+    assert "think: reasoningEnabled()" in javascript
+    assert "max_frames: 24" in javascript
+    assert "function voicePayload" in javascript
+    assert "function startVoiceReferenceRecording" in javascript
     assert 'elements.prompt.value = ""' in javascript
     assert ".composer textarea:focus" in css
     assert "box-shadow: none" in css
@@ -106,6 +123,8 @@ def test_portal_status_probes_all_internal_stages() -> None:
     assert response.json["ok"] is True
     assert set(seen) == {"adapter", "comprehension", "tts", "ollama"}
     assert response.json["model"] == DEFAULT_MODEL
+    assert response.json["voice_profile"]["clone_mode"] == "speaker_embedding"
+    assert response.json["voice_profile"]["client_reference_wav"] is True
 
 
 def test_portal_pins_model_and_proxies_normal_response() -> None:
@@ -212,6 +231,86 @@ def test_portal_enforces_server_voice_profile() -> None:
     }
 
 
+def test_portal_accepts_safe_client_voice_clone_and_controls() -> None:
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"message": {"role": "assistant", "content": "Hello."}}
+        )
+
+    wav_bytes = io.BytesIO()
+    with wave.open(wav_bytes, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b"\x00\x00" * 16000)
+    reference = {
+        "mime_type": "audio/wav",
+        "encoding": "base64",
+        "data": base64.b64encode(wav_bytes.getvalue()).decode("ascii"),
+    }
+    app = create_app(
+        _config(voice_profile={"name": "default", "language": "en", "seed": 42}),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    response = app.test_client().post(
+        "/api/chat",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json=_request(
+            portal_voice={
+                "clone_enabled": True,
+                "speaker_audio": reference,
+                "language": "ja",
+                "temperature": 0.55,
+                "top_k": 24,
+                "top_p": 0.8,
+                "seed": 7,
+                "max_frames": 384,
+            },
+            speech={"speaker_file": "/tmp/untrusted.wav"},
+        ),
+    )
+
+    assert response.status_code == 200
+    assert seen[0]["speech"]["language"] == "ja"
+    assert seen[0]["speech"]["temperature"] == 0.55
+    assert seen[0]["speech"]["seed"] == 7
+    assert "speaker_file" not in seen[0]["speech"]
+    assert seen[0]["speech"]["speaker_audio"]["data"] == reference["data"]
+    assert "portal_voice" not in seen[0]
+
+
+def test_portal_rejects_invalid_voice_clone_before_proxy() -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={})
+
+    app = create_app(_config(), httpx.Client(transport=httpx.MockTransport(handler)))
+    response = app.test_client().post(
+        "/api/chat",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json=_request(
+            portal_voice={
+                "clone_enabled": True,
+                "speaker_audio": {
+                    "mime_type": "audio/wav",
+                    "encoding": "base64",
+                    "data": base64.b64encode(b"not a wav").decode("ascii"),
+                },
+            }
+        ),
+    )
+
+    assert response.status_code == 400
+    assert "invalid voice reference" in response.json["error"]
+    assert calls == 0
+
+
 def test_portal_executes_only_allowlisted_tool_and_strips_media_on_followup() -> None:
     requests = []
 
@@ -299,4 +398,59 @@ def test_portal_rejects_streaming_before_proxy() -> None:
     )
 
     assert response.status_code == 400
+    assert calls == 0
+
+
+def test_portal_stream_route_pins_profile_and_relays_ndjson() -> None:
+    seen = []
+    wire = (
+        b'{"type":"delta","message":{"content":"Hi"}}\n'
+        b'{"type":"final","response":{"message":{"content":"Hi"}}}\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(
+            200,
+            content=wire,
+            headers={"content-type": "application/x-ndjson"},
+        )
+
+    profile = {"name": "fixed", "language": "en", "seed": 42}
+    app = create_app(
+        _config(voice_profile=profile),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    response = app.test_client().post(
+        "/api/chat/stream",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json=_request(stream=True, speech={"seed": -1}),
+    )
+
+    assert response.status_code == 200
+    assert response.data == wire
+    assert seen[0][0] == "/api/chat/stream"
+    assert seen[0][1]["stream"] is True
+    assert seen[0][1]["think"] is True
+    assert seen[0][1]["speech"] == {"language": "en", "seed": 42}
+
+
+def test_portal_stream_route_requires_auth_and_disables_auto_tools() -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200)
+
+    app = create_app(_config(), httpx.Client(transport=httpx.MockTransport(handler)))
+    client = app.test_client()
+
+    assert client.post("/api/chat/stream", json=_request(stream=True)).status_code == 401
+    rejected = client.post(
+        "/api/chat/stream",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json=_request(stream=True, portal_auto_tools=True),
+    )
+    assert rejected.status_code == 400
     assert calls == 0

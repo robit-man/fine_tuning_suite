@@ -22,17 +22,30 @@ and synthesized audio. Assistant text renders a safe Markdown subset including
 headings, emphasis, lists, block quotes, links, and fenced code. Sending a turn
 clears the composer and attachments immediately.
 
-The camera icon opens the device camera and microphone with a live, muted
+The brain icon controls the real Ollama `think` request field. Gray disables
+reasoning output; violet enables it. When enabled, streamed reasoning is shown
+in a collapsed Reasoning disclosure beneath the answer instead of being mixed
+into the visible response.
+
+The camera icon in the upper-right control group opens the device camera and microphone with a live, muted
 in-interface preview. Tap it again—or press Send—to stop and attach the bounded
 recording as MP4 or WebM, including its audio track when the browser provides
-one. Recordings stop automatically after 30 seconds and use a constrained video
-bitrate to remain below the portal upload limit.
+one. Recordings use a constrained video bitrate to remain below the portal
+upload limit. Starting Call while the camera is active pauses the attachment
+recording and sends the current visual frame with each detected speech turn;
+this provides bounded live visual conversation without presenting an unbounded
+video stream to the model context.
 
 The phone icon at the upper right starts hands-free voice mode. Browser-side
 voice activity detection groups microphone samples into utterances after 700
 ms of silence, submits each complete 16 kHz WAV through Qwen3-Omni and Qwen3.8,
-then plays the Qwen3-TTS reply before listening resumes. The live waveform and
-status line show whether the portal is listening, understanding, or speaking.
+streams the response text as Ollama produces it, then plays the Qwen3-TTS reply.
+The microphone remains active during inference and playback. Sustained speech
+stops current playback, records the interruption, and queues the new turn as
+soon as the in-flight generation releases the serial inference lane. Echo
+cancellation and a higher interruption threshold reduce self-triggering. The
+live waveform and status line show whether the portal is listening,
+understanding, preparing speech, speaking, or handling an interruption.
 Tap the phone icon again to stop capture, abort an in-flight request, and stop
 playback.
 
@@ -44,23 +57,51 @@ playback.
 | Image/video with no prompt | Qwen3-Omni direct description |
 | Image/video with a prompt | Qwen3-Omni comprehension → Qwen3.8 |
 | Device camera capture | live local preview → MP4/WebM turn → video comprehension |
-| Speaker icon enabled | final text → Qwen3-TTS → 24 kHz WAV |
-| Phone icon enabled | repeated audio → comprehension → Qwen3.8 → TTS turns |
+| Camera + phone icons | current visual frame + repeated speech turns → spoken replies |
+| Speaker icon enabled | final text → streamed Qwen3-TTS PCM → replayable 24 kHz WAV |
+| Brain icon enabled | Ollama `think:true` → collapsible streamed reasoning |
+| Phone icon enabled | repeated/barge-in audio → comprehension → streamed Qwen3.8 text → TTS |
 
 Microphone capture is encoded in the browser as a complete 16 kHz mono PCM16
-WAV. Generated speech is returned as tagged base64 24 kHz mono PCM16 WAV and
-rendered with native phone playback controls. This is turn-based media upload,
-not simultaneous or chunk-level realtime audio streaming; adapter v1 requires
-`stream:false`. The call control automates those full request/reply turns. The
-viewport disables focus and pinch zoom for a stable app-like mobile layout.
-The same boundary applies to device video: preview and recording are live in the
-browser, while model ingestion starts after the recording is finalized.
+WAV. `/api/chat/stream` is a portal extension that relays NDJSON stage events,
+Ollama text/reasoning deltas, and one authoritative final response. It does not
+change the portable adapter v1 contract, whose `/api/chat` route still requires
+`stream:false`. Generated speech arrives as base64-tagged PCM16 deltas and is
+scheduled directly into the browser's unlocked Web Audio context. The final
+event also carries the complete tagged 24 kHz mono PCM16 WAV for replay and
+adapter compatibility. The browser remains receptive to barge-in throughout
+generation and scheduled playback. The viewport disables focus and pinch zoom
+for a stable app-like mobile layout.
 
-## Voice profile and cloning
+Video is sampled at 24 frames by the phone and clamped to at most 32 frames and
+2 fps by the adapter. The comprehension GGUF declares a 65,536-token context,
+and the deployment now starts `llama-server` at that native limit instead of
+the former 8,192-token test setting. If a multimodal prompt still exceeds the
+available context, the adapter retries only the comprehension stage with
+progressively smaller frame caps (24/16/8/4/1 as applicable). A recorded video
+turn therefore retains temporal comprehension whenever it fits; camera-call
+mode uses one current frame per speech turn for lower latency.
 
-The TTS weights are Qwen3-TTS 12 Hz 1.7B Base, not LuxTTS. Edit
+## Voice configuration and cloning
+
+The TTS weights are Qwen3-TTS 12 Hz 1.7B Base, not LuxTTS. Tap the waveform
+button in the portal header to open the request-local voice panel. It provides:
+
+- a voice-clone toggle;
+- phone recording or WAV upload for a clean 3–10 second reference;
+- in-browser reference playback and removal;
+- language, temperature, top-p, top-k, seed, and maximum-frame controls.
+
+The reference is sent as a bounded base64 WAV envelope. The portal validates
+its container, duration (0.5–30 seconds), and 10 MiB decoded limit, then the TTS
+worker writes it into a per-generation temporary directory for `llama-tts`.
+The file is deleted as soon as that generation finishes. The browser cannot
+select a server path. Only clone a voice you own or have permission to use.
+
+Edit
 [`voice-profile.json`](voice-profile.json) before startup to pin the server-side
-voice used by manual spoken replies and call mode:
+defaults or a trusted server-local reference used by manual spoken replies and
+call mode:
 
 ```json
 {
@@ -79,21 +120,25 @@ voice used by manual spoken replies and call mode:
 The portable contract is
 [`voice-profile-v1.schema.json`](../../docs/omni-adapter/schema/voice-profile-v1.schema.json).
 
-`speaker_file` may be an absolute path or a path relative to the profile. Qwen3-
-TTS accepts WAV or MP3 speaker references; use a clean, single-speaker clip
-without music or reverberation. A fixed non-negative `seed` makes repeated
-turns reproducible. `seed: -1` deliberately restores randomized voices and
-prosody. Lower temperature/top-p/top-k generally improves consistency; higher
-values add variation and can reintroduce timbre drift. Supported language codes
-are `zh`, `en`, `de`, `it`, `pt`, `es`, `ja`, `ko`, `fr`, and `ru`.
+`speaker_file` may be an absolute path or a path relative to the profile.
+Qwen3-TTS accepts WAV or MP3 server references; the browser path deliberately
+accepts WAV only. Use a clean, single-speaker clip without music or
+reverberation. A fixed non-negative `seed` makes repeated turns reproducible.
+`seed: -1` deliberately restores randomized voices and prosody. Lower
+temperature/top-p/top-k generally improves consistency; higher values add
+variation and can reintroduce timbre drift. Supported language codes are `zh`,
+`en`, `de`, `it`, `pt`, `es`, `ja`, `ko`, `fr`, and `ru`.
 
-The current llama.cpp interface for the Base checkpoint exposes speaker-reference
-cloning and sampling, but no separate natural-language style-instruction input.
-Do not prepend style directions to the spoken text: the model may read them
-aloud. A future Qwen3-TTS instruct/custom-voice worker can implement the existing
-adapter `speech.style` field once its runtime exposes a distinct instruction
-channel. Use a dedicated reference clip for the intended gender, timbre, accent,
-and delivery today.
+The current llama.cpp interface for the Base checkpoint extracts a speaker
+embedding from reference audio (`--tts-speaker-file`). It does not yet expose
+the official Python stack's higher-fidelity `ref_audio + ref_text` in-context
+clone path. It also has no separate natural-language style-instruction input.
+Do not prepend style directions to spoken text: the model may read them aloud.
+The official [Qwen3-TTS repository](https://github.com/QwenLM/Qwen3-TTS)
+documents VoiceDesign and CustomVoice capabilities, but those are separate
+checkpoint/runtime paths; controls for them are not presented as if they were
+present in this Base GGUF. Use a dedicated reference clip for the intended
+timbre, accent, and delivery today.
 
 Select another profile without editing the default:
 
@@ -102,9 +147,10 @@ OMNI_VOICE_PROFILE=/srv/voices/production.json \
   examples/omni_portal/start.sh --daemon
 ```
 
-The portal validates the profile at startup and overwrites any client-provided
-speech settings. `/api/status` reports the profile name, language, and whether a
-speaker reference is active without exposing its filesystem path.
+The portal validates the profile at startup, rejects direct client `speech`
+paths, and applies only the bounded `portal_voice` controls from its own UI.
+`/api/status` reports safe defaults and whether a server reference is active
+without exposing its filesystem path.
 
 ## One-command deployment
 
@@ -169,8 +215,10 @@ continue through broker-owned GPU lanes.
 | `OMNI_PORTAL_RUNTIME_ROOT` | `training_suite/outputs/omni_portal_runtime` | State/cache/log root |
 | `OMNI_COMPREHENSION_GPU_UUID` | broker-selected | Explicit approved GPU override |
 | `OMNI_COMPREHENSION_VRAM_MIB` | `45000` | Shared comprehension/TTS scoped reservation |
+| `OMNI_COMPREHENSION_CONTEXT_TOKENS` | `65536` | Native comprehension worker context; propagated to the adapter |
 | `OMNI_PORTAL_TOKEN` | generated | At least 24 characters |
 | `OMNI_VOICE_PROFILE` | `examples/omni_portal/voice-profile.json` | Validated server-side Qwen3-TTS profile |
+| `OMNI_TTS_STREAM_FRAMES` | `12` | Codec frames per live PCM decode window; 12 is about one second of audio |
 | `OMNI_TTS_BROKER_TRANSITION_TIMEOUT_S` | `330` | Maximum wait for scoped prepare/ready transitions |
 | `OMNI_KEEP_CACHE` | `0` | Keep materialized views after stop |
 | `OMNI_PORTAL_MAX_BODY_BYTES` | 96 MiB | Same-origin JSON request cap |
@@ -206,7 +254,8 @@ media base64 or the access token.
 
 - Only the portal is tunneled; Ollama and all workers remain on loopback.
 - Every inference/status API requires a constant-time bearer-token match.
-- The model tag is fixed server-side and streaming requests are rejected.
+- The model tag is fixed server-side. Portable `/api/chat` rejects streaming;
+  authenticated `/api/chat/stream` relays the bounded portal NDJSON extension.
 - Media inference has no CPU fallback; CUDA residency is verified before the
   scoped lease is marked ready.
 - Requests are limited to one in-flight inference and 96 MiB encoded JSON.

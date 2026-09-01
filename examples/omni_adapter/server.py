@@ -8,17 +8,20 @@ tag and its custom namespaced GGUF sidecar layer.
 from __future__ import annotations
 
 import base64
+import io
+import json
 import os
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping
+import wave
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import httpx
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request, stream_with_context
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -48,6 +51,8 @@ class Config:
     tts_url: str
     timeout_s: float
     language_model: str | None = None
+    comprehension_context_tokens: int = 65_536
+    comprehension_max_output_tokens: int = 2_048
 
     @classmethod
     def from_environment(cls) -> Config:
@@ -72,11 +77,21 @@ class Config:
             language_model=(
                 os.environ.get("OMNI_LANGUAGE_MODEL", "").strip() or None
             ),
+            comprehension_context_tokens=int(
+                os.environ.get("OMNI_COMPREHENSION_CONTEXT_TOKENS", "65536")
+            ),
+            comprehension_max_output_tokens=int(
+                os.environ.get("OMNI_COMPREHENSION_MAX_OUTPUT_TOKENS", "2048")
+            ),
         )
 
 
 class AdapterStageError(RuntimeError):
     pass
+
+
+MAX_VIDEO_FRAMES = 32
+MAX_VIDEO_FPS = 2.0
 
 
 def _json_response(response: httpx.Response, stage: str) -> dict[str, Any]:
@@ -151,6 +166,7 @@ def _content_parts(
     message: AdapterMessage,
     *,
     include_audio_from_video: bool,
+    max_video_frames: int = MAX_VIDEO_FRAMES,
 ) -> list[dict[str, Any]]:
     parts: list[dict[str, Any]] = []
     for media in message.audios:
@@ -163,12 +179,23 @@ def _content_parts(
     for media in message.images:
         parts.append({"type": "image_url", "image_url": {"url": media.data_uri()}})
     for media in message.videos:
+        sampling = dict(media.options)
+        try:
+            sampling["max_frames"] = min(
+                max_video_frames,
+                max(1, int(sampling.get("max_frames", MAX_VIDEO_FRAMES))),
+            )
+            sampling["fps"] = min(
+                MAX_VIDEO_FPS,
+                max(0.1, float(sampling.get("fps", 1))),
+            )
+        except (TypeError, ValueError) as exc:
+            raise AdapterStageError("video sampling values must be numeric") from exc
         video_part: dict[str, Any] = {
             "type": "input_video",
             "input_video": {"data": base64.b64encode(media.data).decode("ascii")},
+            "sampling": sampling,
         }
-        if media.options:
-            video_part["sampling"] = dict(media.options)
         parts.append(video_part)
         if include_audio_from_video:
             audio = _video_audio(media)
@@ -187,6 +214,8 @@ def _content_parts(
 def build_comprehension_payload(
     parsed: ParsedAdapterRequest,
     config: Config,
+    *,
+    max_video_frames: int = MAX_VIDEO_FRAMES,
 ) -> dict[str, Any]:
     messages: list[dict[str, Any]] = []
     if parsed.task == "transcribe":
@@ -210,6 +239,7 @@ def build_comprehension_payload(
         parts = _content_parts(
             message,
             include_audio_from_video=parsed.include_audio_from_video,
+            max_video_frames=max_video_frames,
         )
         if parts:
             messages.append({"role": message.role, "content": parts})
@@ -217,12 +247,72 @@ def build_comprehension_payload(
         "model": config.comprehension_model,
         "messages": messages,
         "stream": False,
+        "max_tokens": min(
+            config.comprehension_max_output_tokens,
+            max(1, config.comprehension_context_tokens // 4),
+        ),
         # Backends that expose this Qwen processor option should honor it. A
         # backend that does not must split video audio into a separate part.
         "mm_processor_kwargs": {
             "use_audio_in_video": parsed.include_audio_from_video,
         },
     }
+
+
+def _context_overflow(response: httpx.Response) -> bool:
+    if response.status_code != 400:
+        return False
+    message = response.text.lower()
+    return (
+        "exceed_context_size" in message
+        or "exceeds the available context size" in message
+        or "context window" in message and "exceed" in message
+    )
+
+
+def _comprehend(
+    parsed: ParsedAdapterRequest,
+    config: Config,
+    client: httpx.Client,
+) -> str:
+    videos = [video for message in parsed.messages for video in message.videos]
+    requested_cap = min(
+        MAX_VIDEO_FRAMES,
+        max(
+            (int(video.options.get("max_frames", MAX_VIDEO_FRAMES)) for video in videos),
+            default=MAX_VIDEO_FRAMES,
+        ),
+    )
+    frame_caps = (
+        tuple(cap for cap in (requested_cap, 24, 16, 8, 4, 1) if cap <= requested_cap)
+        if videos
+        else (MAX_VIDEO_FRAMES,)
+    )
+    attempted: set[int] = set()
+    last_response: httpx.Response | None = None
+    for frame_cap in frame_caps:
+        if frame_cap in attempted:
+            continue
+        attempted.add(frame_cap)
+        response = client.post(
+            config.comprehension_url,
+            json=build_comprehension_payload(
+                parsed, config, max_video_frames=frame_cap
+            ),
+        )
+        last_response = response
+        if _context_overflow(response) and frame_cap > 1:
+            continue
+        return _assistant_text(
+            _json_response(response, "comprehension"),
+            "comprehension",
+        )
+    if last_response is None:  # pragma: no cover - frame_caps is never empty
+        raise AdapterStageError("comprehension was not attempted")
+    return _assistant_text(
+        _json_response(last_response, "comprehension"),
+        "comprehension",
+    )
 
 
 def _language_messages(
@@ -298,48 +388,22 @@ def _tts_wav(response: httpx.Response) -> bytes:
         raise AdapterStageError(f"tts returned invalid audio: {exc}") from exc
 
 
-def execute(
+def _finish_response(
+    result: dict[str, Any],
     parsed: ParsedAdapterRequest,
     config: Config,
     client: httpx.Client,
+    *,
+    observation: str | None,
+    executed: list[str],
+    text_streamed: bool = False,
+    audio_streamed: bool = False,
 ) -> dict[str, Any]:
-    observation: str | None = None
-    executed: list[str] = []
-
-    if "comprehension" in parsed.route:
-        response = client.post(
-            config.comprehension_url,
-            json=build_comprehension_payload(parsed, config),
-        )
-        observation = _assistant_text(
-            _json_response(response, "comprehension"),
-            "comprehension",
-        )
-        executed.append("comprehension")
-
-    if parsed.task in {"transcribe", "describe"}:
-        result = _direct_response(parsed.model, observation or "")
-    elif parsed.task == "synthesize":
-        last_user = next(
-            message for message in reversed(parsed.messages) if message.role == "user"
-        )
-        result = _direct_response(parsed.model, last_user.content.strip())
-    else:
-        response = client.post(
-            config.language_url + "/api/chat",
-            json=build_language_payload(parsed, observation, config.language_model),
-        )
-        result = _json_response(response, "language")
-        # Keep the external response pinned to the logical combined tag even
-        # when the language graph is loaded through its equivalent core tag.
-        result["model"] = parsed.model
-        executed.append("language")
-
     message = result.get("message")
     if not isinstance(message, dict):
         raise AdapterStageError("result contains no Ollama message object")
     tool_calls = message.get("tool_calls")
-    wants_tts = parsed.synthesize and not tool_calls
+    wants_tts = parsed.synthesize and not tool_calls and "tts" not in executed
     tts_skipped_reason: str | None = None
     if parsed.synthesize and tool_calls:
         tts_skipped_reason = "unresolved_tool_calls"
@@ -362,6 +426,8 @@ def execute(
         "route": executed,
         "input_modalities": list(parsed.input_modalities),
         "speech_synthesized": "tts" in executed,
+        "text_streamed": text_streamed,
+        "audio_streamed": audio_streamed,
     }
     if observation is not None:
         result["adapter"]["observation"] = observation
@@ -370,6 +436,243 @@ def execute(
     if tts_skipped_reason:
         result["adapter"]["tts_skipped_reason"] = tts_skipped_reason
     return result
+
+
+def execute(
+    parsed: ParsedAdapterRequest,
+    config: Config,
+    client: httpx.Client,
+) -> dict[str, Any]:
+    observation: str | None = None
+    executed: list[str] = []
+
+    if "comprehension" in parsed.route:
+        observation = _comprehend(parsed, config, client)
+        executed.append("comprehension")
+
+    if parsed.task in {"transcribe", "describe"}:
+        result = _direct_response(parsed.model, observation or "")
+    elif parsed.task == "synthesize":
+        last_user = next(
+            message for message in reversed(parsed.messages) if message.role == "user"
+        )
+        result = _direct_response(parsed.model, last_user.content.strip())
+    else:
+        response = client.post(
+            config.language_url + "/api/chat",
+            json=build_language_payload(parsed, observation, config.language_model),
+        )
+        result = _json_response(response, "language")
+        # Keep the external response pinned to the logical combined tag even
+        # when the language graph is loaded through its equivalent core tag.
+        result["model"] = parsed.model
+        executed.append("language")
+
+    return _finish_response(
+        result,
+        parsed,
+        config,
+        client,
+        observation=observation,
+        executed=executed,
+    )
+
+
+def _stream_event(event_type: str, **values: Any) -> bytes:
+    return (
+        json.dumps({"type": event_type, **values}, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+
+
+def _pcm16_wav(pcm: bytes, sample_rate: int = 24000) -> bytes:
+    if len(pcm) % 2:
+        raise AdapterStageError("tts PCM stream ended on a partial sample")
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm)
+    return output.getvalue()
+
+
+def execute_stream(
+    parsed: ParsedAdapterRequest,
+    config: Config,
+    client: httpx.Client,
+) -> Iterator[bytes]:
+    """Stream language deltas, then emit one authoritative final response.
+
+    Comprehension remains a bounded preprocessing stage. Ollama language deltas
+    and Qwen3-TTS decoder PCM windows stream as explicit events, followed by one
+    authoritative final response containing the replayable WAV envelope.
+    """
+
+    observation: str | None = None
+    executed: list[str] = []
+
+    if "comprehension" in parsed.route:
+        yield _stream_event("stage", stage="comprehension")
+        observation = _comprehend(parsed, config, client)
+        executed.append("comprehension")
+        yield _stream_event("observation", content=observation)
+
+    if parsed.task in {"transcribe", "describe"}:
+        result = _direct_response(parsed.model, observation or "")
+        if observation:
+            yield _stream_event(
+                "delta",
+                message={"role": "assistant", "content": observation},
+            )
+    elif parsed.task == "synthesize":
+        last_user = next(
+            message for message in reversed(parsed.messages) if message.role == "user"
+        )
+        result = _direct_response(parsed.model, last_user.content.strip())
+        yield _stream_event(
+            "delta",
+            message={"role": "assistant", "content": last_user.content.strip()},
+        )
+    else:
+        yield _stream_event("stage", stage="language")
+        payload = build_language_payload(
+            parsed, observation, config.language_model
+        )
+        payload["stream"] = True
+        content = ""
+        thinking = ""
+        tool_calls: Any = None
+        result: dict[str, Any] = {}
+        with client.stream(
+            "POST", config.language_url + "/api/chat", json=payload
+        ) as response:
+            if response.status_code >= 400:
+                response.read()
+                raise AdapterStageError(
+                    "language returned HTTP "
+                    f"{response.status_code}: {response.text[:500]}"
+                )
+            for line in response.iter_lines():
+                if not line.strip():
+                    continue
+                try:
+                    chunk = json.loads(line)
+                except ValueError as exc:
+                    raise AdapterStageError(
+                        "language returned an invalid JSON stream"
+                    ) from exc
+                if not isinstance(chunk, dict):
+                    raise AdapterStageError(
+                        "language returned a non-object stream chunk"
+                    )
+                result.update(chunk)
+                message = chunk.get("message")
+                if not isinstance(message, Mapping):
+                    continue
+                delta: dict[str, Any] = {"role": "assistant"}
+                if message.get("content"):
+                    piece = str(message["content"])
+                    content += piece
+                    delta["content"] = piece
+                if message.get("thinking"):
+                    piece = str(message["thinking"])
+                    thinking += piece
+                    delta["thinking"] = piece
+                if len(delta) > 1:
+                    yield _stream_event("delta", message=delta)
+                if message.get("tool_calls"):
+                    tool_calls = message["tool_calls"]
+        result["model"] = parsed.model
+        final_message = result.setdefault(
+            "message", {"role": "assistant", "content": ""}
+        )
+        if not isinstance(final_message, dict):
+            raise AdapterStageError("language stream contains no message object")
+        final_message["role"] = "assistant"
+        final_message["content"] = content
+        if thinking:
+            final_message["thinking"] = thinking
+        if tool_calls:
+            final_message["tool_calls"] = tool_calls
+        executed.append("language")
+
+    audio_streamed = False
+    message = result.get("message")
+    if not isinstance(message, dict):
+        raise AdapterStageError("result contains no Ollama message object")
+    if parsed.synthesize and not message.get("tool_calls"):
+        text = str(message.get("content") or "").strip()
+        if not text:
+            raise AdapterStageError("tts route has no assistant text to synthesize")
+        yield _stream_event("stage", stage="tts")
+        yield _stream_event(
+            "audio_start",
+            audio={
+                "codec": "pcm_s16le",
+                "sample_rate_hz": 24000,
+                "channels": 1,
+                "sample_width_bits": 16,
+            },
+        )
+        tts_payload = {
+            "text": text,
+            "output": DEFAULT_AUDIO_CONTRACT.output.to_dict(),
+            **dict(parsed.speech),
+        }
+        chunks: list[bytes] = []
+        pending = b""
+        sequence = 0
+        with client.stream(
+            "POST", config.tts_url.rstrip("/") + "/stream", json=tts_payload
+        ) as response:
+            if response.status_code >= 400:
+                response.read()
+                raise AdapterStageError(
+                    f"tts stream returned HTTP {response.status_code}: "
+                    f"{response.text[:500]}"
+                )
+            if response.headers.get("x-audio-codec") not in {None, "pcm_s16le"}:
+                raise AdapterStageError("tts stream returned an unsupported codec")
+            for raw in response.iter_bytes():
+                data = pending + raw
+                complete = len(data) - (len(data) % 2)
+                pending = data[complete:]
+                chunk = data[:complete]
+                if not chunk:
+                    continue
+                chunks.append(chunk)
+                yield _stream_event(
+                    "audio_delta",
+                    audio={
+                        "sequence": sequence,
+                        "encoding": "base64",
+                        "data": base64.b64encode(chunk).decode("ascii"),
+                    },
+                )
+                sequence += 1
+        if pending:
+            raise AdapterStageError("tts PCM stream ended on a partial sample")
+        pcm = b"".join(chunks)
+        if not pcm:
+            raise AdapterStageError("tts stream returned no PCM audio")
+        wav = _pcm16_wav(pcm)
+        message["audio"] = encode_audio_response(wav, transcript=text)
+        executed.append("tts")
+        audio_streamed = True
+        yield _stream_event(
+            "audio_end", samples=len(pcm) // 2, decoded_bytes=len(pcm)
+        )
+    result = _finish_response(
+        result,
+        parsed,
+        config,
+        client,
+        observation=observation,
+        executed=executed,
+        text_streamed=True,
+        audio_streamed=audio_streamed,
+    )
+    yield _stream_event("final", response=result)
 
 
 def create_app(
@@ -406,6 +709,32 @@ def create_app(
             return jsonify({"error": str(exc), "schema": ADAPTER_SCHEMA}), 400
         except (AdapterStageError, httpx.HTTPError) as exc:
             return jsonify({"error": str(exc), "schema": ADAPTER_SCHEMA}), 502
+
+    @app.post("/api/chat/stream")
+    def chat_stream():
+        try:
+            body = request.get_json(force=True)
+            if not isinstance(body, dict):
+                raise OmniAdapterError("request body must be a JSON object")
+            if body.get("stream") is not True:
+                raise OmniAdapterError("stream endpoint requires stream=true")
+            normalized = dict(body)
+            normalized["stream"] = False
+            parsed = parse_adapter_request(normalized)
+        except OmniAdapterError as exc:
+            return jsonify({"error": str(exc), "schema": ADAPTER_SCHEMA}), 400
+
+        def generate() -> Iterator[bytes]:
+            try:
+                yield from execute_stream(parsed, runtime_config, session)
+            except (AdapterStageError, httpx.HTTPError) as exc:
+                yield _stream_event("error", error=str(exc), schema=ADAPTER_SCHEMA)
+
+        return Response(
+            stream_with_context(generate()),
+            content_type="application/x-ndjson; charset=utf-8",
+            headers={"X-Accel-Buffering": "no"},
+        )
 
     return app
 

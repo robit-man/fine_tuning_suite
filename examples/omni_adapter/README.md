@@ -39,7 +39,7 @@ pair:
   -m "$CACHE/comprehension-model.gguf" \
   --mmproj "$CACHE/comprehension-projector.gguf" \
   --host 127.0.0.1 --port 8901 \
-  --jinja -ngl 99 -c 8192
+  --jinja -ngl 99 -c 65536
 ```
 
 On a broker-managed CUDA host, do not run that command anonymously. First run
@@ -54,6 +54,10 @@ The current llama.cpp request translations are:
 
 For video with sound, `server.py` also demuxes the first audio stream using
 ffmpeg and submits 16 kHz mono PCM16 WAV as a separate audio part.
+The comprehension GGUF declares a 65,536-token context. The reference runtime
+clamps sampling to 32 frames and 2 fps, then retries a context-overflow response
+with progressively smaller frame caps. `OMNI_COMPREHENSION_CONTEXT_TOKENS` and
+`OMNI_COMPREHENSION_MAX_OUTPUT_TOKENS` tell the adapter the deployed limits.
 
 ## 3. Start TTS
 
@@ -86,23 +90,73 @@ accepts these `speech`/`POST /synthesize` fields:
 |---|---|
 | `language` | Qwen3-TTS language code; portal default `en` |
 | `speaker_file` | Server-local WAV/MP3 reference for voice cloning |
+| `speaker_audio` | Base64 WAV envelope for a request-local speaker clone (0.5–30 seconds, 10 MiB maximum) |
 | `temperature` | Semantic-token sampling temperature, default `0.7` |
 | `top_k` | Semantic-token top-k, default `40` |
 | `top_p` | Semantic-token nucleus threshold, default `0.9` |
 | `seed` | Fixed integer for reproducibility; default `42`, `-1` is random |
 | `max_frames` | Maximum generated codec frames, capped by the server |
 
-The installed llama.cpp Qwen3-TTS Base path exposes audio-reference cloning but
-does not expose a distinct natural-language style instruction. The generic
-adapter schema retains `voice` and `style` for other backends; this reference
-worker does not claim to honor them. For a stable, specified voice, use a clean
-speaker reference plus a fixed seed and conservative sampling.
+The installed llama.cpp Qwen3-TTS Base path exposes speaker-embedding cloning
+but not the official Python runtime's `ref_audio + ref_text` in-context clone
+path or a distinct natural-language style instruction. `speaker_audio` is
+materialized in a private per-generation temporary directory and removed after
+generation. The generic adapter schema retains `voice` and `style` for other
+backends; this reference worker does not claim to honor them. The separate
+VoiceDesign and CustomVoice checkpoints described in the
+[official Qwen3-TTS repository](https://github.com/QwenLM/Qwen3-TTS) are not
+silently emulated by this Base GGUF.
+
+### Experimental PCM stream
+
+The vendored private-fork `llama-tts` can expose each completed, stateful
+code2wav decoder window before generation ends:
+
+```bash
+./training_suite/prepare_llama_cpp.sh
+
+./training_suite/vendor/llama.cpp/build/bin/llama-tts \
+  -m tts-model.gguf --mmproj tts-projector.gguf \
+  --prompt "Read this sentence." --output final.wav \
+  --tts-stream --tts-stream-frames 72 > speech.s16le
+```
+
+The tracked bootstrap checks out the verified llama.cpp commit, applies
+`training_suite/patches/llama.cpp-qwen3tts-pcm-stream.patch` idempotently, and
+builds CUDA-enabled `llama-server` and `llama-tts`. Set
+`LLAMA_CPP_BUILD_JOBS` or `LLAMA_CPP_BUILD_DIR` when needed; an existing source
+checkout must already be at the pinned commit.
+
+In this mode stdout contains only headerless 24 kHz, mono, signed PCM16
+little-endian bytes; llama.cpp diagnostics remain on stderr. `final.wav` is
+still written and validated normally. The worker exposes the same stream over
+`POST /synthesize/stream` with `Content-Type:
+audio/pcm;rate=24000;channels=1;format=s16le` plus `X-Audio-Codec`,
+`X-Audio-Sample-Rate`, `X-Audio-Channels`, `X-Audio-Stream-Version`, and
+`X-Audio-Stream-Frames` headers. The JSON body is the same as `/synthesize`
+and may override `stream_frames`; `OMNI_TTS_STREAM_FRAMES` sets the server
+default.
+
+The conservative default is 72 codec frames, about six seconds of audio for
+the packaged 12 Hz model. A shorter utterance flushes once at end of speech.
+Values from 1 through 72 are accepted; for example, 12 targets roughly
+one-second decoder windows at the cost of more decoder invocations and lower
+throughput. These are real state-carrying code2wav calls, not chunks cut from a
+finished WAV. HTTP byte-chunk boundaries are not semantic decoder boundaries,
+so clients must buffer incomplete 16-bit samples.
+
+This route is experimental. If generation fails after response headers, the
+PCM stream terminates early; the final WAV is still checked server-side when
+generation succeeds. The reference worker also reloads the model per request,
+so its startup latency remains unsuitable for hard realtime or full duplex.
+A resident libmtmd worker can retain the same PCM contract.
 
 ## 4. Start the unified adapter
 
 ```bash
 export OMNI_COMPREHENSION_URL=http://127.0.0.1:8901/v1/chat/completions
 export OMNI_COMPREHENSION_MODEL=local-qwen3-omni
+export OMNI_COMPREHENSION_CONTEXT_TOKENS=65536
 export OMNI_LANGUAGE_URL=http://127.0.0.1:11434
 export OMNI_LANGUAGE_MODEL=robit/qwen3.8-27b-obliterated-e03:27b
 export OMNI_TTS_URL=http://127.0.0.1:8892/synthesize
@@ -122,6 +176,28 @@ curl -fsS http://127.0.0.1:8910/healthz
 curl -fsS http://127.0.0.1:8910/api/omni/adapter/contract
 ```
 
+### Experimental streamed response route
+
+The portable `robit.ollama.omni-adapter.v1` route remains `POST /api/chat` with
+`"stream": false`. This reference server additionally exposes
+`POST /api/chat/stream` for the phone harness. Send the same request with
+`"stream": true`; the response is `application/x-ndjson` with these events:
+
+| Event | Payload | Timing |
+|---|---|---|
+| `stage` | `stage: comprehension\|language\|tts` | Before a blocking stage |
+| `observation` | semantic media text | After comprehension |
+| `delta` | Ollama `message.content` and/or `message.thinking` delta | During language generation |
+| `final` | complete normal adapter response | After optional TTS |
+| `error` | safe error text and schema | If a stage fails after headers |
+
+The final response is authoritative. `adapter.text_streamed` and
+`adapter.audio_streamed` describe the actual transport. TTS-capable streamed
+turns add `audio_start`, base64 `audio_delta` PCM16 chunks, and `audio_end`
+before the final event. The final message still contains a complete WAV for
+replay and compatibility. Clients must not interpret NDJSON or HTTP transport
+chunk boundaries as codec-frame boundaries.
+
 ## Python client
 
 Global options must precede the subcommand.
@@ -137,7 +213,7 @@ python examples/omni_adapter/client.py \
 python examples/omni_adapter/client.py \
   --endpoint http://127.0.0.1:8910/api/chat \
   --model "$MODEL" \
-  video ./events.mp4 --fps 2 --max-frames 96 --include-audio
+  video ./events.mp4 --fps 1 --max-frames 32 --include-audio
 
 # Direct TTS
 python examples/omni_adapter/client.py \

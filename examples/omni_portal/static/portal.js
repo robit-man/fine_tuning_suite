@@ -5,10 +5,14 @@
   const MAX_UPLOAD_MIB = Number(document.body.dataset.maxUploadMib || 96);
   const SCHEMA = "robit.ollama.omni-adapter.v1";
   const MAX_RECORD_MS = 60_000;
+  const MAX_VOICE_REFERENCE_MS = 10_000;
+  const MAX_VOICE_REFERENCE_BYTES = 10 * 1024 * 1024;
   const MAX_VIDEO_RECORD_MS = 30_000;
   const CALL_SILENCE_MS = 700;
   const CALL_MIN_SPEECH_MS = 250;
   const CALL_VOICE_THRESHOLD = 0.014;
+  const CALL_BARGE_THRESHOLD = 0.035;
+  const CALL_BARGE_MIN_MS = 300;
   const LIMITS = {
     audio: 30 * 1024 * 1024,
     image: 18 * 1024 * 1024,
@@ -27,7 +31,28 @@
     cameraButton: document.getElementById("camera-button"),
     cameraPreview: document.getElementById("camera-preview"),
     cameraVideo: document.getElementById("camera-video"),
+    voiceButton: document.getElementById("voice-button"),
+    voiceDialog: document.getElementById("voice-dialog"),
+    voiceClose: document.getElementById("voice-close"),
+    voiceDone: document.getElementById("voice-done"),
+    voiceReset: document.getElementById("voice-reset"),
+    voiceCloneEnabled: document.getElementById("voice-clone-enabled"),
+    voiceReferenceControls: document.getElementById("voice-reference-controls"),
+    voiceReferenceInput: document.getElementById("voice-reference-input"),
+    voiceReferenceAudio: document.getElementById("voice-reference-audio"),
+    voiceReferenceStatus: document.getElementById("voice-reference-status"),
+    voiceReferenceClear: document.getElementById("voice-reference-clear"),
+    voiceRecord: document.getElementById("voice-record"),
+    voiceLanguage: document.getElementById("voice-language"),
+    voiceTemperature: document.getElementById("voice-temperature"),
+    voiceTemperatureValue: document.getElementById("voice-temperature-value"),
+    voiceTopP: document.getElementById("voice-top-p"),
+    voiceTopPValue: document.getElementById("voice-top-p-value"),
+    voiceTopK: document.getElementById("voice-top-k"),
+    voiceSeed: document.getElementById("voice-seed"),
+    voiceMaxFrames: document.getElementById("voice-max-frames"),
     speak: document.getElementById("speak-toggle"),
+    think: document.getElementById("think-toggle"),
     send: document.getElementById("send-button"),
     composerStatus: document.getElementById("composer-status"),
     clear: document.getElementById("clear-button"),
@@ -47,8 +72,22 @@
     recordClock: null,
     playbackContext: null,
     playbackSource: null,
+    playbackElement: null,
+    playbackEpoch: 0,
+    streamController: null,
     call: null,
     camera: null,
+    voice: {
+      initialized: false,
+      serverReference: false,
+      reference: null,
+      referenceUrl: null,
+      recording: null,
+      recordTimer: null,
+      defaults: {
+        language: "en", temperature: 0.7, topK: 40, topP: 0.9, seed: 42, maxFrames: 512,
+      },
+    },
   };
 
   function accessToken() {
@@ -180,17 +219,41 @@
     }
   }
 
-  function addMessage({ role, content, audio, error = false }) {
+  function updateMessage(record, {
+    content,
+    thinking,
+    audio,
+    streaming = false,
+    autoplayAudio = true,
+  }) {
+    const contentNode = record.node.querySelector(".message-content");
+    if (content !== undefined) {
+      if (record.role === "assistant" && !record.error) renderMarkdown(contentNode, content || "");
+      else contentNode.textContent = content || "";
+    }
+    const thinkingBox = record.node.querySelector(".thinking-output");
+    const thinkingNode = record.node.querySelector(".thinking-content");
+    if (thinking !== undefined) {
+      thinkingBox.hidden = !thinking;
+      if (thinking) renderMarkdown(thinkingNode, thinking);
+      else thinkingNode.replaceChildren();
+    }
+    record.node.classList.toggle("streaming", streaming);
+    if (audio && audio.data && !record.node.querySelector(".audio-output audio")) {
+      const playback = attachAudioPlayer(record.node, audio, autoplayAudio);
+      if (autoplayAudio) record.playback = playback;
+    }
+    elements.conversation.scrollTop = elements.conversation.scrollHeight;
+    return record;
+  }
+
+  function addMessage({ role, content, thinking, audio, error = false, streaming = false }) {
     const node = elements.template.content.firstElementChild.cloneNode(true);
     node.classList.add(role === "user" ? "user" : "assistant");
     if (error) node.classList.add("error");
-    const contentNode = node.querySelector(".message-content");
-    if (role === "assistant" && !error) renderMarkdown(contentNode, content || "");
-    else contentNode.textContent = content || "";
-    const playback = audio && audio.data ? attachAudioPlayer(node, audio) : Promise.resolve();
     elements.conversation.appendChild(node);
-    elements.conversation.scrollTop = elements.conversation.scrollHeight;
-    return { node, playback };
+    const record = { node, role, error, playback: Promise.resolve() };
+    return updateMessage(record, { content, thinking, audio, streaming });
   }
 
   function base64ToBlob(data, mime) {
@@ -205,13 +268,14 @@
     return new Blob(chunks, { type: mime || "audio/wav" });
   }
 
-  async function playWithUnlockedContext(envelope, note) {
+  async function playWithUnlockedContext(envelope, note, epoch) {
     const context = state.playbackContext;
     if (!context) return false;
     if (context.state === "suspended") await context.resume();
     if (context.state !== "running") return false;
     const encoded = base64ToBlob(envelope.data, envelope.mime_type);
     const decoded = await context.decodeAudioData(await encoded.arrayBuffer());
+    if (state.playbackEpoch !== epoch) return false;
     if (state.playbackSource) {
       try {
         state.playbackSource.stop();
@@ -234,9 +298,43 @@
     });
   }
 
-  function playHtmlAudio(audio, note) {
+  function stopCurrentPlayback() {
+    state.playbackEpoch += 1;
+    const controller = state.streamController;
+    if (controller) {
+      state.streamController = null;
+      controller.cancelled = true;
+      for (const source of controller.sources) {
+        try {
+          source.stop();
+        } catch (_error) {
+          // A scheduled PCM buffer may already have ended.
+        }
+      }
+      controller.sources.clear();
+      controller.resolve(false);
+    }
+    if (state.playbackSource) {
+      try {
+        state.playbackSource.stop();
+      } catch (_error) {
+        // Playback ended before interruption was detected.
+      }
+      state.playbackSource = null;
+    }
+    if (state.playbackElement) {
+      state.playbackElement.pause();
+      state.playbackElement.currentTime = 0;
+      state.playbackElement = null;
+    }
+  }
+
+  function playHtmlAudio(audio, note, epoch) {
+    if (state.playbackEpoch !== epoch) return Promise.resolve(false);
+    state.playbackElement = audio;
     return audio.play().then(() => new Promise(resolve => {
       const done = () => {
+        if (state.playbackElement === audio) state.playbackElement = null;
         note.textContent = "Spoken reply · replay with the player";
         resolve(true);
       };
@@ -245,7 +343,7 @@
     }));
   }
 
-  function attachAudioPlayer(node, envelope) {
+  function attachAudioPlayer(node, envelope, autoplay = true) {
     const box = node.querySelector(".audio-output");
     box.hidden = false;
     const audio = document.createElement("audio");
@@ -257,17 +355,77 @@
     audio.dataset.objectUrl = url;
     const note = document.createElement("p");
     note.className = "audio-note";
-    note.textContent = "Spoken reply ready";
+    note.textContent = autoplay ? "Spoken reply ready" : "Streamed reply · replay with the player";
     box.append(audio, note);
-    return playWithUnlockedContext(envelope, note)
+    if (!autoplay) return Promise.resolve(false);
+    const epoch = state.playbackEpoch;
+    return playWithUnlockedContext(envelope, note, epoch)
       .then(playing => {
-        if (!playing) return playHtmlAudio(audio, note);
+        if (state.playbackEpoch !== epoch) return false;
+        if (!playing) return playHtmlAudio(audio, note, epoch);
         return playing;
       })
       .catch(() => {
         note.textContent = "Spoken reply ready · tap play";
-        return playHtmlAudio(audio, note).catch(() => false);
+        return playHtmlAudio(audio, note, epoch).catch(() => false);
       });
+  }
+
+  function beginPcmPlayback() {
+    const context = state.playbackContext;
+    if (!context || context.state !== "running") return null;
+    if (state.streamController) stopCurrentPlayback();
+    let resolve;
+    const promise = new Promise(done => { resolve = done; });
+    const controller = {
+      epoch: state.playbackEpoch,
+      context,
+      nextTime: context.currentTime + 0.06,
+      sources: new Set(),
+      ended: false,
+      cancelled: false,
+      resolve,
+      promise,
+    };
+    state.streamController = controller;
+    return controller;
+  }
+
+  function maybeFinishPcmPlayback(controller) {
+    if (!controller.ended || controller.sources.size) return;
+    if (state.streamController === controller) state.streamController = null;
+    controller.resolve(!controller.cancelled);
+  }
+
+  function queuePcmPlayback(controller, encoded) {
+    if (!controller || controller.cancelled || state.playbackEpoch !== controller.epoch) return;
+    const binary = atob(encoded);
+    if (!binary.length || binary.length % 2) throw new Error("TTS stream returned partial PCM samples");
+    const samples = new Float32Array(binary.length / 2);
+    for (let index = 0; index < samples.length; index += 1) {
+      let value = binary.charCodeAt(index * 2) | (binary.charCodeAt(index * 2 + 1) << 8);
+      if (value & 0x8000) value -= 0x10000;
+      samples[index] = value / (value < 0 ? 32768 : 32767);
+    }
+    const buffer = controller.context.createBuffer(1, samples.length, 24000);
+    buffer.copyToChannel(samples, 0);
+    const source = controller.context.createBufferSource();
+    source.buffer = buffer;
+    source.connect(controller.context.destination);
+    controller.sources.add(source);
+    source.addEventListener("ended", () => {
+      controller.sources.delete(source);
+      maybeFinishPcmPlayback(controller);
+    }, { once: true });
+    const startAt = Math.max(controller.nextTime, controller.context.currentTime + 0.03);
+    source.start(startAt);
+    controller.nextTime = startAt + buffer.duration;
+  }
+
+  function endPcmPlayback(controller) {
+    if (!controller) return;
+    controller.ended = true;
+    maybeFinishPcmPlayback(controller);
   }
 
   async function unlockPlayback() {
@@ -275,6 +433,56 @@
     if (!AudioContext) return;
     if (!state.playbackContext) state.playbackContext = new AudioContext();
     if (state.playbackContext.state === "suspended") await state.playbackContext.resume().catch(() => {});
+  }
+
+  async function streamChat(payload, { signal, onEvent } = {}) {
+    const response = await fetch("/api/chat/stream", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ ...payload, stream: true }),
+      signal,
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+      throw new Error(data.error || `HTTP ${response.status}`);
+    }
+    if (!response.body) throw new Error("Streaming response has no body");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffered = "";
+    let finalResponse = null;
+
+    const consume = line => {
+      if (!line.trim()) return;
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch (_error) {
+        throw new Error("Model returned an invalid stream event");
+      }
+      if (event.type === "error") throw new Error(event.error || "Streaming inference failed");
+      if (event.type === "final") finalResponse = event.response || null;
+      if (onEvent) onEvent(event);
+    };
+
+    for (;;) {
+      const { value, done } = await reader.read();
+      buffered += decoder.decode(value || new Uint8Array(), { stream: !done });
+      let newline;
+      while ((newline = buffered.indexOf("\n")) >= 0) {
+        consume(buffered.slice(0, newline));
+        buffered = buffered.slice(newline + 1);
+      }
+      if (done) break;
+    }
+    if (buffered.trim()) consume(buffered);
+    if (!finalResponse) throw new Error("Model stream ended without a final response");
+    return finalResponse;
+  }
+
+  function reasoningEnabled() {
+    return elements.think.getAttribute("aria-pressed") === "true";
   }
 
   async function refreshStatus() {
@@ -289,6 +497,20 @@
       const data = await response.json();
       elements.headerStatus.className = `connection ${data.ok ? "online" : "offline"}`;
       elements.statusText.textContent = data.ok ? "Online" : "Unavailable";
+      if (!state.voice.initialized && data.voice_profile) {
+        const profile = data.voice_profile;
+        state.voice.serverReference = Boolean(profile.speaker_reference);
+        state.voice.defaults = {
+          language: profile.language || "en",
+          temperature: Number(profile.temperature ?? 0.7),
+          topK: Number(profile.top_k ?? 40),
+          topP: Number(profile.top_p ?? 0.9),
+          seed: Number(profile.seed ?? 42),
+          maxFrames: Number(profile.max_frames ?? 512),
+        };
+        applyVoiceDefaults();
+        state.voice.initialized = true;
+      }
     } catch (_error) {
       elements.headerStatus.className = "connection offline";
       elements.statusText.textContent = "Offline";
@@ -551,6 +773,142 @@
       }));
   }
 
+  function syncVoiceUi() {
+    const enabled = elements.voiceCloneEnabled.checked;
+    elements.voiceReferenceControls.classList.toggle("disabled", !enabled);
+    elements.voiceTemperatureValue.value = Number(elements.voiceTemperature.value).toFixed(2);
+    elements.voiceTopPValue.value = Number(elements.voiceTopP.value).toFixed(2);
+    if (state.voice.reference) {
+      elements.voiceReferenceStatus.textContent = `${state.voice.reference.name} · ${humanBytes(state.voice.reference.bytes)}`;
+    } else if (state.voice.serverReference) {
+      elements.voiceReferenceStatus.textContent = "Using server profile reference";
+    } else {
+      elements.voiceReferenceStatus.textContent = "No reference selected";
+    }
+  }
+
+  function applyVoiceDefaults(profile = state.voice.defaults) {
+    elements.voiceLanguage.value = profile.language || "en";
+    elements.voiceTemperature.value = String(profile.temperature ?? 0.7);
+    elements.voiceTopK.value = String(profile.topK ?? 40);
+    elements.voiceTopP.value = String(profile.topP ?? 0.9);
+    elements.voiceSeed.value = String(profile.seed ?? 42);
+    elements.voiceMaxFrames.value = String(profile.maxFrames ?? 512);
+    elements.voiceCloneEnabled.checked = Boolean(state.voice.serverReference);
+    syncVoiceUi();
+  }
+
+  function clearVoiceReference() {
+    state.voice.reference = null;
+    if (state.voice.referenceUrl) URL.revokeObjectURL(state.voice.referenceUrl);
+    state.voice.referenceUrl = null;
+    elements.voiceReferenceAudio.removeAttribute("src");
+    elements.voiceReferenceAudio.hidden = true;
+    elements.voiceReferenceInput.value = "";
+    elements.voiceCloneEnabled.checked = Boolean(state.voice.serverReference);
+    syncVoiceUi();
+  }
+
+  async function setVoiceReference(file) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".wav") && file.type !== "audio/wav") {
+      throw new Error("Voice reference must be an uncompressed WAV file");
+    }
+    if (file.size > MAX_VOICE_REFERENCE_BYTES) {
+      throw new Error(`Voice reference exceeds ${humanBytes(MAX_VOICE_REFERENCE_BYTES)}`);
+    }
+    const dataUrl = await fileDataUrl(file);
+    const comma = dataUrl.indexOf(",");
+    if (comma < 0) throw new Error("Voice reference could not be encoded");
+    state.voice.reference = {
+      name: file.name || "voice-reference.wav",
+      bytes: file.size,
+      envelope: {
+        mime_type: "audio/wav",
+        encoding: "base64",
+        data: dataUrl.slice(comma + 1),
+      },
+    };
+    if (state.voice.referenceUrl) URL.revokeObjectURL(state.voice.referenceUrl);
+    state.voice.referenceUrl = URL.createObjectURL(file);
+    elements.voiceReferenceAudio.src = state.voice.referenceUrl;
+    elements.voiceReferenceAudio.hidden = false;
+    elements.voiceCloneEnabled.checked = true;
+    syncVoiceUi();
+  }
+
+  async function startVoiceReferenceRecording() {
+    if (state.voice.recording) return;
+    if (state.recording || state.call || state.camera) {
+      throw new Error("Stop other microphone or camera capture before recording a voice reference");
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("Voice reference recording requires HTTPS and microphone access");
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      video: false,
+    });
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const context = new AudioContext();
+    await context.resume();
+    const source = context.createMediaStreamSource(stream);
+    const processor = context.createScriptProcessor(4096, 1, 1);
+    const sink = context.createGain();
+    sink.gain.value = 0;
+    const chunks = [];
+    processor.onaudioprocess = event => chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+    source.connect(processor);
+    processor.connect(sink);
+    sink.connect(context.destination);
+    state.voice.recording = { stream, context, source, processor, sink, chunks, started: Date.now() };
+    elements.voiceRecord.classList.add("recording");
+    elements.voiceRecord.textContent = "Stop recording";
+    elements.voiceReferenceStatus.textContent = "Recording reference… speak naturally";
+    state.voice.recordTimer = window.setTimeout(() => {
+      stopVoiceReferenceRecording().catch(showError);
+    }, MAX_VOICE_REFERENCE_MS);
+  }
+
+  async function stopVoiceReferenceRecording() {
+    const recording = state.voice.recording;
+    if (!recording) return;
+    state.voice.recording = null;
+    clearTimeout(state.voice.recordTimer);
+    recording.processor.disconnect();
+    recording.source.disconnect();
+    recording.sink.disconnect();
+    recording.stream.getTracks().forEach(track => track.stop());
+    const samples = downsample(mergeSamples(recording.chunks), recording.context.sampleRate);
+    await recording.context.close();
+    elements.voiceRecord.classList.remove("recording");
+    elements.voiceRecord.textContent = "Record reference";
+    const seconds = samples.length / 16000;
+    if (seconds < 0.5) throw new Error("Record at least 0.5 seconds for voice cloning");
+    const blob = pcmWav(samples);
+    await setVoiceReference(new File([blob], `voice-reference-${Date.now()}.wav`, { type: "audio/wav" }));
+  }
+
+  function voicePayload() {
+    const integer = (element, fallback) => {
+      const value = Number(element.value);
+      return Number.isInteger(value) ? value : fallback;
+    };
+    const payload = {
+      clone_enabled: elements.voiceCloneEnabled.checked,
+      language: elements.voiceLanguage.value,
+      temperature: Number(elements.voiceTemperature.value),
+      top_k: integer(elements.voiceTopK, 40),
+      top_p: Number(elements.voiceTopP.value),
+      seed: integer(elements.voiceSeed, 42),
+      max_frames: integer(elements.voiceMaxFrames, 512),
+    };
+    if (payload.clone_enabled && state.voice.reference) {
+      payload.speaker_audio = state.voice.reference.envelope;
+    }
+    return payload;
+  }
+
   function cameraMimeType() {
     const choices = [
       "video/webm;codecs=vp8,opus",
@@ -619,7 +977,7 @@
     elements.cameraButton.setAttribute("aria-label", "Stop and attach device video");
     elements.cameraButton.title = "Stop and attach video";
     elements.micButton.disabled = true;
-    elements.callButton.disabled = true;
+    elements.callButton.disabled = false;
     try {
       recorder.start(250);
     } catch (error) {
@@ -633,9 +991,9 @@
       throw error;
     }
     camera.timer = window.setTimeout(() => {
-      stopCameraCapture().catch(showError);
+      if (!state.call) stopCameraCapture().catch(showError);
     }, MAX_VIDEO_RECORD_MS);
-    setComposerStatus("Recording device video · tap camera or send to finish");
+    setComposerStatus("Camera live · record, send, or start a visual call");
   }
 
   async function stopCameraCapture() {
@@ -670,68 +1028,142 @@
     return camera.stopping;
   }
 
+  async function cameraFrameEnvelope() {
+    if (!state.camera || !elements.cameraVideo.videoWidth) return null;
+    const canvas = document.createElement("canvas");
+    const scale = Math.min(1, 1280 / elements.cameraVideo.videoWidth);
+    canvas.width = Math.max(1, Math.round(elements.cameraVideo.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(elements.cameraVideo.videoHeight * scale));
+    canvas.getContext("2d").drawImage(elements.cameraVideo, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.84));
+    if (!blob) return null;
+    const dataUrl = await fileDataUrl(blob);
+    return {
+      mime_type: "image/jpeg",
+      encoding: "base64",
+      data: dataUrl.slice(dataUrl.indexOf(",") + 1),
+    };
+  }
+
+  function startPendingCallTurn(call) {
+    if (state.call !== call || !call.pendingUtterance || !call.replyComplete) return;
+    const pending = call.pendingUtterance;
+    call.pendingUtterance = null;
+    call.replyComplete = false;
+    call.discardReply = false;
+    call.busy = true;
+    void submitCallUtterance(call, pending);
+  }
+
+  function completeCallTurn(call) {
+    if (state.call !== call) return;
+    call.abortController = null;
+    call.replyComplete = true;
+    if (call.pendingUtterance) {
+      startPendingCallTurn(call);
+    } else if (call.bargeActive) {
+      setComposerStatus("Call · listening to interruption…");
+    } else {
+      call.replyComplete = false;
+      call.discardReply = false;
+      call.busy = false;
+      setComposerStatus(state.camera ? "Video call live · listening" : "Call live · listening");
+    }
+  }
+
   async function submitCallUtterance(call, chunks) {
     const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
     const durationMs = sampleCount / call.context.sampleRate * 1000;
     if (durationMs < CALL_MIN_SPEECH_MS || state.call !== call) {
-      call.busy = false;
+      call.replyComplete = true;
+      completeCallTurn(call);
       return;
     }
 
     const envelope = await audioEnvelope(chunks, call.context.sampleRate);
     if (state.call !== call) return;
+    const frame = await cameraFrameEnvelope();
     const message = {
       role: "user",
-      content: "Listen to this speech and reply naturally and concisely.",
+      content: frame
+        ? "Use the current camera view and this speech, then reply naturally and concisely."
+        : "Listen to this speech and reply naturally and concisely.",
       audios: [envelope],
     };
-    const user = addMessage({ role: "user", content: "Voice message" });
-    setComposerStatus("Call · understanding speech…");
+    if (frame) message.images = [frame];
+    const user = addMessage({ role: "user", content: frame ? "Video call message" : "Voice message" });
+    const assistant = addMessage({ role: "assistant", content: "", streaming: true });
+    let streamedContent = "";
+    let streamedThinking = "";
+    let pcmController = null;
+    let streamedAudio = false;
+    setComposerStatus(frame ? "Video call · understanding…" : "Call · understanding speech…");
     call.abortController = new AbortController();
     try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({
+      const data = await streamChat(
+        {
           model: MODEL,
           messages: [...state.history.slice(-12), message],
           omni: { schema: SCHEMA, task: "chat", include_audio_from_video: true },
           response_modalities: ["text", "audio"],
           speech_mode: "always",
-          think: false,
-          stream: false,
+          portal_voice: voicePayload(),
+          think: reasoningEnabled(),
           options: { num_predict: 512 },
           portal_auto_tools: false,
-        }),
-        signal: call.abortController.signal,
-      });
-      const data = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        },
+        {
+          signal: call.abortController.signal,
+          onEvent: event => {
+            if (event.type === "observation" && event.content) {
+              user.node.querySelector(".message-content").textContent = String(event.content);
+            } else if (event.type === "delta") {
+              streamedContent += String((event.message || {}).content || "");
+              streamedThinking += String((event.message || {}).thinking || "");
+              updateMessage(assistant, {
+                content: streamedContent,
+                thinking: streamedThinking,
+                streaming: true,
+              });
+            } else if (event.type === "stage" && event.stage === "tts") {
+              setComposerStatus("Call · preparing voice…");
+            } else if (event.type === "audio_start") {
+              pcmController = beginPcmPlayback();
+              streamedAudio = Boolean(pcmController);
+              if (pcmController) assistant.playback = pcmController.promise;
+              setComposerStatus("Call · streaming voice… say something to interrupt");
+            } else if (event.type === "audio_delta" && !call.discardReply) {
+              queuePcmPlayback(pcmController, String((event.audio || {}).data || ""));
+            } else if (event.type === "audio_end") {
+              endPcmPlayback(pcmController);
+            }
+          },
+        },
+      );
       const reply = data.message || {};
       if (!(reply.audio && reply.audio.data)) throw new Error("Voice call reply contained no audio");
       const transcript = String((data.adapter || {}).observation || "Voice message").trim();
       user.node.querySelector(".message-content").textContent = transcript;
-      const assistant = addMessage({
-        role: "assistant",
+      updateMessage(assistant, {
         content: reply.content || "Spoken response",
-        audio: reply.audio,
+        thinking: reply.thinking || streamedThinking,
+        audio: call.discardReply ? null : reply.audio,
+        streaming: false,
+        autoplayAudio: !streamedAudio,
       });
       state.history.push({ role: "user", content: transcript });
       if (reply.content) state.history.push({ role: "assistant", content: reply.content });
-      setComposerStatus("Call · speaking…");
-      await assistant.playback;
+      if (call.discardReply) {
+        assistant.node.classList.add("interrupted");
+      } else {
+        setComposerStatus("Call · speaking… say something to interrupt");
+        await assistant.playback;
+      }
     } catch (error) {
       if (error.name !== "AbortError") showError(error);
     } finally {
-      if (state.call === call) {
-        call.abortController = null;
-        window.setTimeout(() => {
-          if (state.call === call) {
-            call.busy = false;
-            setComposerStatus("Call live · listening");
-          }
-        }, 250);
-      }
+      assistant.node.classList.remove("streaming");
+      completeCallTurn(call);
     }
   }
 
@@ -739,21 +1171,28 @@
     if (state.call) return;
     if (!state.token) throw new Error("Access token missing from this link");
     if (state.recording) throw new Error("Release the microphone before starting a call");
-    if (state.camera) throw new Error("Stop device video before starting a voice call");
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       throw new Error("Voice calls require this HTTPS page in a supported browser");
     }
     await unlockPlayback();
     setComposerStatus("Requesting microphone…");
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-      video: false,
-    });
+    const camera = state.camera;
+    const stream = camera ? camera.stream : await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      });
+    if (camera) {
+      clearTimeout(camera.timer);
+      if (camera.recorder.state === "recording") {
+        camera.recorder.requestData();
+        camera.recorder.pause();
+      }
+    }
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     const context = new AudioContext();
     await context.resume();
@@ -770,19 +1209,56 @@
       analyser,
       processor,
       sink,
+      ownsStream: !camera,
       preRoll: [],
       chunks: [],
       speaking: false,
       lastVoiceAt: 0,
       busy: false,
+      bargeActive: false,
+      bargeCandidate: [],
+      bargeStartedAt: 0,
+      pendingUtterance: null,
+      replyComplete: false,
+      discardReply: false,
       abortController: null,
       animationFrame: null,
     };
     processor.onaudioprocess = event => {
-      if (state.call !== call || call.busy) return;
+      if (state.call !== call) return;
       const now = performance.now();
       const samples = new Float32Array(event.inputBuffer.getChannelData(0));
       const hasVoice = rms(samples) >= CALL_VOICE_THRESHOLD;
+      if (call.busy) {
+        const isBargeVoice = rms(samples) >= CALL_BARGE_THRESHOLD;
+        if (!call.bargeActive) {
+          if (!isBargeVoice) {
+            call.bargeCandidate = [];
+            call.bargeStartedAt = 0;
+            return;
+          }
+          if (!call.bargeStartedAt) call.bargeStartedAt = now;
+          call.bargeCandidate.push(samples);
+          if (now - call.bargeStartedAt < CALL_BARGE_MIN_MS) return;
+          call.bargeActive = true;
+          call.chunks = call.bargeCandidate.splice(0);
+          call.lastVoiceAt = now;
+          call.discardReply = true;
+          stopCurrentPlayback();
+          setComposerStatus("Call · interruption heard…");
+          return;
+        }
+        call.chunks.push(samples);
+        if (isBargeVoice) call.lastVoiceAt = now;
+        if (now - call.lastVoiceAt < CALL_SILENCE_MS) return;
+        call.pendingUtterance = call.chunks.splice(0);
+        call.bargeActive = false;
+        call.bargeCandidate = [];
+        call.bargeStartedAt = 0;
+        setComposerStatus("Call · interruption queued…");
+        startPendingCallTurn(call);
+        return;
+      }
       if (!call.speaking) {
         call.preRoll.push(samples);
         if (call.preRoll.length > 4) call.preRoll.shift();
@@ -819,7 +1295,7 @@
     elements.waveform.classList.add("calling");
     elements.waveform.hidden = false;
     elements.recordingTime.textContent = "LIVE";
-    setComposerStatus("Call live · listening");
+    setComposerStatus(camera ? "Video call live · listening" : "Call live · listening");
     drawWaveform();
   }
 
@@ -832,14 +1308,14 @@
     call.processor.disconnect();
     call.source.disconnect();
     call.sink.disconnect();
-    call.stream.getTracks().forEach(track => track.stop());
+    if (call.ownsStream) call.stream.getTracks().forEach(track => track.stop());
     await call.context.close();
-    if (state.playbackSource) {
-      try {
-        state.playbackSource.stop();
-      } catch (_error) {
-        // Playback ended while the call was stopping.
-      }
+    stopCurrentPlayback();
+    if (state.camera && state.camera.recorder.state === "paused") {
+      state.camera.recorder.resume();
+      state.camera.timer = window.setTimeout(() => {
+        if (!state.call) stopCameraCapture().catch(showError);
+      }, MAX_VIDEO_RECORD_MS);
     }
     elements.callButton.setAttribute("aria-pressed", "false");
     elements.callButton.setAttribute("aria-label", "Start voice call");
@@ -875,7 +1351,7 @@
       mime_type: item.mime,
       encoding: "base64",
       data: item.data,
-      sampling: { fps: 1, max_frames: 96, include_audio: true },
+      sampling: { fps: 1, max_frames: 24, include_audio: true },
     }));
 
     const wantsSpeech = elements.speak.getAttribute("aria-pressed") === "true";
@@ -891,7 +1367,8 @@
         omni: { schema: SCHEMA, task, include_audio_from_video: true },
         response_modalities: wantsSpeech ? ["text", "audio"] : ["text"],
         speech_mode: wantsSpeech ? "always" : "never",
-        think: false,
+        portal_voice: voicePayload(),
+        think: reasoningEnabled(),
         stream: false,
         options: { num_predict: 2048 },
         portal_auto_tools: false,
@@ -925,22 +1402,51 @@
     resizePrompt();
     elements.send.disabled = true;
     setComposerStatus(built.task === "transcribe" ? "Transcribing audio…" : "Thinking…");
+    const assistant = addMessage({ role: "assistant", content: "", streaming: true });
+    let streamedContent = "";
+    let streamedThinking = "";
+    let pcmController = null;
+    let streamedAudio = false;
     try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify(built.payload),
+      const data = await streamChat(built.payload, {
+        onEvent: event => {
+          if (event.type === "delta") {
+            streamedContent += String((event.message || {}).content || "");
+            streamedThinking += String((event.message || {}).thinking || "");
+            updateMessage(assistant, {
+              content: streamedContent,
+              thinking: streamedThinking,
+              streaming: true,
+            });
+          } else if (event.type === "stage") {
+            const labels = {
+              comprehension: "Understanding media…",
+              language: reasoningEnabled() ? "Reasoning…" : "Replying…",
+              tts: "Preparing spoken reply…",
+            };
+            setComposerStatus(labels[event.stage] || "Working…");
+          } else if (event.type === "audio_start") {
+            pcmController = beginPcmPlayback();
+            streamedAudio = Boolean(pcmController);
+            if (pcmController) assistant.playback = pcmController.promise;
+            setComposerStatus("Streaming spoken reply…");
+          } else if (event.type === "audio_delta") {
+            queuePcmPlayback(pcmController, String((event.audio || {}).data || ""));
+          } else if (event.type === "audio_end") {
+            endPcmPlayback(pcmController);
+          }
+        },
       });
-      const data = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       const reply = data.message || {};
       if (built.wantsSpeech && !(reply.audio && reply.audio.data)) {
         throw new Error("Spoken replies are enabled, but TTS returned no audio");
       }
-      addMessage({
-        role: "assistant",
+      updateMessage(assistant, {
         content: reply.content || (reply.audio ? "Spoken response" : "No response returned."),
+        thinking: reply.thinking || streamedThinking,
         audio: reply.audio,
+        streaming: false,
+        autoplayAudio: !streamedAudio,
       });
       if (built.task === "chat") {
         state.history.push({ role: "user", content: built.message.content });
@@ -948,8 +1454,10 @@
       }
       setComposerStatus(reply.audio ? "Text and spoken reply ready" : "Text reply ready");
     } catch (error) {
+      assistant.node.remove();
       showError(error);
     } finally {
+      assistant.node.classList.remove("streaming");
       elements.send.disabled = false;
       refreshStatus();
     }
@@ -977,6 +1485,41 @@
     if (state.recording) stopRecording().catch(showError);
   }
 
+  async function closeVoiceDialog() {
+    if (state.voice.recording) await stopVoiceReferenceRecording();
+    elements.voiceDialog.close();
+    setComposerStatus(elements.voiceCloneEnabled.checked ? "Voice clone configured" : "Voice settings saved");
+  }
+
+  elements.voiceButton.addEventListener("click", () => {
+    syncVoiceUi();
+    elements.voiceDialog.showModal();
+  });
+  elements.voiceClose.addEventListener("click", () => closeVoiceDialog().catch(showError));
+  elements.voiceDone.addEventListener("click", () => closeVoiceDialog().catch(showError));
+  elements.voiceDialog.addEventListener("cancel", event => {
+    if (!state.voice.recording) return;
+    event.preventDefault();
+    stopVoiceReferenceRecording().then(() => elements.voiceDialog.close()).catch(showError);
+  });
+  elements.voiceCloneEnabled.addEventListener("change", syncVoiceUi);
+  elements.voiceTemperature.addEventListener("input", syncVoiceUi);
+  elements.voiceTopP.addEventListener("input", syncVoiceUi);
+  elements.voiceReferenceInput.addEventListener("change", event => {
+    setVoiceReference(event.target.files[0]).catch(showError);
+  });
+  elements.voiceReferenceClear.addEventListener("click", clearVoiceReference);
+  elements.voiceRecord.addEventListener("click", () => {
+    const action = state.voice.recording
+      ? stopVoiceReferenceRecording()
+      : startVoiceReferenceRecording();
+    action.catch(showError);
+  });
+  elements.voiceReset.addEventListener("click", () => {
+    clearVoiceReference();
+    applyVoiceDefaults();
+  });
+
   elements.micButton.addEventListener("pointerdown", beginMicHold);
   elements.micButton.addEventListener("pointerup", endMicHold);
   elements.micButton.addEventListener("pointercancel", endMicHold);
@@ -1002,6 +1545,13 @@
     elements.speak.title = `Spoken replies ${enabled ? "on" : "off"}`;
     setComposerStatus(enabled ? "Spoken replies on" : "Text replies only");
     if (enabled) unlockPlayback();
+  });
+  elements.think.addEventListener("click", () => {
+    const enabled = elements.think.getAttribute("aria-pressed") !== "true";
+    elements.think.setAttribute("aria-pressed", String(enabled));
+    elements.think.setAttribute("aria-label", `${enabled ? "Disable" : "Enable"} reasoning`);
+    elements.think.title = `Reasoning ${enabled ? "on" : "off"}`;
+    setComposerStatus(enabled ? "Reasoning on" : "Reasoning off");
   });
   elements.callButton.addEventListener("click", () => {
     const action = state.call ? stopCall() : startCall();
@@ -1036,9 +1586,12 @@
     if (state.camera) state.camera.stream.getTracks().forEach(track => track.stop());
     if (state.call) state.call.stream.getTracks().forEach(track => track.stop());
     if (state.recording) state.recording.stream.getTracks().forEach(track => track.stop());
+    if (state.voice.recording) state.voice.recording.stream.getTracks().forEach(track => track.stop());
+    if (state.voice.referenceUrl) URL.revokeObjectURL(state.voice.referenceUrl);
   });
 
   state.token = accessToken();
+  applyVoiceDefaults();
   if (!state.token) showError(new Error("This link is missing its access fragment"));
   refreshStatus();
   setInterval(refreshStatus, 15_000);

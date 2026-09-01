@@ -61,13 +61,14 @@ examples/omni_portal/start.sh --stop
 The printed URL must be opened as-is so its `#access=...` fragment reaches the
 browser. Microphone permission requires the HTTPS endpoint. Hold the microphone
 icon while speaking; release it to create a playable WAV attachment, then send.
-The speaker icon switches between text-only and text-plus-TTS replies. The phone
+The speaker icon switches between text-only and text-plus-TTS replies. The
+waveform button opens Qwen3-TTS voice cloning and sampling controls. The phone
 icon starts automatic voice turns: local voice activity detection waits for a
-silence boundary, submits the complete recording, and plays the complete TTS
-reply before listening resumes. This is hands-free half-duplex operation over
-adapter v1's required `stream:false`, not simultaneous bidirectional PCM or
-incremental synthesis. If phone autoplay is blocked after a long inference, use
-the audio player's play control.
+silence boundary, submits the recording, streams language deltas, and schedules
+live 24 kHz PCM synthesis chunks. The microphone remains active for barge-in;
+sustained speech cancels playback and queues the interruption. Portable adapter
+v1 remains `stream:false`; `/api/chat/stream` is an authenticated portal
+extension with one authoritative final adapter response.
 
 The camera icon captures device video and microphone audio with a live preview
 inside the composer. Tap again or send to finalize a 30-second-maximum MP4/WebM
@@ -82,12 +83,13 @@ locked mobile viewport prevents focus/pinch zoom.
 
 The stack's speech weights are Qwen3-TTS 12 Hz 1.7B Base. Without a speaker
 reference, `seed: -1` allows voice/timbre changes between requests. The portal's
-default profile pins seed `42`; for a specific voice, set `speaker_file` to a
-clean WAV or MP3 reference in `examples/omni_portal/voice-profile.json` or point
-`OMNI_VOICE_PROFILE` to another profile. The portal injects this profile
-server-side and does not allow a phone request to override it. See the portal
-README for all language and sampling fields and the current limitation around
-natural-language style instructions.
+default profile pins seed `42`. For a specific voice, record or upload a clean
+WAV in the header voice panel, set trusted server-local `speaker_file` in
+`examples/omni_portal/voice-profile.json`, or point `OMNI_VOICE_PROFILE` to
+another profile. Browser references are validated, materialized only for the
+generation, and deleted afterward; the browser cannot choose a server path.
+See the portal README for sampling fields and the distinction between Base
+speaker-embedding cloning and separate VoiceDesign/CustomVoice checkpoints.
 
 ## Verification matrix
 
@@ -101,6 +103,7 @@ natural-language style instructions.
 | Device camera | live preview, bounded MP4/WebM attachment, video comprehension |
 | Speaker + microphone | transcription followed by valid spoken audio |
 | Call control | silence-delimited audio turn followed by automatic playback |
+| Voice clone | recorded/uploaded WAV changes speaker timbre and remains replayable |
 | Image | non-empty visual description |
 | Video with audio | ordered visual description plus spoken content |
 | TTS | valid 24 kHz mono PCM16 WAV playable on phone |

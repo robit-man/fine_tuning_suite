@@ -9,6 +9,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="description" content="Omni multimodal chat portal">
   <title>Omni Chat</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/assets/favicon.svg">
   <link rel="stylesheet" href="/assets/portal.css">
 </head>
 <body data-model="{{ model }}" data-max-upload-mib="{{ max_upload_mib }}">
@@ -20,6 +22,12 @@
           <span id="status-text">Connecting</span>
         </div>
         <div class="top-actions">
+          <button class="icon-button voice-button" id="voice-button" type="button" aria-label="Configure reply voice" title="Voice settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h2m2-5v10m4-14v18m4-15v12m4-8v4"/></svg>
+          </button>
+          <button class="icon-button camera-button" id="camera-button" type="button" aria-label="Start device video recording" aria-pressed="false" title="Record device video">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Zm13 3 5-3v10l-5-3"/></svg>
+          </button>
           <button class="icon-button call-button" id="call-button" type="button" aria-label="Start voice call" aria-pressed="false" title="Start voice call">
             <svg class="call-start" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 3.8 10 7.3 8.2 9.5a15.2 15.2 0 0 0 6.3 6.3l2.2-1.8 3.5 2.8v2.1c0 .8-.6 1.4-1.4 1.4A15.1 15.1 0 0 1 3.7 5.2c0-.8.6-1.4 1.4-1.4h2.1Z"/></svg>
             <svg class="call-stop" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 5 14 14M7.2 3.8 10 7.3 8.2 9.5a15.2 15.2 0 0 0 6.3 6.3l2.2-1.8 3.5 2.8v2.1c0 .8-.6 1.4-1.4 1.4A15.1 15.1 0 0 1 3.7 5.2c0-.8.6-1.4 1.4-1.4h2.1Z"/></svg>
@@ -61,13 +69,13 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3m-4 0h8"/></svg>
             </button>
 
-            <button class="icon-button camera-button" id="camera-button" type="button" aria-label="Start device video recording" aria-pressed="false" title="Record device video">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Zm13 3 5-3v10l-5-3"/></svg>
-            </button>
-
             <button class="icon-button speak-button" id="speak-toggle" type="button" aria-label="Enable spoken replies" aria-pressed="false" title="Spoken replies off">
               <svg class="speaker-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10v4h4l5 4V6l-5 4H5Zm12-1a5 5 0 0 1 0 6m2-8a8 8 0 0 1 0 10"/></svg>
               <svg class="speaker-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10v4h4l5 4V6l-5 4H5Zm12-1 5 6m0-6-5 6"/></svg>
+            </button>
+
+            <button class="icon-button think-button" id="think-toggle" type="button" aria-label="Enable reasoning" aria-pressed="false" title="Reasoning off">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 4.3A3.4 3.4 0 0 0 4.8 8a3.5 3.5 0 0 0 .7 6.7A3.5 3.5 0 0 0 10 19m4.5-14.7A3.4 3.4 0 0 1 19.2 8a3.5 3.5 0 0 1-.7 6.7A3.5 3.5 0 0 1 14 19M10 5v14m4-14v14M7 10h3m4 0h3M7 15h3m4 0h3"/></svg>
             </button>
 
             <button class="icon-button send-button" id="send-button" type="button" aria-label="Send message" title="Send">
@@ -80,9 +88,75 @@
     </section>
   </main>
 
+  <dialog class="voice-dialog" id="voice-dialog" aria-labelledby="voice-title">
+    <section class="voice-sheet">
+      <header class="voice-header">
+        <div>
+          <h2 id="voice-title">Reply voice</h2>
+          <p>Qwen3-TTS Base · speaker-embedding clone</p>
+        </div>
+        <button class="icon-button" id="voice-close" type="button" aria-label="Close voice settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </header>
+
+      <label class="voice-toggle">
+        <span><strong>Voice clone</strong><small>Use a clean 3–10 second single-speaker WAV.</small></span>
+        <input id="voice-clone-enabled" type="checkbox">
+      </label>
+
+      <div class="voice-reference" id="voice-reference-controls">
+        <div class="voice-reference-actions">
+          <button class="voice-action" id="voice-record" type="button">Record reference</button>
+          <label class="voice-action" for="voice-reference-input">Choose WAV</label>
+          <input id="voice-reference-input" type="file" accept="audio/wav,.wav" hidden>
+          <button class="voice-action quiet" id="voice-reference-clear" type="button">Clear</button>
+        </div>
+        <audio id="voice-reference-audio" controls playsinline hidden></audio>
+        <p class="voice-reference-status" id="voice-reference-status">No reference selected</p>
+        <p class="voice-consent">Clone only voices you own or have permission to use.</p>
+      </div>
+
+      <div class="voice-grid">
+        <label>Language
+          <select id="voice-language">
+            <option value="en">English</option><option value="zh">Chinese</option>
+            <option value="de">German</option><option value="it">Italian</option>
+            <option value="pt">Portuguese</option><option value="es">Spanish</option>
+            <option value="ja">Japanese</option><option value="ko">Korean</option>
+            <option value="fr">French</option><option value="ru">Russian</option>
+          </select>
+        </label>
+        <label>Seed
+          <input id="voice-seed" type="number" min="-1" max="2147483647" step="1" value="42">
+        </label>
+        <label class="voice-wide">Temperature <output id="voice-temperature-value">0.70</output>
+          <input id="voice-temperature" type="range" min="0" max="2" step="0.05" value="0.7">
+        </label>
+        <label class="voice-wide">Top P <output id="voice-top-p-value">0.90</output>
+          <input id="voice-top-p" type="range" min="0" max="1" step="0.05" value="0.9">
+        </label>
+        <label>Top K
+          <input id="voice-top-k" type="number" min="0" max="1000" step="1" value="40">
+        </label>
+        <label>Max frames
+          <input id="voice-max-frames" type="number" min="1" max="2048" step="1" value="512">
+        </label>
+      </div>
+      <footer class="voice-footer">
+        <button class="voice-action quiet" id="voice-reset" type="button">Reset</button>
+        <button class="voice-action primary" id="voice-done" type="button">Done</button>
+      </footer>
+    </section>
+  </dialog>
+
   <template id="message-template">
     <article class="message">
       <div class="message-content"></div>
+      <details class="thinking-output" hidden>
+        <summary>Reasoning</summary>
+        <div class="thinking-content"></div>
+      </details>
       <div class="audio-output" hidden></div>
     </article>
   </template>

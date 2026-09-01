@@ -1,0 +1,166 @@
+diff --git a/common/arg.cpp b/common/arg.cpp
+index 79405b5..ab676f8 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -4438,6 +4438,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             params.tts_speaker_file = value;
+         }
+     ).set_examples({LLAMA_EXAMPLE_TTS}));
++    add_opt(common_arg(
++        {"--tts-stream"},
++        "write generated PCM16 LE audio to stdout as decoder windows complete",
++        [](common_params & params) {
++            params.tts_stream = true;
++        }
++    ).set_examples({LLAMA_EXAMPLE_TTS}));
++    add_opt(common_arg(
++        {"--tts-stream-frames"}, "N",
++        string_format("codec frames per streamed decoder window (default: %d)", params.tts_stream_frames),
++        [](common_params & params, int value) {
++            params.tts_stream_frames = value;
++        }
++    ).set_examples({LLAMA_EXAMPLE_TTS}));
+ 
+     //
+     // diffusion params
+diff --git a/common/common.h b/common/common.h
+index 4e9448b..0b14b1f 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -753,6 +753,8 @@ struct common_params {
+     // TTS params
+     std::string tts_lang = "";
+     std::string tts_speaker_file = "";
++    bool tts_stream = false;
++    int32_t tts_stream_frames = 72;
+ 
+     bool is_gen_docs = false; // whether we are running inside llama-gen-docs
+ };
+diff --git a/tools/tts/tts.cpp b/tools/tts/tts.cpp
+index 6fd1936..abac8ea 100644
+--- a/tools/tts/tts.cpp
++++ b/tools/tts/tts.cpp
+@@ -7,9 +7,15 @@
+ #include "mtmd-helper.h"
+ 
+ #include <cstdio>
++#include <cstdint>
+ #include <cstring>
+ #include <string>
+ 
++#ifdef _WIN32
++#include <fcntl.h>
++#include <io.h>
++#endif
++
+ /**
+  * Please note that this is NOT a production-ready binary.
+  * It is a playground for trying TTS support in llama.cpp.
+@@ -32,6 +38,11 @@ struct tts_timings {
+     }
+ };
+ 
++static void tts_stream_log_callback(enum ggml_log_level, const char * text, void *) {
++    fputs(text, stderr);
++    fflush(stderr);
++}
++
+ static void print_usage(int, char ** argv) {
+     LOG("\nexample usage:\n");
+     LOG("\n    %s -m backbone.gguf -mm mmproj.gguf -p \"text to speak\" -o output.wav", argv[0]);
+@@ -50,8 +61,23 @@ int main(int argc, char ** argv) {
+     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_TTS, print_usage)) {
+         return 1;
+     }
++    if (params.tts_stream_frames < 1 || params.tts_stream_frames > 72) {
++        LOG_ERR("--tts-stream-frames must be between 1 and 72\n");
++        return 1;
++    }
+ 
+-    mtmd_helper_log_set(common_log_default_callback, nullptr);
++#ifdef _WIN32
++    if (params.tts_stream) {
++        _setmode(_fileno(stdout), _O_BINARY);
++    }
++#endif
++
++    if (params.tts_stream) {
++        llama_log_set(tts_stream_log_callback, nullptr);
++        mtmd_helper_log_set(tts_stream_log_callback, nullptr);
++    } else {
++        mtmd_helper_log_set(common_log_default_callback, nullptr);
++    }
+ 
+     if (params.prompt.empty()) {
+         LOG_ERR("no prompt provided, use -p \"text\"\n");
+@@ -161,6 +187,34 @@ int main(int argc, char ** argv) {
+     const int64_t t_gen_start_us = ggml_time_us();
+ 
+     bool stop = false;
++    int64_t n_streamed_samples = 0;
++    auto stream_audio = [&]() -> bool {
++        int32_t      sample_rate = 0;
++        const char * data        = nullptr;
++        size_t       data_len    = 0;
++        int64_t      n_samples   = 0;
++        if (gen.get_output(&sample_rate, &data, &data_len, &n_samples) != 0) {
++            return false;
++        }
++        const size_t wav_header_size = 44;
++        const size_t pcm_size = (size_t) n_samples * sizeof(int16_t);
++        if (n_samples < n_streamed_samples || data_len != wav_header_size + pcm_size) {
++            LOG_ERR("invalid incremental WAV output\n");
++            return false;
++        }
++        const size_t byte_offset = wav_header_size + (size_t) n_streamed_samples * sizeof(int16_t);
++        const size_t chunk_size = data_len - byte_offset;
++        if (chunk_size > 0 && fwrite(data + byte_offset, 1, chunk_size, stdout) != chunk_size) {
++            LOG_ERR("failed to write streamed PCM to stdout\n");
++            return false;
++        }
++        if (fflush(stdout) != 0) {
++            LOG_ERR("failed to flush streamed PCM to stdout\n");
++            return false;
++        }
++        n_streamed_samples = n_samples;
++        return true;
++    };
+     while (!stop && n_frames < max_new) {
+         const float * h_next = nullptr;
+ 
+@@ -177,6 +231,10 @@ int main(int argc, char ** argv) {
+         n_frames++;
+         h_state = h_next;
+         sampled = sample_semantic_code();
++        if (params.tts_stream && n_frames % params.tts_stream_frames == 0 && !stream_audio()) {
++            LOG_ERR("incremental waveform decode failed at frame %d\n", n_frames);
++            return 1;
++        }
+         timings.report(n_frames);
+     }
+     const double t_gen_s = (ggml_time_us() - t_gen_start_us) / 1e6;
+@@ -186,6 +244,10 @@ int main(int argc, char ** argv) {
+     size_t       data_len    = 0;
+     int64_t      n_samples   = 0;
+     const int64_t t_wav_start_us = ggml_time_us();
++    if (params.tts_stream && !stream_audio()) {
++        LOG_ERR("final incremental waveform decode failed\n");
++        return 1;
++    }
+     if (gen.get_output(&sample_rate, &data, &data_len, &n_samples) != 0) {
+         LOG_ERR("get_output failed\n");
+         return 1;
+@@ -205,8 +267,12 @@ int main(int argc, char ** argv) {
+         LOG_ERR("failed to open %s\n", params.out_file.c_str());
+         return 1;
+     }
+-    fwrite(data, 1, data_len, f);
++    const bool write_ok = fwrite(data, 1, data_len, f) == data_len;
+     fclose(f);
++    if (!write_ok) {
++        LOG_ERR("failed to write %s\n", params.out_file.c_str());
++        return 1;
++    }
+     LOG_INF("wrote %s\n", params.out_file.c_str());
+ 
+     llama_backend_free();

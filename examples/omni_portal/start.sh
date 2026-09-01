@@ -20,6 +20,7 @@ ADAPTER_PORT=${OMNI_ADAPTER_PORT:-8910}
 PORTAL_PORT=${OMNI_PORTAL_PORT:-8920}
 METRICS_PORT=${OMNI_CLOUDFLARED_METRICS_PORT:-49312}
 COMP_VRAM_MIB=${OMNI_COMPREHENSION_VRAM_MIB:-45000}
+COMP_CONTEXT_TOKENS=${OMNI_COMPREHENSION_CONTEXT_TOKENS:-65536}
 
 SUPERVISOR_PID_FILE="$STATE_DIR/supervisor.pid"
 ACCESS_URL_FILE="$STATE_DIR/access-url.txt"
@@ -386,7 +387,7 @@ run_foreground() {
     -m "$CACHE_DIR/comprehension-model.gguf" \
     --mmproj "$CACHE_DIR/comprehension-projector.gguf" \
     --host 127.0.0.1 --port "$COMP_PORT" \
-    --jinja -ngl 99 -c 8192 \
+    --jinja -ngl 99 -c "$COMP_CONTEXT_TOKENS" \
     >"$LOG_DIR/comprehension.log" 2>&1 &
   COMP_PID=$!
   wait_http "http://127.0.0.1:$COMP_PORT/health" "CUDA comprehension" 1200 "$COMP_PID"
@@ -419,6 +420,7 @@ run_foreground() {
   OMNI_TTS_PROJECTOR_GGUF="$CACHE_DIR/tts-projector.gguf" \
   LLAMA_TTS_BIN="$REPO_ROOT/training_suite/vendor/llama.cpp/build/bin/llama-tts" \
   OMNI_TTS_GPU_LAYERS=-1 \
+  OMNI_TTS_STREAM_FRAMES="${OMNI_TTS_STREAM_FRAMES:-12}" \
   OMNI_TTS_GPU_UUID="$gpu_uuid" \
   OMNI_TTS_ACTIVE_PID_FILE="$TTS_ACTIVE_PID_FILE" \
   OMNI_TTS_HOST=127.0.0.1 \
@@ -431,6 +433,7 @@ run_foreground() {
   log "starting unified Omni adapter"
   OMNI_COMPREHENSION_URL="http://127.0.0.1:$COMP_PORT/v1/chat/completions" \
   OMNI_COMPREHENSION_MODEL=local-qwen3-omni \
+  OMNI_COMPREHENSION_CONTEXT_TOKENS="$COMP_CONTEXT_TOKENS" \
   OMNI_LANGUAGE_URL=http://127.0.0.1:11434 \
   OMNI_LANGUAGE_MODEL="$LANGUAGE_MODEL" \
   OMNI_TTS_URL="http://127.0.0.1:$TTS_PORT/synthesize" \
@@ -466,7 +469,7 @@ run_foreground() {
   "$PYTHON_BIN" "$REPO_ROOT/examples/omni_portal/smoke.py" \
     --endpoint "http://127.0.0.1:$PORTAL_PORT" \
     --token-file "$TOKEN_FILE" \
-    --model "$MODEL" --text --tts \
+    --model "$MODEL" --text --tts --stream \
     >"$LOG_DIR/pre-tunnel-smoke.log" 2>&1 &
   SMOKE_PID=$!
   wait "$SMOKE_PID"

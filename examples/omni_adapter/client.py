@@ -132,7 +132,7 @@ def _parser() -> argparse.ArgumentParser:
         "--prompt", default="Describe the important events in temporal order."
     )
     video.add_argument("--fps", type=float, default=1.0)
-    video.add_argument("--max-frames", type=int, default=96)
+    video.add_argument("--max-frames", type=int, default=32)
     video.add_argument(
         "--include-audio", action=argparse.BooleanOptionalAction, default=True
     )
@@ -150,7 +150,7 @@ def _parser() -> argparse.ArgumentParser:
     chat.add_argument("--image")
     chat.add_argument("--video")
     chat.add_argument("--fps", type=float, default=1.0)
-    chat.add_argument("--max-frames", type=int, default=96)
+    chat.add_argument("--max-frames", type=int, default=32)
     chat.add_argument(
         "--include-audio", action=argparse.BooleanOptionalAction, default=True
     )

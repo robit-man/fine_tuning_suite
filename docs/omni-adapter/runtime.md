@@ -83,7 +83,7 @@ docker gpu run \
     -m "$CACHE/comprehension-model.gguf" \
     --mmproj "$CACHE/comprehension-projector.gguf" \
     --host 127.0.0.1 --port 8901 \
-    --jinja -ngl 99 -c 8192
+    --jinja -ngl 99 -c 65536
 ```
 
 The process must see exactly the reserved UUID. Release the broker lease only
@@ -115,6 +115,7 @@ should keep a libmtmd TTS worker resident while retaining the same
 ```bash
 export OMNI_COMPREHENSION_URL=http://127.0.0.1:8901/v1/chat/completions
 export OMNI_COMPREHENSION_MODEL=local-qwen3-omni
+export OMNI_COMPREHENSION_CONTEXT_TOKENS=65536
 export OMNI_LANGUAGE_URL=http://127.0.0.1:11434
 export OMNI_TTS_URL=http://127.0.0.1:8892/synthesize
 export OMNI_ADAPTER_PORT=8910

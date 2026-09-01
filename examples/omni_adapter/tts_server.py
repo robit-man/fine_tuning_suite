@@ -1,31 +1,38 @@
 """Small HTTP wrapper around llama.cpp's Qwen3-TTS reference binary.
 
 The server is intentionally serial: upstream ``llama-tts`` is currently a
-single-shot validation tool. Production deployments should replace this
-process wrapper with a persistent libmtmd worker while preserving this HTTP
-contract.
+per-request validation tool. The private-fork streaming mode exposes completed
+libmtmd decoder windows as raw PCM; it does not slice a completed WAV.
+Production deployments should replace this process wrapper with a persistent
+libmtmd worker while preserving these HTTP contracts.
 """
 
 from __future__ import annotations
 
 import base64
 import os
+import select
 import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, jsonify, request, stream_with_context
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from training_suite.models.audio import DEFAULT_AUDIO_CONTRACT, decode_wav_payload
+from training_suite.models.audio import (
+    DEFAULT_AUDIO_CONTRACT,
+    AudioContractError,
+    decode_wav_payload,
+)
 from training_suite.models.ollama_sidecar import resolve_ollama_sidecar
 from training_suite.models.single_gguf import materialize_component_view
 
@@ -38,6 +45,7 @@ class Config:
     timeout_s: float = 900
     max_text_chars: int = 4096
     max_frames: int = 512
+    stream_frames: int = 72
     gpu_layers: int = -1
     lease_token: str = ""
     gpu_uuid: str = ""
@@ -94,6 +102,7 @@ class Config:
             timeout_s=float(os.environ.get("OMNI_TTS_TIMEOUT_S", "900")),
             max_text_chars=int(os.environ.get("OMNI_TTS_MAX_TEXT_CHARS", "4096")),
             max_frames=int(os.environ.get("OMNI_TTS_MAX_FRAMES", "512")),
+            stream_frames=int(os.environ.get("OMNI_TTS_STREAM_FRAMES", "72")),
             gpu_layers=int(os.environ.get("OMNI_TTS_GPU_LAYERS", "-1")),
             lease_token=os.environ.get("OLLAMA_UNIFY_GPU_LEASE", "").strip(),
             gpu_uuid=os.environ.get("OMNI_TTS_GPU_UUID", "").strip(),
@@ -113,6 +122,20 @@ class Config:
 
 class TTSError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class SynthesisSpec:
+    text: str
+    language: str
+    speaker: str
+    speaker_audio: bytes | None
+    frames: int
+    temperature: float
+    top_k: int
+    top_p: float
+    seed: int
+    stream_frames: int
 
 
 def _broker_transition(action: str, token: str, timeout_s: float = 330) -> None:
@@ -165,7 +188,10 @@ def _wait_for_cuda_residency(
             return
         if process.poll() is not None:
             stdout, stderr = process.communicate()
-            diagnostic = (stderr or stdout)[-2000:]
+            diagnostic_value = stderr or stdout or ""
+            if isinstance(diagnostic_value, bytes):
+                diagnostic_value = diagnostic_value.decode("utf-8", errors="replace")
+            diagnostic = diagnostic_value[-2000:]
             raise TTSError(
                 "llama-tts exited before CUDA residency was verified: " + diagnostic
             )
@@ -187,7 +213,7 @@ def _stop_process_group(process: subprocess.Popen[str]) -> None:
         process.wait()
 
 
-def synthesize(config: Config, body: dict[str, Any]) -> bytes:
+def _synthesis_spec(config: Config, body: dict[str, Any]) -> SynthesisSpec:
     text = str(body.get("text") or "").strip()
     if not text:
         raise TTSError("text is required")
@@ -195,11 +221,30 @@ def synthesize(config: Config, body: dict[str, Any]) -> bytes:
         raise TTSError(f"text exceeds {config.max_text_chars} characters")
     language = str(body.get("language") or body.get("lang") or "en").strip()
     speaker = str(body.get("speaker_file") or "").strip()
+    speaker_audio: bytes | None = None
+    if body.get("speaker_audio") is not None:
+        if speaker:
+            raise TTSError("speaker_file and speaker_audio are mutually exclusive")
+        try:
+            decoded_speaker = decode_wav_payload(
+                body["speaker_audio"], max_bytes=10 * 1024 * 1024
+            )
+        except AudioContractError as exc:
+            raise TTSError(f"invalid speaker_audio: {exc}") from exc
+        if decoded_speaker.duration_ms < 500:
+            raise TTSError("speaker_audio must be at least 0.5 seconds")
+        if decoded_speaker.duration_ms > 30_000:
+            raise TTSError("speaker_audio must be no longer than 30 seconds")
+        speaker_audio = decoded_speaker.data
     frames = min(int(body.get("max_frames") or config.max_frames), config.max_frames)
     temperature = float(body.get("temperature", 0.7))
     top_k = int(body.get("top_k", 40))
     top_p = float(body.get("top_p", 0.9))
     seed = int(body.get("seed", 42))
+    stream_frames_value = body.get("stream_frames")
+    stream_frames = int(
+        config.stream_frames if stream_frames_value is None else stream_frames_value
+    )
     if not 0 <= temperature <= 2:
         raise TTSError("temperature must be between 0 and 2")
     if not 0 <= top_k <= 1000:
@@ -208,36 +253,97 @@ def synthesize(config: Config, body: dict[str, Any]) -> bytes:
         raise TTSError("top_p must be between 0 and 1")
     if not -1 <= seed <= 2_147_483_647:
         raise TTSError("seed must be -1 or a 32-bit non-negative integer")
+    if not 1 <= stream_frames <= 72:
+        raise TTSError("stream_frames must be between 1 and 72")
+    return SynthesisSpec(
+        text=text,
+        language=language,
+        speaker=speaker,
+        speaker_audio=speaker_audio,
+        frames=frames,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+        seed=seed,
+        stream_frames=stream_frames,
+    )
+
+
+def _command(
+    config: Config,
+    spec: SynthesisSpec,
+    output: Path,
+    *,
+    stream: bool = False,
+    speaker_file: str | None = None,
+) -> list[str]:
+    command = [
+        str(config.binary),
+        "-m",
+        str(config.model),
+        "--mmproj",
+        str(config.projector),
+        "--prompt",
+        spec.text,
+        "--tts-lang",
+        spec.language,
+        "--output",
+        str(output),
+        "--n-predict",
+        str(spec.frames),
+        "--gpu-layers",
+        str(config.gpu_layers),
+        "--temp",
+        str(spec.temperature),
+        "--top-k",
+        str(spec.top_k),
+        "--top-p",
+        str(spec.top_p),
+        "--seed",
+        str(spec.seed),
+    ]
+    selected_speaker = speaker_file if speaker_file is not None else spec.speaker
+    if selected_speaker:
+        command.extend(["--tts-speaker-file", selected_speaker])
+    if stream:
+        command.extend(["--tts-stream", "--tts-stream-frames", str(spec.stream_frames)])
+    return command
+
+
+def _speaker_path(spec: SynthesisSpec, temp_dir: str) -> str:
+    if spec.speaker_audio is None:
+        return spec.speaker
+    path = Path(temp_dir) / "speaker-reference.wav"
+    path.write_bytes(spec.speaker_audio)
+    return str(path)
+
+
+def _validate_wav(wav: bytes) -> None:
+    envelope = {
+        "mime_type": "audio/wav",
+        "encoding": "base64",
+        "data": base64.b64encode(wav).decode("ascii"),
+    }
+    decoded = decode_wav_payload(envelope, max_bytes=max(len(wav), 32 * 1024 * 1024))
+    expected = DEFAULT_AUDIO_CONTRACT.output
+    if (
+        decoded.sample_rate_hz != expected.sample_rate_hz
+        or decoded.channels != expected.channels
+        or decoded.sample_width_bits != expected.sample_width_bits
+    ):
+        raise TTSError(
+            "llama-tts output does not satisfy the 24 kHz mono PCM16 adapter contract"
+        )
+
+
+def synthesize(config: Config, body: dict[str, Any]) -> bytes:
+    spec = _synthesis_spec(config, body)
 
     with tempfile.TemporaryDirectory(prefix="robit-omni-tts-") as temp_dir:
         output = Path(temp_dir) / "speech.wav"
-        command = [
-            str(config.binary),
-            "-m",
-            str(config.model),
-            "--mmproj",
-            str(config.projector),
-            "--prompt",
-            text,
-            "--tts-lang",
-            language,
-            "--output",
-            str(output),
-            "--n-predict",
-            str(frames),
-            "--gpu-layers",
-            str(config.gpu_layers),
-            "--temp",
-            str(temperature),
-            "--top-k",
-            str(top_k),
-            "--top-p",
-            str(top_p),
-            "--seed",
-            str(seed),
-        ]
-        if speaker:
-            command.extend(["--tts-speaker-file", speaker])
+        command = _command(
+            config, spec, output, speaker_file=_speaker_path(spec, temp_dir)
+        )
         if config.lease_token and not config.gpu_uuid:
             raise TTSError("OMNI_TTS_GPU_UUID is required with a scoped GPU lease")
         if config.lease_token:
@@ -300,22 +406,107 @@ def synthesize(config: Config, body: dict[str, Any]) -> bytes:
             raise TTSError("llama-tts returned success without a WAV file")
         wav = output.read_bytes()
 
-    envelope = {
-        "mime_type": "audio/wav",
-        "encoding": "base64",
-        "data": base64.b64encode(wav).decode("ascii"),
-    }
-    decoded = decode_wav_payload(envelope, max_bytes=max(len(wav), 32 * 1024 * 1024))
-    expected = DEFAULT_AUDIO_CONTRACT.output
-    if (
-        decoded.sample_rate_hz != expected.sample_rate_hz
-        or decoded.channels != expected.channels
-        or decoded.sample_width_bits != expected.sample_width_bits
-    ):
-        raise TTSError(
-            "llama-tts output does not satisfy the 24 kHz mono PCM16 adapter contract"
-        )
+    _validate_wav(wav)
     return wav
+
+
+def _stream_synthesize(config: Config, spec: SynthesisSpec) -> Iterator[bytes]:
+    with tempfile.TemporaryDirectory(prefix="robit-omni-tts-stream-") as temp_dir:
+        output = Path(temp_dir) / "speech.wav"
+        command = _command(
+            config,
+            spec,
+            output,
+            stream=True,
+            speaker_file=_speaker_path(spec, temp_dir),
+        )
+        if config.lease_token and not config.gpu_uuid:
+            raise TTSError("OMNI_TTS_GPU_UUID is required with a scoped GPU lease")
+        if config.lease_token:
+            try:
+                _broker_transition(
+                    "prepare",
+                    config.lease_token,
+                    config.broker_transition_timeout_s,
+                )
+            except (TTSError, subprocess.TimeoutExpired):
+                try:
+                    _broker_transition("ready", config.lease_token, 60)
+                except (TTSError, subprocess.TimeoutExpired) as exc:
+                    print(f"warning: GPU broker ready rollback failed: {exc}", file=sys.stderr)
+                raise
+
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_log:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=stderr_log,
+                start_new_session=True,
+            )
+            if process.stdout is None:
+                _stop_process_group(process)
+                raise TTSError("failed to open llama-tts PCM stream")
+            if config.active_pid_file:
+                config.active_pid_file.parent.mkdir(parents=True, exist_ok=True)
+                config.active_pid_file.write_text(f"{process.pid}\n")
+            broker_ready = False
+            try:
+                if config.lease_token:
+                    _wait_for_cuda_residency(
+                        process, config.gpu_uuid, config.residency_timeout_s
+                    )
+                    _broker_transition(
+                        "ready",
+                        config.lease_token,
+                        config.broker_transition_timeout_s,
+                    )
+                    broker_ready = True
+
+                deadline = time.monotonic() + config.timeout_s
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        _stop_process_group(process)
+                        raise subprocess.TimeoutExpired(command, config.timeout_s)
+                    readable, _, _ = select.select(
+                        [process.stdout], [], [], min(1.0, remaining)
+                    )
+                    if readable:
+                        chunk = os.read(process.stdout.fileno(), 64 * 1024)
+                        if chunk:
+                            yield chunk
+                            continue
+                        break
+                    if process.poll() is not None:
+                        continue
+
+                process.wait(timeout=max(0.1, deadline - time.monotonic()))
+                stderr_log.seek(0)
+                diagnostic = stderr_log.read()[-2000:]
+                if process.returncode != 0:
+                    raise TTSError(
+                        f"llama-tts exited {process.returncode}: {diagnostic}"
+                    )
+                if not output.is_file():
+                    raise TTSError("llama-tts returned success without a WAV file")
+                _validate_wav(output.read_bytes())
+            finally:
+                if process.poll() is None:
+                    _stop_process_group(process)
+                if config.active_pid_file:
+                    config.active_pid_file.unlink(missing_ok=True)
+                if config.lease_token and not broker_ready:
+                    try:
+                        _broker_transition("ready", config.lease_token, 60)
+                    except (TTSError, subprocess.TimeoutExpired) as exc:
+                        print(f"warning: {exc}", file=sys.stderr)
+
+
+def stream_synthesize(
+    config: Config, body: dict[str, Any]
+) -> tuple[SynthesisSpec, Iterator[bytes]]:
+    spec = _synthesis_spec(config, body)
+    return spec, _stream_synthesize(config, spec)
 
 
 def create_app(config: Config | None = None) -> Flask:
@@ -341,6 +532,32 @@ def create_app(config: Config | None = None) -> Flask:
             with lock:
                 wav = synthesize(runtime, body)
             return Response(wav, content_type="audio/wav")
+        except (TTSError, ValueError, subprocess.TimeoutExpired) as exc:
+            return jsonify({"error": str(exc)}), 422
+
+    @app.post("/synthesize/stream")
+    def synthesize_stream_route():
+        try:
+            body = request.get_json(force=True)
+            if not isinstance(body, dict):
+                raise TTSError("request body must be a JSON object")
+            spec, chunks = stream_synthesize(runtime, body)
+
+            def generate() -> Iterator[bytes]:
+                with lock:
+                    yield from chunks
+
+            response = Response(
+                stream_with_context(generate()),
+                content_type="audio/pcm;rate=24000;channels=1;format=s16le",
+            )
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Audio-Codec"] = "pcm_s16le"
+            response.headers["X-Audio-Sample-Rate"] = "24000"
+            response.headers["X-Audio-Channels"] = "1"
+            response.headers["X-Audio-Stream-Version"] = "1"
+            response.headers["X-Audio-Stream-Frames"] = str(spec.stream_frames)
+            return response
         except (TTSError, ValueError, subprocess.TimeoutExpired) as exc:
             return jsonify({"error": str(exc)}), 422
 

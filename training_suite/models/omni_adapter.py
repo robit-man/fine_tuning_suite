@@ -160,6 +160,9 @@ def adapter_contract() -> dict[str, Any]:
                 "voice": "optional backend voice identifier",
                 "language": "optional BCP-47 language hint",
                 "style": "optional synthesis instruction",
+                "speaker_audio": (
+                    "optional base64 WAV reference for backends that support cloning"
+                ),
             },
             "messages": {
                 "content": "normal Ollama string content",

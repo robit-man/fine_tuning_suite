@@ -56,6 +56,37 @@ def call(client: httpx.Client, endpoint: str, payload: dict[str, Any]) -> dict[s
     return data
 
 
+def stream_call(
+    client: httpx.Client, endpoint: str, payload: dict[str, Any]
+) -> tuple[dict[str, Any], bytes]:
+    request = dict(payload)
+    request["stream"] = True
+    events: list[dict[str, Any]] = []
+    pcm = bytearray()
+    with client.stream(
+        "POST", endpoint + "/api/chat/stream", json=request
+    ) as response:
+        response.raise_for_status()
+        for line in response.iter_lines():
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            if event.get("type") == "error":
+                raise RuntimeError(str(event.get("error") or "stream failed"))
+            if event.get("type") == "audio_delta":
+                pcm.extend(
+                    base64.b64decode(
+                        str((event.get("audio") or {}).get("data") or ""),
+                        validate=True,
+                    )
+                )
+            events.append(event)
+    finals = [event.get("response") for event in events if event.get("type") == "final"]
+    if len(finals) != 1 or not isinstance(finals[0], dict):
+        raise RuntimeError("portal stream returned no authoritative final response")
+    return finals[0], bytes(pcm)
+
+
 def validate_wav(audio: dict[str, Any]) -> None:
     raw = base64.b64decode(str(audio.get("data") or ""), validate=True)
     with wave.open(io.BytesIO(raw), "rb") as wav:
@@ -75,6 +106,7 @@ def main() -> int:
     parser.add_argument("--image", type=Path)
     parser.add_argument("--video", type=Path)
     parser.add_argument("--tts", action="store_true")
+    parser.add_argument("--stream", action="store_true")
     parser.add_argument("--tool", action="store_true")
     args = parser.parse_args()
 
@@ -152,7 +184,7 @@ def main() -> int:
     if args.video:
         mime = "video/webm" if args.video.suffix.lower() == ".webm" else "video/mp4"
         video = envelope(args.video, mime)
-        video["sampling"] = {"fps": 1, "max_frames": 96, "include_audio": True}
+        video["sampling"] = {"fps": 1, "max_frames": 24, "include_audio": True}
         payload = base_request(
             args.model,
             "describe",
@@ -175,7 +207,16 @@ def main() -> int:
         )
         payload["response_modalities"] = ["text", "audio"]
         payload["speech_mode"] = "always"
-        result = call(client, endpoint, payload)
+        if args.stream:
+            result, pcm = stream_call(client, endpoint, payload)
+            if not pcm or len(pcm) % 2:
+                raise RuntimeError("streamed TTS returned invalid PCM16 bytes")
+            adapter = result.get("adapter") or {}
+            if adapter.get("audio_streamed") is not True:
+                raise RuntimeError(f"adapter did not confirm audio streaming: {adapter!r}")
+            checks["tts_stream"] = "pass"
+        else:
+            result = call(client, endpoint, payload)
         validate_wav(result["message"].get("audio") or {})
         checks["tts"] = "pass"
 

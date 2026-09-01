@@ -49,6 +49,7 @@
         "language": {"type": "string"},
         "style": {"type": "string"},
         "speaker_file": {"type": "string"},
+        "speaker_audio": {"$ref": "#/$defs/audio"},
         "temperature": {"type": "number", "minimum": 0, "maximum": 2},
         "top_k": {"type": "integer", "minimum": 0, "maximum": 1000},
         "top_p": {"type": "number", "minimum": 0, "maximum": 1},

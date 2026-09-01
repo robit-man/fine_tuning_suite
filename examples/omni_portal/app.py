@@ -7,10 +7,12 @@ and executes only two read-only demonstration tools from an explicit allowlist.
 
 from __future__ import annotations
 
+import base64
 import copy
 import hmac
 import json
 import os
+import sys
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -19,7 +21,19 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from flask import Flask, jsonify, render_template, request
+from flask import (
+    Flask,
+    Response,
+    jsonify,
+    render_template,
+    request,
+    stream_with_context,
+)
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from training_suite.models.audio import AudioContractError, decode_wav_payload
 
 ADAPTER_SCHEMA = "robit.ollama.omni-adapter.v1"
 DEFAULT_MODEL = "robit/qwen3.8-27b-e03-obliterated-omni:q4km"
@@ -35,6 +49,17 @@ VOICE_SPEECH_FIELDS = {
     "seed",
     "max_frames",
 }
+VOICE_CLIENT_FIELDS = {
+    "clone_enabled",
+    "speaker_audio",
+    "language",
+    "temperature",
+    "top_k",
+    "top_p",
+    "seed",
+    "max_frames",
+}
+MAX_SPEAKER_REFERENCE_BYTES = 10 * 1024 * 1024
 
 SAFE_TOOLS = [
     {
@@ -172,6 +197,87 @@ class PortalError(RuntimeError):
     """A safe, user-visible portal failure."""
 
 
+class PortalRequestError(ValueError):
+    """A safe client request validation failure."""
+
+
+def _voice_override(raw: Any) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise PortalRequestError("portal_voice must be an object")
+    unknown = set(raw) - VOICE_CLIENT_FIELDS
+    if unknown:
+        raise PortalRequestError(f"unknown portal_voice fields: {sorted(unknown)}")
+
+    clone_enabled = raw.get("clone_enabled", False)
+    if not isinstance(clone_enabled, bool):
+        raise PortalRequestError("portal_voice.clone_enabled must be a boolean")
+    result: dict[str, Any] = {"clone_enabled": clone_enabled}
+
+    if "language" in raw:
+        language = str(raw["language"] or "").strip()
+        if language not in QWEN3_TTS_LANGUAGES:
+            supported = ", ".join(sorted(QWEN3_TTS_LANGUAGES))
+            raise PortalRequestError(
+                f"portal_voice.language must be one of: {supported}"
+            )
+        result["language"] = language
+
+    numeric_ranges = {
+        "temperature": (0.0, 2.0, float),
+        "top_k": (0, 1000, int),
+        "top_p": (0.0, 1.0, float),
+        "max_frames": (1, 2048, int),
+    }
+    for key, (minimum, maximum, expected_type) in numeric_ranges.items():
+        if key not in raw:
+            continue
+        value = raw[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise PortalRequestError(f"portal_voice.{key} must be numeric")
+        if expected_type is int and not isinstance(value, int):
+            raise PortalRequestError(f"portal_voice.{key} must be an integer")
+        if not minimum <= value <= maximum:
+            raise PortalRequestError(
+                f"portal_voice.{key} must be between {minimum} and {maximum}"
+            )
+        result[key] = expected_type(value)
+
+    if "seed" in raw:
+        seed = raw["seed"]
+        if isinstance(seed, bool) or not isinstance(seed, int):
+            raise PortalRequestError("portal_voice.seed must be an integer")
+        if not -1 <= seed <= 2_147_483_647:
+            raise PortalRequestError(
+                "portal_voice.seed must be -1 or a 32-bit non-negative integer"
+            )
+        result["seed"] = seed
+
+    reference = raw.get("speaker_audio")
+    if reference is not None:
+        if not clone_enabled:
+            raise PortalRequestError(
+                "portal_voice.speaker_audio requires clone_enabled=true"
+            )
+        try:
+            decoded = decode_wav_payload(
+                reference, max_bytes=MAX_SPEAKER_REFERENCE_BYTES
+            )
+        except AudioContractError as exc:
+            raise PortalRequestError(f"invalid voice reference: {exc}") from exc
+        if decoded.duration_ms < 500:
+            raise PortalRequestError("voice reference must be at least 0.5 seconds")
+        if decoded.duration_ms > 30_000:
+            raise PortalRequestError("voice reference must be no longer than 30 seconds")
+        result["speaker_audio"] = {
+            "mime_type": "audio/wav",
+            "encoding": "base64",
+            "data": base64.b64encode(decoded.data).decode("ascii"),
+        }
+    return result
+
+
 def _json_object(response: httpx.Response, stage: str) -> dict[str, Any]:
     try:
         data = response.json()
@@ -299,6 +405,30 @@ def create_app(
         supplied = value[7:].strip() if value.lower().startswith("bearer ") else ""
         return bool(supplied) and hmac.compare_digest(supplied, runtime.access_token)
 
+    def apply_voice_profile(payload: dict[str, Any]) -> None:
+        client_voice = _voice_override(payload.pop("portal_voice", None))
+        speech = {
+            key: copy.deepcopy(value)
+            for key, value in runtime.voice_profile.items()
+            if key in VOICE_SPEECH_FIELDS
+        }
+        clone_enabled = client_voice.pop("clone_enabled", None)
+        speaker_audio = client_voice.pop("speaker_audio", None)
+        if clone_enabled is False:
+            speech.pop("speaker_file", None)
+        elif clone_enabled is True:
+            if speaker_audio is None and not speech.get("speaker_file"):
+                raise PortalRequestError(
+                    "voice clone is enabled but no reference audio is configured"
+                )
+            if speaker_audio is not None:
+                speech.pop("speaker_file", None)
+                speech["speaker_audio"] = speaker_audio
+        speech.update(client_voice)
+        payload.pop("speech", None)
+        if speech:
+            payload["speech"] = speech
+
     @app.after_request
     def secure_headers(response):
         response.headers["Content-Security-Policy"] = (
@@ -356,6 +486,23 @@ def create_app(
                     "speaker_reference": bool(
                         runtime.voice_profile.get("speaker_file")
                     ),
+                    "temperature": float(
+                        runtime.voice_profile.get("temperature", 0.7)
+                    ),
+                    "top_k": int(runtime.voice_profile.get("top_k", 40)),
+                    "top_p": float(runtime.voice_profile.get("top_p", 0.9)),
+                    "seed": int(runtime.voice_profile.get("seed", 42)),
+                    "max_frames": int(
+                        runtime.voice_profile.get("max_frames", 512)
+                    ),
+                    "clone_mode": "speaker_embedding",
+                    "client_reference_wav": True,
+                },
+                "streaming": {
+                    "text": True,
+                    "audio": True,
+                    "audio_transport": "pcm_s16le_deltas_with_final_wav",
+                    "barge_in": True,
                 },
             }
         )
@@ -375,13 +522,7 @@ def create_app(
                 return jsonify({"error": "portal model tag is fixed"}), 400
             if payload.get("stream") is not False:
                 return jsonify({"error": "portal requires stream=false"}), 400
-            speech = {
-                key: copy.deepcopy(value)
-                for key, value in runtime.voice_profile.items()
-                if key in VOICE_SPEECH_FIELDS
-            }
-            if speech:
-                payload["speech"] = speech
+            apply_voice_profile(payload)
 
             executed: list[dict[str, str]] = []
             current_payload: dict[str, Any] = payload
@@ -405,10 +546,59 @@ def create_app(
                 "safe_tools_executed": executed,
             }
             return jsonify(data)
+        except PortalRequestError as exc:
+            return jsonify({"error": str(exc)}), 400
         except (httpx.HTTPError, PortalError) as exc:
             return jsonify({"error": str(exc)}), 502
         finally:
             inference_gate.release()
+
+    @app.post("/api/chat/stream")
+    def chat_stream():
+        if not authorized():
+            return jsonify({"error": "unauthorized"}), 401
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "request body must be a JSON object"}), 400
+        if payload.pop("portal_auto_tools", False) is True:
+            return jsonify(
+                {"error": "automatic tool rounds are unavailable while streaming"}
+            ), 400
+        if payload.get("model") != runtime.model:
+            return jsonify({"error": "portal model tag is fixed"}), 400
+        if payload.get("stream") is not True:
+            return jsonify({"error": "stream endpoint requires stream=true"}), 400
+        try:
+            apply_voice_profile(payload)
+        except PortalRequestError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if not inference_gate.acquire(blocking=False):
+            return jsonify({"error": "another inference is in progress"}), 429
+
+        try:
+            upstream_request = session.build_request(
+                "POST", runtime.adapter_url.rstrip("/") + "/stream", json=payload
+            )
+            upstream = session.send(upstream_request, stream=True)
+        except httpx.HTTPError as exc:
+            inference_gate.release()
+            return jsonify({"error": str(exc)}), 502
+
+        def relay():
+            try:
+                yield from upstream.iter_bytes()
+            finally:
+                upstream.close()
+                inference_gate.release()
+
+        return Response(
+            stream_with_context(relay()),
+            status=upstream.status_code,
+            content_type=upstream.headers.get(
+                "content-type", "application/x-ndjson; charset=utf-8"
+            ),
+            headers={"X-Accel-Buffering": "no"},
+        )
 
     return app
 

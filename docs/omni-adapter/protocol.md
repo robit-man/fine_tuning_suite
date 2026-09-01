@@ -67,8 +67,10 @@ clearly delimited, untrusted observation text.
 the language stage; they return comprehension text directly and may synthesize
 that text when `speech_mode` requests audio.
 
-The reference Qwen3-TTS Base worker supports `language`, `speaker_file`,
-`temperature`, `top_k`, `top_p`, `seed`, and `max_frames`. Other fields are
+The reference Qwen3-TTS Base worker supports `language`, trusted server-local
+`speaker_file`, request-local base64 WAV `speaker_audio`, `temperature`,
+`top_k`, `top_p`, `seed`, and `max_frames`. `speaker_audio` is bounded to 10
+MiB and 0.5–30 seconds and is removed after its generation. Other fields are
 backend capabilities, not portable guarantees. In particular, its current
 llama.cpp API has no separate natural-language style-instruction channel.
 

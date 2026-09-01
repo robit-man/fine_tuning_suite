@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import wave
 from pathlib import Path
 
@@ -10,7 +11,16 @@ import httpx
 import pytest
 
 from examples.omni_adapter.client import printable_response
-from examples.omni_adapter.server import Config, build_comprehension_payload, execute
+from examples.omni_adapter.server import (
+    Config,
+    build_comprehension_payload,
+    execute,
+    execute_stream,
+)
+from examples.omni_adapter.tts_server import Config as TTSConfig
+from examples.omni_adapter.tts_server import TTSError, _command, _synthesis_spec
+from examples.omni_adapter.tts_server import create_app as create_tts_app
+from training_suite.models.audio import decode_wav_payload
 from training_suite.models.omni_adapter import (
     ADAPTER_SCHEMA,
     OmniAdapterError,
@@ -37,6 +47,17 @@ def _mp4() -> bytes:
     return b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"
 
 
+def _tts_config(tmp_path: Path, **overrides) -> TTSConfig:
+    values = {
+        "binary": tmp_path / "llama-tts",
+        "model": tmp_path / "model.gguf",
+        "projector": tmp_path / "projector.gguf",
+        "gpu_layers": 0,
+    }
+    values.update(overrides)
+    return TTSConfig(**values)
+
+
 def _base_request(**overrides):
     request = {
         "model": "robit/qwen3.8-omni:latest",
@@ -58,6 +79,86 @@ def test_adapter_contract_separates_wire_schema_from_bundle_schema() -> None:
     assert contract["transport"]["streaming_v1"] is False
     assert contract["compatibility"]["message_extensions"] == ["audios", "videos"]
     assert contract["media"]["video"]["max_items"] == 4
+
+
+def test_tts_stream_window_validation_and_cli_arguments(tmp_path: Path) -> None:
+    config = _tts_config(tmp_path)
+    spec = _synthesis_spec(config, {"text": "Hello", "stream_frames": 12})
+    command = _command(config, spec, tmp_path / "speech.wav", stream=True)
+
+    assert command[-3:] == ["--tts-stream", "--tts-stream-frames", "12"]
+    with pytest.raises(TTSError, match="between 1 and 72"):
+        _synthesis_spec(config, {"text": "Hello", "stream_frames": 0})
+    with pytest.raises(TTSError, match="between 1 and 72"):
+        _synthesis_spec(config, {"text": "Hello", "stream_frames": 73})
+
+
+def test_tts_accepts_bounded_wav_speaker_envelope(tmp_path: Path) -> None:
+    reference = io.BytesIO()
+    with wave.open(reference, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b"\x00\x00" * 16000)
+    envelope = {
+        "mime_type": "audio/wav",
+        "encoding": "base64",
+        "data": _encoded(reference.getvalue()),
+    }
+
+    spec = _synthesis_spec(
+        _tts_config(tmp_path), {"text": "Clone this voice.", "speaker_audio": envelope}
+    )
+
+    assert spec.speaker == ""
+    assert spec.speaker_audio == reference.getvalue()
+    with pytest.raises(TTSError, match="mutually exclusive"):
+        _synthesis_spec(
+            _tts_config(tmp_path),
+            {
+                "text": "No ambiguity.",
+                "speaker_file": "/trusted/reference.wav",
+                "speaker_audio": envelope,
+            },
+        )
+
+
+def test_tts_http_stream_is_header_tagged_incremental_pcm(
+    tmp_path: Path,
+) -> None:
+    binary = tmp_path / "fake-llama-tts"
+    binary.write_text(
+        """#!/usr/bin/env python3
+import sys
+import wave
+
+args = sys.argv[1:]
+output = args[args.index("--output") + 1]
+with wave.open(output, "wb") as wav:
+    wav.setnchannels(1)
+    wav.setsampwidth(2)
+    wav.setframerate(24000)
+    wav.writeframes(bytes([1, 2, 3, 4]))
+sys.stdout.buffer.write(bytes([1, 2]))
+sys.stdout.buffer.flush()
+sys.stdout.buffer.write(bytes([3, 4]))
+sys.stdout.buffer.flush()
+"""
+    )
+    os.chmod(binary, 0o755)
+    config = _tts_config(tmp_path, binary=binary, stream_frames=12)
+    response = create_tts_app(config).test_client().post(
+        "/synthesize/stream",
+        json={"text": "Hello"},
+    )
+
+    assert response.status_code == 200
+    assert response.data == bytes([1, 2, 3, 4])
+    assert response.headers["X-Audio-Codec"] == "pcm_s16le"
+    assert response.headers["X-Audio-Sample-Rate"] == "24000"
+    assert response.headers["X-Audio-Channels"] == "1"
+    assert response.headers["X-Audio-Stream-Frames"] == "12"
+    assert response.headers["Cache-Control"] == "no-store"
 
 
 def test_example_client_redacts_audio_base64_by_default() -> None:
@@ -394,7 +495,13 @@ def test_comprehension_payload_tags_video_for_qwen_style_server() -> None:
                 {
                     "role": "user",
                     "content": "Describe.",
-                    "videos": [{"mime_type": "video/mp4", "data": _encoded(_mp4())}],
+                    "videos": [
+                        {
+                            "mime_type": "video/mp4",
+                            "data": _encoded(_mp4()),
+                            "sampling": {"fps": 8, "max_frames": 96},
+                        }
+                    ],
                 }
             ],
             omni={"task": "describe", "include_audio_from_video": False},
@@ -406,4 +513,172 @@ def test_comprehension_payload_tags_video_for_qwen_style_server() -> None:
     )
 
     assert payload["messages"][-1]["content"][0]["type"] == "input_video"
+    assert payload["messages"][-1]["content"][0]["sampling"] == {
+        "fps": 2.0,
+        "max_frames": 32,
+    }
     assert payload["mm_processor_kwargs"]["use_audio_in_video"] is False
+    assert payload["max_tokens"] == 2048
+
+
+def test_video_context_overflow_retries_with_lower_frame_cap() -> None:
+    seen_caps = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        cap = body["messages"][-1]["content"][0]["sampling"]["max_frames"]
+        seen_caps.append(cap)
+        if len(seen_caps) == 1:
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "type": "exceed_context_size_error",
+                        "message": "request exceeds the available context size",
+                    }
+                },
+            )
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "video understood"}}]}
+        )
+
+    parsed = parse_adapter_request(
+        _base_request(
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Describe.",
+                    "videos": [
+                        {
+                            "mime_type": "video/mp4",
+                            "data": _encoded(_mp4()),
+                            "sampling": {"fps": 1, "max_frames": 24},
+                        }
+                    ],
+                }
+            ],
+            omni={"task": "describe", "include_audio_from_video": False},
+        )
+    )
+    result = execute(
+        parsed,
+        Config("http://comp", "omni", "http://ollama", "http://tts", 30),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert seen_caps == [24, 16]
+    assert result["message"]["content"] == "video understood"
+
+
+def test_reference_server_streams_thinking_and_text_then_final_response() -> None:
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            content=(
+                b'{"message":{"role":"assistant","thinking":"brief "},"done":false}\n'
+                b'{"message":{"role":"assistant","content":"Hello "},"done":false}\n'
+                b'{"message":{"role":"assistant","content":"back."},"done":true}\n'
+            ),
+            headers={"content-type": "application/x-ndjson"},
+        )
+
+    parsed = parse_adapter_request(_base_request())
+    config = Config(
+        "http://comprehension/v1/chat/completions",
+        "qwen3-omni",
+        "http://language",
+        "http://tts/synthesize",
+        30,
+    )
+
+    events = [
+        json.loads(chunk)
+        for chunk in execute_stream(
+            parsed,
+            config,
+            httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+    ]
+
+    assert seen[0]["stream"] is True
+    assert seen[0]["think"] is True
+    assert [event["type"] for event in events] == [
+        "stage",
+        "delta",
+        "delta",
+        "delta",
+        "final",
+    ]
+    final = events[-1]["response"]
+    assert final["message"]["content"] == "Hello back."
+    assert final["message"]["thinking"] == "brief "
+    assert final["adapter"]["text_streamed"] is True
+    assert final["adapter"]["audio_streamed"] is False
+
+
+def test_reference_server_streams_pcm_and_keeps_final_wav_envelope() -> None:
+    pcm = b"\x01\x00\x02\x00\x03\x00"
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, json.loads(request.content)))
+        if request.url.host == "language":
+            return httpx.Response(
+                200,
+                content=(
+                    b'{"message":{"role":"assistant","content":"Speak."},'
+                    b'"done":true}\n'
+                ),
+            )
+        if request.url.host == "tts":
+            return httpx.Response(
+                200,
+                content=pcm,
+                headers={"x-audio-codec": "pcm_s16le"},
+            )
+        return httpx.Response(404)
+
+    parsed = parse_adapter_request(
+        _base_request(
+            response_modalities=["text", "audio"],
+            speech_mode="always",
+        )
+    )
+    config = Config(
+        "http://comprehension/v1/chat/completions",
+        "qwen3-omni",
+        "http://language",
+        "http://tts/synthesize",
+        30,
+    )
+
+    events = [
+        json.loads(chunk)
+        for chunk in execute_stream(
+            parsed,
+            config,
+            httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+    ]
+
+    assert [path for path, _body in seen] == ["/api/chat", "/synthesize/stream"]
+    assert [event["type"] for event in events] == [
+        "stage",
+        "delta",
+        "stage",
+        "audio_start",
+        "audio_delta",
+        "audio_end",
+        "final",
+    ]
+    streamed = base64.b64decode(events[4]["audio"]["data"])
+    assert streamed == pcm
+    final = events[-1]["response"]
+    decoded = decode_wav_payload(final["message"]["audio"])
+    assert decoded.sample_rate_hz == 24000
+    assert decoded.frames == 3
+    assert final["adapter"]["audio_streamed"] is True
+    assert final["adapter"]["route"] == ["language", "tts"]

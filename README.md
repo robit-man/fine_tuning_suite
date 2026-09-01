@@ -419,12 +419,11 @@ and [examples](examples/omni_adapter/README.md).
 For phone testing, the [authenticated Omni portal](examples/omni_portal/README.md)
 adds hold-to-record microphone capture with a live waveform, automatic ASR and
 media routing, image/video uploads, safe Markdown responses, deterministic
-Qwen3-TTS voice profiles/reference cloning, a spoken-reply toggle, and
-silence-delimited hands-free call turns. It also records device camera and
-microphone streams through a live local preview into bounded video turns. Its broker-compliant CUDA-only
-supervisor publishes a temporary Cloudflare HTTPS tunnel. Adapter v1 call mode
-automates complete half-duplex request/reply turns; it does not claim
-incremental waveform generation. The deployment and rollback checklist is in the
+Qwen3-TTS server profiles plus request-local recorded/uploaded WAV cloning, a
+spoken-reply toggle, streamed PCM playback, and barge-in voice-call turns. It
+also records device camera and microphone streams through a live local preview
+into bounded video turns. Its broker-compliant CUDA-only supervisor publishes a
+temporary Cloudflare HTTPS tunnel. The deployment and rollback checklist is in the
 [phone portal runbook](docs/omni-adapter/phone-portal.md).
 
 #### Video comprehension
@@ -624,6 +623,7 @@ The full checklist is in
 | `TRAINING_SUITE_OMNI_TTS_URL` | unset | Speech-synthesis endpoint |
 | `OMNI_COMPREHENSION_URL` | `http://127.0.0.1:8901/v1/chat/completions` | Example adapter comprehension endpoint |
 | `OMNI_COMPREHENSION_MODEL` | `Qwen/Qwen3-Omni-30B-A3B-Instruct` | Example adapter comprehension model |
+| `OMNI_COMPREHENSION_CONTEXT_TOKENS` | `65536` | Example Qwen3-Omni comprehension context limit |
 | `OMNI_LANGUAGE_URL` | `http://127.0.0.1:11434` | Example adapter Ollama base URL |
 | `OMNI_TTS_URL` | `http://127.0.0.1:8091/synthesize` | Example adapter TTS endpoint |
 | `OMNI_OLLAMA_MODEL` | unset | Resolve the TTS sidecar from this installed model tag |

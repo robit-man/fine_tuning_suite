@@ -90,13 +90,17 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "function stopCameraCapture" in javascript
     assert "function streamChat" in javascript
     assert "CALL_BARGE_THRESHOLD" in javascript
-    assert "think: reasoningEnabled()" in javascript
+    assert "think: wantsThinking" in javascript
+    assert "think: showThinking" in javascript
+    assert "built.wantsThinking" in javascript
     assert "max_frames: 24" in javascript
     assert "function voicePayload" in javascript
     assert "function startVoiceReferenceRecording" in javascript
     assert 'elements.prompt.value = ""' in javascript
     assert ".composer textarea:focus" in css
     assert "box-shadow: none" in css
+    assert "user-select: none" in css
+    assert "-webkit-touch-callout: none" in css
 
 
 def test_portal_api_requires_bearer_token() -> None:
@@ -155,6 +159,29 @@ def test_portal_pins_model_and_proxies_normal_response() -> None:
     assert seen[0]["model"] == DEFAULT_MODEL
 
 
+def test_portal_defaults_reasoning_off_and_requires_boolean() -> None:
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"message": {"role": "assistant", "content": "Answer."}}
+        )
+
+    app = create_app(_config(), httpx.Client(transport=httpx.MockTransport(handler)))
+    client = app.test_client()
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    without_think = _request()
+    without_think.pop("think")
+
+    defaulted = client.post("/api/chat", headers=headers, json=without_think)
+    invalid = client.post("/api/chat", headers=headers, json=_request(think="yes"))
+
+    assert defaulted.status_code == 200
+    assert seen[0]["think"] is False
+    assert invalid.status_code == 400
+
+
 def test_voice_profile_resolves_relative_speaker_and_validates_language(
     tmp_path,
 ) -> None:
@@ -193,6 +220,25 @@ def test_voice_profile_resolves_relative_speaker_and_validates_language(
         assert "language must be one of" in str(exc)
     else:
         raise AssertionError("unsupported TTS language was accepted")
+
+
+def test_bundled_default_voice_is_metadata_free_pcm() -> None:
+    profile_path = Path("examples/omni_portal/voice-profile.json")
+    profile = load_voice_profile(profile_path)
+    voice_path = Path(profile["speaker_file"])
+    raw = voice_path.read_bytes()
+
+    assert voice_path.name == "default_voice.wav"
+    assert raw[:4] == b"RIFF"
+    assert raw[8:12] == b"WAVE"
+    assert raw[12:16] == b"fmt "
+    assert raw[36:40] == b"data"
+    with wave.open(str(voice_path), "rb") as wav:
+        assert wav.getcomptype() == "NONE"
+        assert wav.getframerate() == 16000
+        assert wav.getnchannels() == 1
+        assert wav.getsampwidth() == 2
+        assert 500 <= round(wav.getnframes() * 1000 / wav.getframerate()) <= 30000
 
 
 def test_portal_enforces_server_voice_profile() -> None:

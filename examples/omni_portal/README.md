@@ -23,9 +23,12 @@ headings, emphasis, lists, block quotes, links, and fenced code. Sending a turn
 clears the composer and attachments immediately.
 
 The brain icon controls the real Ollama `think` request field. Gray disables
-reasoning output; violet enables it. When enabled, streamed reasoning is shown
-in a collapsed Reasoning disclosure beneath the answer instead of being mixed
-into the visible response.
+reasoning and is the default; violet explicitly sends `think:true`. When
+enabled, streamed reasoning is shown in a collapsed Reasoning disclosure
+beneath the answer instead of being mixed into the visible response. The
+adapter preserves Ollama's native `message.thinking` channel and also separates
+fallback `<think>...</think>` tags, including tags split across stream chunks.
+When disabled, native or tagged reasoning is suppressed and never sent to TTS.
 
 The camera icon in the upper-right control group opens the device camera and microphone with a live, muted
 in-interface preview. Tap it again—or press Send—to stop and attach the bounded
@@ -71,7 +74,9 @@ scheduled directly into the browser's unlocked Web Audio context. The final
 event also carries the complete tagged 24 kHz mono PCM16 WAV for replay and
 adapter compatibility. The browser remains receptive to barge-in throughout
 generation and scheduled playback. The viewport disables focus and pinch zoom
-for a stable app-like mobile layout.
+for a stable app-like mobile layout. Conversation text and decorative content
+also disable touch/mouse selection and iOS callouts; normal editing remains
+enabled in the composer and voice configuration fields.
 
 Video is sampled at 24 frames by the phone and clamped to at most 32 frames and
 2 fps by the adapter. The comprehension GGUF declares a 65,536-token context,
@@ -97,6 +102,12 @@ its container, duration (0.5–30 seconds), and 10 MiB decoded limit, then the T
 worker writes it into a per-generation temporary directory for `llama-tts`.
 The file is deleted as soon as that generation finishes. The browser cannot
 select a server path. Only clone a voice you own or have permission to use.
+
+The repository ships [`voices/default_voice.wav`](voices/default_voice.wav) as
+the active default reference. It is a 13.009-second, 16 kHz mono PCM16 WAV
+rewritten without INFO, encoder, or other metadata chunks. The default profile
+uses that file until the voice panel records or uploads a request-local
+override.
 
 Edit
 [`voice-profile.json`](voice-profile.json) before startup to pin the server-side

@@ -1095,6 +1095,7 @@
     const assistant = addMessage({ role: "assistant", content: "", streaming: true });
     let streamedContent = "";
     let streamedThinking = "";
+    const showThinking = reasoningEnabled();
     let pcmController = null;
     let streamedAudio = false;
     setComposerStatus(frame ? "Video call · understanding…" : "Call · understanding speech…");
@@ -1108,7 +1109,7 @@
           response_modalities: ["text", "audio"],
           speech_mode: "always",
           portal_voice: voicePayload(),
-          think: reasoningEnabled(),
+          think: showThinking,
           options: { num_predict: 512 },
           portal_auto_tools: false,
         },
@@ -1119,7 +1120,9 @@
               user.node.querySelector(".message-content").textContent = String(event.content);
             } else if (event.type === "delta") {
               streamedContent += String((event.message || {}).content || "");
-              streamedThinking += String((event.message || {}).thinking || "");
+              if (showThinking) {
+                streamedThinking += String((event.message || {}).thinking || "");
+              }
               updateMessage(assistant, {
                 content: streamedContent,
                 thinking: streamedThinking,
@@ -1146,7 +1149,7 @@
       user.node.querySelector(".message-content").textContent = transcript;
       updateMessage(assistant, {
         content: reply.content || "Spoken response",
-        thinking: reply.thinking || streamedThinking,
+        thinking: showThinking ? (reply.thinking || streamedThinking) : "",
         audio: call.discardReply ? null : reply.audio,
         streaming: false,
         autoplayAudio: !streamedAudio,
@@ -1355,10 +1358,12 @@
     }));
 
     const wantsSpeech = elements.speak.getAttribute("aria-pressed") === "true";
+    const wantsThinking = reasoningEnabled();
     const messages = task === "chat" ? [...state.history.slice(-12), message] : [message];
     return {
       task,
       wantsSpeech,
+      wantsThinking,
       display: typed || (task === "transcribe" ? "Audio clip" : "Attached media"),
       message,
       payload: {
@@ -1368,7 +1373,7 @@
         response_modalities: wantsSpeech ? ["text", "audio"] : ["text"],
         speech_mode: wantsSpeech ? "always" : "never",
         portal_voice: voicePayload(),
-        think: reasoningEnabled(),
+        think: wantsThinking,
         stream: false,
         options: { num_predict: 2048 },
         portal_auto_tools: false,
@@ -1401,7 +1406,11 @@
     elements.prompt.value = "";
     resizePrompt();
     elements.send.disabled = true;
-    setComposerStatus(built.task === "transcribe" ? "Transcribing audio…" : "Thinking…");
+    setComposerStatus(
+      built.task === "transcribe"
+        ? "Transcribing audio…"
+        : (built.wantsThinking ? "Reasoning…" : "Replying…"),
+    );
     const assistant = addMessage({ role: "assistant", content: "", streaming: true });
     let streamedContent = "";
     let streamedThinking = "";
@@ -1412,7 +1421,9 @@
         onEvent: event => {
           if (event.type === "delta") {
             streamedContent += String((event.message || {}).content || "");
-            streamedThinking += String((event.message || {}).thinking || "");
+            if (built.wantsThinking) {
+              streamedThinking += String((event.message || {}).thinking || "");
+            }
             updateMessage(assistant, {
               content: streamedContent,
               thinking: streamedThinking,
@@ -1421,7 +1432,7 @@
           } else if (event.type === "stage") {
             const labels = {
               comprehension: "Understanding media…",
-              language: reasoningEnabled() ? "Reasoning…" : "Replying…",
+              language: built.wantsThinking ? "Reasoning…" : "Replying…",
               tts: "Preparing spoken reply…",
             };
             setComposerStatus(labels[event.stage] || "Working…");
@@ -1443,7 +1454,7 @@
       }
       updateMessage(assistant, {
         content: reply.content || (reply.audio ? "Spoken response" : "No response returned."),
-        thinking: reply.thinking || streamedThinking,
+        thinking: built.wantsThinking ? (reply.thinking || streamedThinking) : "",
         audio: reply.audio,
         streaming: false,
         autoplayAudio: !streamedAudio,

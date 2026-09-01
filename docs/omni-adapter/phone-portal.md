@@ -77,17 +77,27 @@ continuously ingest an open camera stream.
 
 Assistant responses render a DOM-built safe Markdown subset. The composer clears
 as soon as send accepts a request, its focus border remains neutral, and the
-locked mobile viewport prevents focus/pinch zoom.
+locked mobile viewport prevents focus/pinch zoom. Page content is not
+selectable and does not expose iOS touch callouts; text entry fields retain
+normal cursor and editing behavior.
+
+Reasoning defaults off. The portal always sends a boolean Ollama `think` field:
+`false` until the brain control is explicitly enabled, then `true`. Native
+`message.thinking` deltas and fallback `<think>` blocks are separated into the
+collapsed reasoning view only while enabled. Disabled reasoning is suppressed
+before display and speech synthesis.
 
 ## Voice stability
 
 The stack's speech weights are Qwen3-TTS 12 Hz 1.7B Base. Without a speaker
 reference, `seed: -1` allows voice/timbre changes between requests. The portal's
-default profile pins seed `42`. For a specific voice, record or upload a clean
-WAV in the header voice panel, set trusted server-local `speaker_file` in
-`examples/omni_portal/voice-profile.json`, or point `OMNI_VOICE_PROFILE` to
-another profile. Browser references are validated, materialized only for the
-generation, and deleted afterward; the browser cannot choose a server path.
+default profile pins seed `42` and the checked-in, metadata-free
+`examples/omni_portal/voices/default_voice.wav` reference. To override it,
+record or upload a clean WAV in the header voice panel, set another trusted
+server-local `speaker_file` in `examples/omni_portal/voice-profile.json`, or
+point `OMNI_VOICE_PROFILE` to another profile. Browser references are
+validated, materialized only for the generation, and deleted afterward; the
+browser cannot choose a server path.
 See the portal README for sampling fields and the distinction between Base
 speaker-embedding cloning and separate VoiceDesign/CustomVoice checkpoints.
 

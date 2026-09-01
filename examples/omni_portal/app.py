@@ -429,6 +429,12 @@ def create_app(
         if speech:
             payload["speech"] = speech
 
+    def apply_reasoning_mode(payload: dict[str, Any]) -> None:
+        think = payload.get("think", False)
+        if not isinstance(think, bool):
+            raise PortalRequestError("portal think must be a boolean")
+        payload["think"] = think
+
     @app.after_request
     def secure_headers(response):
         response.headers["Content-Security-Policy"] = (
@@ -522,6 +528,7 @@ def create_app(
                 return jsonify({"error": "portal model tag is fixed"}), 400
             if payload.get("stream") is not False:
                 return jsonify({"error": "portal requires stream=false"}), 400
+            apply_reasoning_mode(payload)
             apply_voice_profile(payload)
 
             executed: list[dict[str, str]] = []
@@ -569,6 +576,7 @@ def create_app(
         if payload.get("stream") is not True:
             return jsonify({"error": "stream endpoint requires stream=true"}), 400
         try:
+            apply_reasoning_mode(payload)
             apply_voice_profile(payload)
         except PortalRequestError as exc:
             return jsonify({"error": str(exc)}), 400

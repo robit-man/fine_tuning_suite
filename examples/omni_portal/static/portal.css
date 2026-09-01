@@ -29,9 +29,20 @@ body {
     var(--bg);
   color: var(--text);
   font: 15px/1.5 var(--font);
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 button, textarea, input, select { font: inherit; }
+textarea, input, select {
+  -webkit-user-select: text;
+  user-select: text;
+}
+img, svg {
+  -webkit-user-drag: none;
+  user-drag: none;
+}
 button, label { -webkit-tap-highlight-color: transparent; }
 button { color: inherit; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

@@ -452,6 +452,34 @@ def test_reference_server_preserves_tools_thinking_and_adds_audio() -> None:
     assert result["adapter"]["route"] == ["comprehension", "language", "tts"]
 
 
+@pytest.mark.parametrize("think", [False, True])
+def test_reference_server_separates_tagged_reasoning(think: bool) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["think"] is think
+        return httpx.Response(
+            200,
+            json={
+                "message": {
+                    "role": "assistant",
+                    "content": "<think>private reasoning</think>Visible answer.",
+                }
+            },
+        )
+
+    parsed = parse_adapter_request(_base_request(think=think))
+    result = execute(
+        parsed,
+        Config("http://comp", "omni", "http://language", "http://tts", 30),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert result["message"]["content"] == "Visible answer."
+    if think:
+        assert result["message"]["thinking"] == "private reasoning"
+    else:
+        assert "thinking" not in result["message"]
+
+
 def test_language_backend_override_preserves_logical_model_identity() -> None:
     logical_model = "robit/combined-omni:q4km"
     core_model = "robit/core-language:27b"
@@ -614,9 +642,39 @@ def test_reference_server_streams_thinking_and_text_then_final_response() -> Non
     ]
     final = events[-1]["response"]
     assert final["message"]["content"] == "Hello back."
-    assert final["message"]["thinking"] == "brief "
+    assert final["message"]["thinking"] == "brief"
     assert final["adapter"]["text_streamed"] is True
     assert final["adapter"]["audio_streamed"] is False
+
+
+def test_reference_server_stream_parser_handles_split_think_tags() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=(
+                b'{"message":{"role":"assistant","content":"<thi"}}\n'
+                b'{"message":{"role":"assistant","content":"nk>step one</th"}}\n'
+                b'{"message":{"role":"assistant","content":"ink>Answer."},'
+                b'"done":true}\n'
+            ),
+        )
+
+    parsed = parse_adapter_request(_base_request(think=True))
+    events = [
+        json.loads(chunk)
+        for chunk in execute_stream(
+            parsed,
+            Config("http://comp", "omni", "http://language", "http://tts", 30),
+            httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+    ]
+
+    deltas = [event["message"] for event in events if event["type"] == "delta"]
+    assert "".join(str(delta.get("thinking") or "") for delta in deltas) == "step one"
+    assert "".join(str(delta.get("content") or "") for delta in deltas) == "Answer."
+    final = events[-1]["response"]["message"]
+    assert final["thinking"] == "step one"
+    assert final["content"] == "Answer."
 
 
 def test_reference_server_streams_pcm_and_keeps_final_wav_envelope() -> None:

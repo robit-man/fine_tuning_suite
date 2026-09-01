@@ -2,7 +2,7 @@
   "schema": "robit.omni.voice-profile.v1",
   "name": "default",
   "language": "en",
-  "speaker_file": "",
+  "speaker_file": "voices/default_voice.wav",
   "temperature": 0.7,
   "top_k": 40,
   "top_p": 0.9,

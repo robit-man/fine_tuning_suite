@@ -289,9 +289,12 @@ Output speech appears at `message.audio`:
 ## Tools and thinking
 
 For `task=chat`, normal `tools` and `think` are forwarded to stock Ollama. The
-adapter preserves `message.thinking` and structured `tool_calls`. If unresolved
-tool calls are present, it does not synthesize their JSON; speech can resume
-after the client submits tool results and receives final assistant text.
+adapter preserves native `message.thinking`, separates fallback
+`<think>...</think>` blocks even when tags cross stream chunks, and removes all
+reasoning from visible/TTS text when `think:false`. Structured `tool_calls`
+remain unchanged. If unresolved tool calls are present, it does not synthesize
+their JSON; speech can resume after the client submits tool results and receives
+final assistant text.
 
 Direct `transcribe`/`describe` routes return comprehension output without a
 second Qwen3.8 pass. Direct `synthesize` returns the input text plus audio.

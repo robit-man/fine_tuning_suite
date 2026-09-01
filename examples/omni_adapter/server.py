@@ -11,6 +11,7 @@ import base64
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -92,6 +93,9 @@ class AdapterStageError(RuntimeError):
 
 MAX_VIDEO_FRAMES = 32
 MAX_VIDEO_FPS = 2.0
+THINK_OPEN = "<think>"
+THINK_CLOSE = "</think>"
+THINK_BLOCK = re.compile(r"<think>(.*?)</think>", re.IGNORECASE | re.DOTALL)
 
 
 def _json_response(response: httpx.Response, stage: str) -> dict[str, Any]:
@@ -122,6 +126,87 @@ def _assistant_text(data: Mapping[str, Any], stage: str) -> str:
         if data.get(key):
             return str(data[key]).strip()
     raise AdapterStageError(f"{stage} returned no assistant text")
+
+
+def _thinking_requested(parsed: ParsedAdapterRequest) -> bool:
+    value = parsed.passthrough.get("think", False)
+    return value is True or isinstance(value, str)
+
+
+def _normalize_reasoning(message: dict[str, Any], *, enabled: bool) -> None:
+    content = str(message.get("content") or "")
+    extracted: list[str] = []
+
+    def replace_block(match: re.Match[str]) -> str:
+        extracted.append(match.group(1))
+        return ""
+
+    visible = THINK_BLOCK.sub(replace_block, content)
+    lower_visible = visible.lower()
+    open_index = lower_visible.find(THINK_OPEN)
+    if open_index >= 0:
+        extracted.append(visible[open_index + len(THINK_OPEN) :])
+        visible = visible[:open_index]
+    elif THINK_CLOSE in lower_visible:
+        close_index = lower_visible.find(THINK_CLOSE)
+        extracted.append(visible[:close_index])
+        visible = visible[close_index + len(THINK_CLOSE) :]
+
+    message["content"] = visible.strip()
+    native = str(message.get("thinking") or "").strip()
+    tagged = "\n".join(part.strip() for part in extracted if part.strip())
+    if enabled:
+        combined = "\n".join(part for part in (native, tagged) if part)
+        if combined:
+            message["thinking"] = combined
+        else:
+            message.pop("thinking", None)
+    else:
+        message.pop("thinking", None)
+
+
+class _ThinkingTagStream:
+    def __init__(self, *, enabled: bool) -> None:
+        self.enabled = enabled
+        self.inside = False
+        self.pending = ""
+
+    @staticmethod
+    def _partial_tag_length(value: str, tag: str) -> int:
+        maximum = min(len(value), len(tag) - 1)
+        lowered = value.lower()
+        for length in range(maximum, 0, -1):
+            if lowered.endswith(tag[:length]):
+                return length
+        return 0
+
+    def feed(self, value: str, *, final: bool = False) -> tuple[str, str]:
+        self.pending += value
+        visible: list[str] = []
+        thinking: list[str] = []
+        while self.pending:
+            tag = THINK_CLOSE if self.inside else THINK_OPEN
+            index = self.pending.lower().find(tag)
+            if index >= 0:
+                segment = self.pending[:index]
+                if self.inside:
+                    if self.enabled:
+                        thinking.append(segment)
+                else:
+                    visible.append(segment)
+                self.pending = self.pending[index + len(tag) :]
+                self.inside = not self.inside
+                continue
+            held = 0 if final else self._partial_tag_length(self.pending, tag)
+            emit = self.pending if not held else self.pending[:-held]
+            self.pending = "" if not held else self.pending[-held:]
+            if self.inside:
+                if self.enabled:
+                    thinking.append(emit)
+            else:
+                visible.append(emit)
+            break
+        return "".join(visible), "".join(thinking)
 
 
 def _video_audio(media: MediaItem) -> str | None:
@@ -402,6 +487,7 @@ def _finish_response(
     message = result.get("message")
     if not isinstance(message, dict):
         raise AdapterStageError("result contains no Ollama message object")
+    _normalize_reasoning(message, enabled=_thinking_requested(parsed))
     tool_calls = message.get("tool_calls")
     wants_tts = parsed.synthesize and not tool_calls and "tts" not in executed
     tts_skipped_reason: str | None = None
@@ -541,6 +627,8 @@ def execute_stream(
         payload["stream"] = True
         content = ""
         thinking = ""
+        thinking_enabled = _thinking_requested(parsed)
+        tag_stream = _ThinkingTagStream(enabled=thinking_enabled)
         tool_calls: Any = None
         result: dict[str, Any] = {}
         with client.stream(
@@ -571,17 +659,35 @@ def execute_stream(
                     continue
                 delta: dict[str, Any] = {"role": "assistant"}
                 if message.get("content"):
-                    piece = str(message["content"])
-                    content += piece
-                    delta["content"] = piece
-                if message.get("thinking"):
+                    visible_piece, tagged_piece = tag_stream.feed(
+                        str(message["content"])
+                    )
+                    if visible_piece:
+                        content += visible_piece
+                        delta["content"] = visible_piece
+                    if tagged_piece:
+                        thinking += tagged_piece
+                        delta["thinking"] = tagged_piece
+                if thinking_enabled and message.get("thinking"):
                     piece = str(message["thinking"])
-                    thinking += piece
-                    delta["thinking"] = piece
+                    piece = re.sub(r"</?think>", "", piece, flags=re.IGNORECASE)
+                    if piece:
+                        thinking += piece
+                        delta["thinking"] = delta.get("thinking", "") + piece
                 if len(delta) > 1:
                     yield _stream_event("delta", message=delta)
                 if message.get("tool_calls"):
                     tool_calls = message["tool_calls"]
+        visible_piece, tagged_piece = tag_stream.feed("", final=True)
+        if visible_piece or tagged_piece:
+            delta = {"role": "assistant"}
+            if visible_piece:
+                content += visible_piece
+                delta["content"] = visible_piece
+            if tagged_piece:
+                thinking += tagged_piece
+                delta["thinking"] = tagged_piece
+            yield _stream_event("delta", message=delta)
         result["model"] = parsed.model
         final_message = result.setdefault(
             "message", {"role": "assistant", "content": ""}
@@ -590,8 +696,10 @@ def execute_stream(
             raise AdapterStageError("language stream contains no message object")
         final_message["role"] = "assistant"
         final_message["content"] = content
-        if thinking:
+        if thinking_enabled and thinking:
             final_message["thinking"] = thinking
+        else:
+            final_message.pop("thinking", None)
         if tool_calls:
             final_message["tool_calls"] = tool_calls
         executed.append("language")

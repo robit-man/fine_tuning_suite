@@ -8,8 +8,105 @@
   const MAX_VOICE_REFERENCE_MS = 10_000;
   const MAX_VOICE_REFERENCE_BYTES = 10 * 1024 * 1024;
   const MAX_VIDEO_RECORD_MS = 30_000;
-  const callVad = window.OmniCallVad;
-  if (!callVad) throw new Error("Call VAD module failed to load");
+  function fallbackCallVad() {
+    const DEFAULTS = Object.freeze({
+      calibrationMs: 900,
+      startThreshold: 0.02,
+      releaseThreshold: 0.011,
+      noiseMultiplier: 3.0,
+      releaseMultiplier: 1.65,
+      startConfirmMs: 220,
+      silenceMs: 750,
+      minActiveMs: 320,
+      preRollFrames: 4,
+      initialNoiseFloor: 0.004,
+    });
+    const resetState = (vad, now = 0, { calibrate = false } = {}) => {
+      vad.readyAt = now + (calibrate ? vad.config.calibrationMs : 0);
+      vad.preRoll = [];
+      vad.candidateFrames = [];
+      vad.candidateStartedAt = null;
+      vad.frames = [];
+      vad.speaking = false;
+      vad.activeMs = 0;
+      vad.lastActiveAt = 0;
+    };
+    const createState = (startedAt = 0, overrides = {}) => {
+      const vad = {
+        config: { ...DEFAULTS, ...overrides },
+        noiseFloor: DEFAULTS.initialNoiseFloor,
+      };
+      resetState(vad, startedAt, { calibrate: true });
+      return vad;
+    };
+    const updateNoiseFloor = (vad, level, weight = 0.035) => {
+      vad.noiseFloor = Math.max(
+        0.0005,
+        vad.noiseFloor * (1 - weight) + level * weight,
+      );
+    };
+    const processFrame = (vad, { level, samples, now, frameMs }) => {
+      const config = vad.config;
+      if (now < vad.readyAt) {
+        updateNoiseFloor(vad, level, 0.12);
+        vad.preRoll = [];
+        return { event: "calibrating", active: false };
+      }
+      const startThreshold = Math.max(
+        config.startThreshold,
+        vad.noiseFloor * config.noiseMultiplier,
+      );
+      const releaseThreshold = Math.max(
+        config.releaseThreshold,
+        vad.noiseFloor * config.releaseMultiplier,
+      );
+      if (!vad.speaking) {
+        vad.preRoll.push(samples);
+        if (vad.preRoll.length > config.preRollFrames) vad.preRoll.shift();
+        if (level < startThreshold) {
+          updateNoiseFloor(vad, level);
+          vad.candidateFrames = [];
+          vad.candidateStartedAt = null;
+          return { event: "idle", active: false, startThreshold };
+        }
+        if (vad.candidateStartedAt === null) {
+          vad.candidateStartedAt = now;
+          vad.candidateFrames = vad.preRoll.splice(0);
+        } else {
+          vad.candidateFrames.push(samples);
+        }
+        if (now - vad.candidateStartedAt < config.startConfirmMs) {
+          return { event: "candidate", active: false, startThreshold };
+        }
+        vad.speaking = true;
+        vad.frames = vad.candidateFrames.splice(0);
+        vad.activeMs = Math.max(frameMs, now - vad.candidateStartedAt + frameMs);
+        vad.lastActiveAt = now;
+        return { event: "start", active: true, startThreshold, releaseThreshold };
+      }
+      vad.frames.push(samples);
+      if (level >= releaseThreshold) {
+        vad.lastActiveAt = now;
+        vad.activeMs += frameMs;
+      }
+      if (now - vad.lastActiveAt < config.silenceMs) {
+        return { event: "active", active: true, releaseThreshold };
+      }
+      const utterance = {
+        chunks: vad.frames.splice(0),
+        activeDurationMs: vad.activeMs,
+      };
+      const accepted = utterance.activeDurationMs >= config.minActiveMs;
+      resetState(vad, now);
+      return {
+        event: accepted ? "utterance" : "rejected",
+        active: false,
+        utterance: accepted ? utterance : null,
+      };
+    };
+    return { DEFAULTS, createState, processFrame, resetState };
+  }
+  const callVad = window.OmniCallVad || fallbackCallVad();
   const BARGE_VAD_OPTIONS = {
     calibrationMs: 0,
     startThreshold: 0.05,
@@ -589,6 +686,7 @@
   }
 
   function updateActivity(activity) {
+    if (!elements.activeUsers || !elements.activeUserCount) return;
     const users = Math.max(0, Number((activity || {}).users) || 0);
     const inflight = Math.max(0, Number((activity || {}).inflight) || 0);
     elements.activeUserCount.textContent = String(users);

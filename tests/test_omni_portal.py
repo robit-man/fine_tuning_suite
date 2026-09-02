@@ -74,6 +74,8 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
     assert b'id="voice-clone-enabled"' in response.data
     assert b'id="voice-reference-input"' in response.data
     assert b'id="active-user-count"' in response.data
+    assert b'class="audio-observation-output"' in response.data
+    assert b"Sounds heard" in response.data
     assert b"application/pdf" in response.data
     assert b"image/gif" in response.data
     assert b"multiple" in response.data
@@ -132,11 +134,18 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "user-select: none" in css
     assert "-webkit-touch-callout: none" in css
     assert "event.transcript" in javascript
+    assert "event.audio_observation" in javascript
     assert "(data.adapter || {}).input_transcript" in javascript
+    assert "(data.adapter || {}).audio_observation" in javascript
     assert '(data.adapter || {}).observation || "Voice message"' not in javascript
     assert 'task = "transcribe"' not in javascript
     assert "replaceUserWithTranscript: !typed && audioOnly" in javascript
-    assert 'content: inputTranscript || built.message.content' in javascript
+    assert "function audioEvidenceHistory" in javascript
+    assert "audioObservation: inputTranscript ? inputAudioObservation" in javascript
+    assert "soundOnly: !inputTranscript && Boolean(inputAudioObservation)" in javascript
+    assert 'parts.push(`[Sounds heard: ${sounds}]`)' in javascript
+    assert 'audioObservation: String(record.audioObservation || "")' in javascript
+    assert "soundOnly: Boolean(record.soundOnly)" in javascript
     assert 'content: built.display' in javascript
     assert "mediaSummary" not in javascript
     assert "use both its speech and non-speech sounds as" in javascript
@@ -179,12 +188,15 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "function reportDiagnostic" in javascript
     assert "function clearSessionDiagnostics" in javascript
     assert "const PCM_INITIAL_BUFFER_SECONDS = 0.08" in javascript
-    assert "const PCM_CROSSFADE_SECONDS = 0.004" in javascript
+    assert "const PCM_CROSSFADE_SECONDS = 0.008" in javascript
     assert "nextTime: context.currentTime + PCM_INITIAL_BUFFER_SECONDS" in javascript
     assert "controller.context.currentTime + PCM_RESCHEDULE_FLOOR_SECONDS" in javascript
     assert "controller.context.createGain()" in javascript
     assert "controller.nextTime - crossfade >= playbackFloor" in javascript
     assert "linearRampToValueAtTime" in javascript
+    assert ".audio-observation-output" in css
+    assert ".message.user.sound-only .message-content" in css
+    assert "opacity: .5" in css
     assert 'const documents = state.attachments.filter(item => item.kind === "document")' in javascript
     assert "message.documents" in javascript
     assert 'item.mime === "image/gif"' in javascript

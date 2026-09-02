@@ -211,16 +211,21 @@ button { color: inherit; }
 
 @keyframes stream-caret { 50% { opacity: 0; } }
 
-.thinking-output {
+.thinking-output,
+.audio-observation-output {
   margin-top: 9px;
   padding-top: 8px;
   border-top: 1px solid var(--line);
   color: var(--muted);
   font-size: 12px;
 }
-.thinking-output[hidden] { display: none; }
-.thinking-output summary { cursor: pointer; color: var(--quiet); font: 700 9px var(--mono); letter-spacing: .05em; text-transform: uppercase; }
-.thinking-content { margin-top: 7px; }
+.thinking-output[hidden],
+.audio-observation-output[hidden] { display: none; }
+.thinking-output summary,
+.audio-observation-output summary { cursor: pointer; color: var(--quiet); font: 700 9px var(--mono); letter-spacing: .05em; text-transform: uppercase; }
+.thinking-content,
+.audio-observation-content { margin-top: 7px; }
+.message.user.sound-only .message-content { opacity: .5; font-style: italic; }
 
 .audio-output { margin-top: 10px; }
 .audio-output audio, .attachment audio { width: 100%; min-width: 220px; height: 38px; }

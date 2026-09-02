@@ -25,11 +25,13 @@ clears the composer and attachments immediately.
 
 An audio attachment sent without typed text is a conversational turn, not a
 direct-ASR result. The portal briefly shows `Audio clip`, replaces that text in
-the originating user bubble with only the adapter's tagged verbatim
-`input_transcript`, and sends the separated transcript plus non-speech acoustic
-evidence through Qwen3.8. Only Qwen3.8's answer appears in the assistant bubble.
-Clients that need transcription without a language reply can still call the
-adapter explicitly with `omni.task="transcribe"`.
+the originating user bubble with the adapter's tagged verbatim
+`input_transcript`, and places any additional non-speech acoustic evidence in a
+**Sounds heard** disclosure styled like the reasoning trace. If no intelligible
+speech exists, the acoustic observation becomes the bubble's half-brightness
+primary text instead of being mislabelled as ASR. Both evidence channels pass
+through Qwen3.8. Clients that need transcription without a language reply can
+still call the adapter explicitly with `omni.task="transcribe"`.
 
 The brain icon controls the real Ollama `think` request field. Gray is the
 default and sends the boolean `think:false`; violet explicitly sends
@@ -115,7 +117,7 @@ The patched Qwen3-TTS worker is warmed once and remains CUDA-resident across
 default-profile requests. Prompts travel over a bounded framed stdin/stdout
 protocol, so repeated turns avoid reloading the backbone and projector. Live
 decoding defaults to two codec frames (about 160 ms) per PCM window, and the
-browser starts with an 80 ms playout lead. A guarded 4 ms crossfade smooths
+browser starts with an 80 ms playout lead. A guarded 8 ms crossfade smooths
 large contiguous buffer boundaries; a late buffer instead receives a short
 fade-in. A changed voice profile safely replaces the resident worker; inline
 uploaded speaker audio uses the isolated single-shot fallback and then rewarms

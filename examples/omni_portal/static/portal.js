@@ -10,7 +10,7 @@
   const MAX_VIDEO_RECORD_MS = 30_000;
   const PCM_INITIAL_BUFFER_SECONDS = 0.08;
   const PCM_RESCHEDULE_FLOOR_SECONDS = 0.003;
-  const PCM_CROSSFADE_SECONDS = 0.004;
+  const PCM_CROSSFADE_SECONDS = 0.008;
   const PCM_CROSSFADE_MIN_BUFFER_SECONDS = 0.08;
   const LIVE_CALL_SYSTEM_PROMPT = (
     "You are participating in a live two-way spoken conversation. Answer the "
@@ -294,6 +294,8 @@
           role: record.role,
           content: String(record.content || ""),
           thinking: String(record.thinking || ""),
+          audioObservation: String(record.audioObservation || ""),
+          soundOnly: Boolean(record.soundOnly),
           audio: record.audio && record.audio.data ? { ...record.audio } : null,
           media: (record.media || []).map(item => mediaCacheValue(item)),
           error: Boolean(record.error),
@@ -376,6 +378,8 @@
           role: item.role,
           content: String(item.content || ""),
           thinking: String(item.thinking || ""),
+          audioObservation: String(item.audioObservation || ""),
+          soundOnly: Boolean(item.soundOnly),
           audio: item.audio && item.audio.data ? item.audio : null,
           media: (Array.isArray(item.media) ? item.media : []).map(hydrateMediaValue),
           error: Boolean(item.error),
@@ -560,6 +564,8 @@
   function updateMessage(record, {
     content,
     thinking,
+    audioObservation,
+    soundOnly,
     audio,
     streaming = false,
     autoplayAudio = true,
@@ -578,6 +584,18 @@
       if (thinking) renderMarkdown(thinkingNode, thinking);
       else thinkingNode.replaceChildren();
     }
+    const audioObservationBox = record.node.querySelector(".audio-observation-output");
+    const audioObservationNode = record.node.querySelector(".audio-observation-content");
+    if (audioObservation !== undefined) {
+      record.audioObservation = String(audioObservation || "");
+      audioObservationBox.hidden = !audioObservation;
+      if (audioObservation) renderMarkdown(audioObservationNode, audioObservation);
+      else audioObservationNode.replaceChildren();
+    }
+    if (soundOnly !== undefined) {
+      record.soundOnly = Boolean(soundOnly);
+      record.node.classList.toggle("sound-only", record.soundOnly);
+    }
     record.node.classList.toggle("streaming", streaming);
     if (audio && audio.data && !record.node.querySelector(".audio-output audio")) {
       record.audio = { ...audio };
@@ -588,6 +606,15 @@
     if (!streaming) scheduleBrowserSessionSave();
     scrollConversationToBottom({ smooth: !streaming });
     return record;
+  }
+
+  function audioEvidenceHistory(transcript, audioObservation, fallback) {
+    const speech = String(transcript || "").trim();
+    const sounds = String(audioObservation || "").trim();
+    const parts = [];
+    if (speech) parts.push(speech);
+    if (sounds) parts.push(`[Sounds heard: ${sounds}]`);
+    return parts.join("\n") || fallback;
   }
 
   function loopingVideo(item, { ownsUrl = false } = {}) {
@@ -646,6 +673,8 @@
     role,
     content,
     thinking,
+    audioObservation,
+    soundOnly = false,
     audio,
     media = [],
     error = false,
@@ -663,13 +692,23 @@
       error,
       content: "",
       thinking: "",
+      audioObservation: "",
+      soundOnly: false,
       audio: null,
       media,
       streaming,
       playback: Promise.resolve(),
     };
     state.messages.push(record);
-    updateMessage(record, { content, thinking, audio, streaming, autoplayAudio });
+    updateMessage(record, {
+      content,
+      thinking,
+      audioObservation,
+      soundOnly,
+      audio,
+      streaming,
+      autoplayAudio,
+    });
     appendMessageMedia(node, media);
     scrollConversationToBottom();
     return record;
@@ -1687,6 +1726,21 @@
     const showThinking = reasoningEnabled();
     let pcmController = null;
     let streamedAudio = false;
+    let inputTranscript = "";
+    let inputAudioObservation = "";
+    const callFallback = frame ? "Video call message" : "Voice message";
+    const applyCallAudioEvidence = (transcriptValue, audioObservationValue) => {
+      const transcript = String(transcriptValue || "").trim();
+      const audioObservation = String(audioObservationValue || "").trim();
+      if (transcript) inputTranscript = transcript;
+      if (audioObservation) inputAudioObservation = audioObservation;
+      updateMessage(user, {
+        content: inputTranscript || inputAudioObservation || callFallback,
+        audioObservation: inputTranscript ? inputAudioObservation : "",
+        soundOnly: !inputTranscript && Boolean(inputAudioObservation),
+        streaming: false,
+      });
+    };
     try {
       const data = await streamChat(
         {
@@ -1703,8 +1757,8 @@
         {
           signal: turn.controller.signal,
           onEvent: event => {
-            if (event.type === "observation" && event.transcript) {
-              updateMessage(user, { content: String(event.transcript), streaming: false });
+            if (event.type === "observation") {
+              applyCallAudioEvidence(event.transcript, event.audio_observation);
             } else if (event.type === "delta") {
               const contentDelta = String((event.message || {}).content || "");
               const thinkingDelta = showThinking
@@ -1749,11 +1803,15 @@
       );
       const reply = data.message || {};
       if (!(reply.audio && reply.audio.data)) throw new Error("Voice call reply contained no audio");
-      const transcript = String(
-        (data.adapter || {}).input_transcript
-        || (frame ? "Video call message" : "Voice message"),
-      ).trim();
-      updateMessage(user, { content: transcript, streaming: false });
+      applyCallAudioEvidence(
+        (data.adapter || {}).input_transcript,
+        (data.adapter || {}).audio_observation,
+      );
+      const historyContent = audioEvidenceHistory(
+        inputTranscript,
+        inputAudioObservation,
+        callFallback,
+      );
       revealMessage(assistant);
       updateMessage(assistant, {
         content: reply.content || "Spoken response",
@@ -1765,7 +1823,7 @@
       turn.historyQueued = true;
       call.completedHistory.set(turn.sequence, {
         frame: Boolean(frame),
-        transcript,
+        transcript: historyContent,
         reply: String(reply.content || ""),
       });
       flushCallHistory(call);
@@ -2054,11 +2112,26 @@
     let pcmController = null;
     let streamedAudio = false;
     let inputTranscript = "";
-    const applyInputTranscript = value => {
-      const transcript = String(value || "").trim();
-      if (!built.replaceUserWithTranscript || !transcript) return;
-      inputTranscript = transcript;
-      updateMessage(user, { content: transcript, streaming: false });
+    let inputAudioObservation = "";
+    const applyInputAudioEvidence = (transcriptValue, audioObservationValue) => {
+      const transcript = String(transcriptValue || "").trim();
+      const audioObservation = String(audioObservationValue || "").trim();
+      if (transcript) inputTranscript = transcript;
+      if (audioObservation) inputAudioObservation = audioObservation;
+      if (built.replaceUserWithTranscript) {
+        updateMessage(user, {
+          content: inputTranscript || inputAudioObservation || built.display,
+          audioObservation: inputTranscript ? inputAudioObservation : "",
+          soundOnly: !inputTranscript && Boolean(inputAudioObservation),
+          streaming: false,
+        });
+      } else if (inputAudioObservation) {
+        updateMessage(user, {
+          audioObservation: inputAudioObservation,
+          soundOnly: false,
+          streaming: false,
+        });
+      }
     };
     const requestController = new AbortController();
     if (state.requestController) state.requestController.abort();
@@ -2068,7 +2141,7 @@
         signal: requestController.signal,
         onEvent: event => {
           if (event.type === "observation") {
-            applyInputTranscript(event.transcript);
+            applyInputAudioEvidence(event.transcript, event.audio_observation);
           } else if (event.type === "delta") {
             const contentDelta = String((event.message || {}).content || "");
             const thinkingDelta = built.wantsThinking
@@ -2105,7 +2178,10 @@
         },
       });
       const reply = data.message || {};
-      applyInputTranscript((data.adapter || {}).input_transcript);
+      applyInputAudioEvidence(
+        (data.adapter || {}).input_transcript,
+        (data.adapter || {}).audio_observation,
+      );
       if (built.wantsSpeech && !(reply.audio && reply.audio.data)) {
         throw new Error("Spoken replies are enabled, but TTS returned no audio");
       }
@@ -2120,7 +2196,13 @@
       if (built.task === "chat" || built.hasMedia) {
         state.history.push({
           role: "user",
-          content: inputTranscript || built.message.content,
+          content: built.audioOnly
+            ? audioEvidenceHistory(
+              inputTranscript,
+              inputAudioObservation,
+              built.message.content,
+            )
+            : built.message.content,
         });
         if (reply.content) state.history.push({ role: "assistant", content: reply.content });
       }

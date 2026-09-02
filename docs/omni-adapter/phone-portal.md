@@ -62,10 +62,13 @@ The printed URL must be opened as-is so its `#access=...` fragment reaches the
 browser. Microphone permission requires the HTTPS endpoint. Hold the microphone
 icon while speaking; release it to create a playable WAV attachment, then send.
 An unprompted audio clip runs the full comprehension-to-language route: the
-tagged ASR transcript replaces the temporary text in your bubble, environmental
-audio remains separate model evidence, and the intelligent reply appears in the
-assistant bubble. Use the adapter's explicit `omni.task="transcribe"` outside
-the composer when a transcription-only response is required.
+tagged ASR transcript replaces the temporary text in your bubble. Additional
+environmental audio appears under a **Sounds heard** disclosure using the same
+visual pattern as reasoning. With no intelligible speech, the acoustic scene is
+shown directly at half brightness instead of being presented as a transcript.
+The intelligent reply remains in the assistant bubble. Use the adapter's
+explicit `omni.task="transcribe"` outside the composer when a
+transcription-only response is required.
 The speaker icon switches between text-only and text-plus-TTS replies. The
 waveform button opens Qwen3-TTS voice cloning and sampling controls. The phone
 icon starts automatic voice turns. Local VAD calibrates ambient noise for 650
@@ -84,7 +87,7 @@ Qwen3-TTS uses two codec frames per state-carrying decoder window by default,
 approximately 160 ms for the packaged 12 Hz model. Its persistent CUDA worker
 loads the model/projector/speaker once and resets generation state between
 requests. The browser schedules the first received PCM with an 80 ms playout
-lead, keeps a 3 ms late-arrival floor, and uses a guarded 4 ms crossfade for
+lead, keeps a 3 ms late-arrival floor, and uses a guarded 8 ms crossfade for
 sufficiently large contiguous buffers. The final response retains a complete
 replayable WAV assembled from the original PCM. `stage=tts` is a
 preparing state; `audio_start` is emitted only with the first actual PCM chunk,

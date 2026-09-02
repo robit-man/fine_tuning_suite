@@ -71,10 +71,10 @@
          LOG_ERR("no prompt provided, use -p \"text\"\n");
          return 1;
      }
-@@ -138,142 +154,171 @@
+@@ -138,142 +154,170 @@
      }
  
-     mtmd_helper::gen_audio gen(lctx, mctx.get());
+-    mtmd_helper::gen_audio gen(lctx, mctx.get());
 -    mtmd_helper_gen_audio_inp inp{};
 -    inp.seq_id      = 0;
 -    inp.prompt      = params.prompt.c_str();
@@ -212,7 +212,7 @@
 -    }
 -    LOG_INF("wrote %s\n", params.out_file.c_str());
 +    auto generate = [&](const std::string & prompt, bool framed) -> bool {
-+        gen.reset();
++        mtmd_helper::gen_audio gen(lctx, mctx.get());
 +        llama_memory_clear(llama_get_memory(lctx), true);
 +        common_sampler_reset(smpl);
 +

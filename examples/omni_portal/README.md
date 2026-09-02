@@ -114,7 +114,7 @@ from network or browser playback buffering.
 The patched Qwen3-TTS worker is warmed once and remains CUDA-resident across
 default-profile requests. Prompts travel over a bounded framed stdin/stdout
 protocol, so repeated turns avoid reloading the backbone and projector. Live
-decoding defaults to one codec frame (about 80 ms) per PCM window, and the
+decoding defaults to two codec frames (about 160 ms) per PCM window, and the
 browser schedules the first received window with a 3 ms floor. A changed voice
 profile safely replaces the resident worker; inline uploaded speaker audio uses
 the isolated single-shot fallback and then rewarms the default profile.
@@ -322,7 +322,7 @@ language requests continue through broker-owned GPU lanes.
 | `OMNI_COMPREHENSION_CONTEXT_TOKENS` | `65536` | Native comprehension worker context; propagated to the adapter |
 | `OMNI_PORTAL_TOKEN` | generated | At least 24 characters |
 | `OMNI_VOICE_PROFILE` | `examples/omni_portal/voice-profile.json` | Validated server-side Qwen3-TTS profile |
-| `OMNI_TTS_STREAM_FRAMES` | `1` | Codec frames per live PCM decode window; one is about 80 ms and minimizes first-audio latency |
+| `OMNI_TTS_STREAM_FRAMES` | `2` | Codec frames per live PCM decode window; two is about 160 ms and balances first-audio latency with smooth playback |
 | `OMNI_TTS_PERSISTENT` | `1` | Keep the default-profile Qwen3-TTS graph resident between turns |
 | `OMNI_TTS_WARM_SPEAKER_FILE` | bundled default voice | Speaker reference loaded by the resident worker |
 | `OMNI_TTS_BROKER_TRANSITION_TIMEOUT_S` | `330` | Maximum wait for scoped prepare/ready transitions |

@@ -35,6 +35,8 @@ The browser-cache harness covers restore, five-minute logical expiry, media
 preview retention, and explicit clear. Environment tests assert bounded output
 and the omission of IP/MAC data. The persistent-TTS harness proves that two
 prompts reuse one process while returning independent framed PCM sequences.
+The real-component gate also synthesizes distinct A, B, A sentinel prompts and
+transcribes their waveforms; the recognized order must remain A, B, A.
 
 ## Artifact gate
 
@@ -97,7 +99,8 @@ result. Do not commit large or restricted media.
 - the first audio event is emitted only with the first real PCM window;
 - at least two repeated requests succeed;
 - matching-profile repeated requests retain the same resident worker PID;
-- the default stream window is one codec frame and disables proxy buffering;
+- distinct A, B, A prompts transcribe back in A, B, A order with no one-turn lag;
+- the default stream window is two codec frames and disables proxy buffering;
 - empty/excessive text and unsupported options have defined errors;
 - selected languages/voices are only advertised after their own tests.
 
@@ -151,7 +154,7 @@ arguments unnecessarily.
 - [ ] ASR, image, video, and video-audio tests pass;
 - [ ] sequential red → blue → red video isolation passes with
       `cache_prompt=false` and no stale media embedding;
-- [ ] direct and repeated TTS pass;
+- [ ] direct, repeated, and A → B → A prompt/audio-alignment TTS pass;
 - [ ] phone VAD, concurrent-session isolation, and diagnostic TTL/delete
       harnesses pass;
 - [ ] IndexedDB reload/expiry/clear, environment privacy, and persistent-TTS

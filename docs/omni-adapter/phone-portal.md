@@ -80,8 +80,8 @@ stopping capture. Portable adapter v1 remains `stream:false`;
 `/api/chat/stream` is an authenticated portal extension with stage, text,
 thinking, PCM, and one authoritative final adapter event.
 
-Qwen3-TTS uses one codec frame per state-carrying decoder window by default,
-approximately 80 ms for the packaged 12 Hz model. Its persistent CUDA worker
+Qwen3-TTS uses two codec frames per state-carrying decoder window by default,
+approximately 160 ms for the packaged 12 Hz model. Its persistent CUDA worker
 loads the model/projector/speaker once and resets generation state between
 requests. The browser schedules the first received PCM with a 3 ms floor and
 queues later chunks on the Web Audio timeline. The final response retains a
@@ -209,7 +209,7 @@ speaker-embedding cloning and separate VoiceDesign/CustomVoice checkpoints.
 | PDF/DOCX/text | relevant extracted chunks answer the query; another session retrieves none |
 | Sequential video isolation | red → blue → red clips describe red → blue → red; `cache_prompt=false` |
 | TTS | valid 24 kHz mono PCM16 WAV playable on phone |
-| TTS first PCM | one-frame window, resident worker reuse, and browser first-audio milestone recorded |
+| TTS first PCM | two-frame window, resident worker reuse, and browser first-audio milestone recorded |
 | Concurrent sessions | two users show active/queued counts and receive only their own marker |
 | Diagnostic lifecycle | journals are session-isolated; trash deletes immediately; idle data expires in 300 s |
 | CUDA scope | comprehension and each TTS process resident on reserved UUID |

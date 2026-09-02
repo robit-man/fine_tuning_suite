@@ -138,7 +138,7 @@ audio/pcm;rate=24000;channels=1;format=s16le` plus `X-Audio-Codec`,
 and may override `stream_frames`; `OMNI_TTS_STREAM_FRAMES` sets the server
 default.
 
-The interactive default is one codec frame, about 80 ms for the packaged
+The interactive default is two codec frames, about 160 ms for the packaged
 12 Hz model. Values from 1 through 72 are accepted; larger windows improve
 aggregate decoder throughput, while smaller windows reduce time to first PCM
 at the cost of more decoder invocations. A shorter utterance flushes once at
@@ -150,11 +150,13 @@ This route is experimental. If generation fails after response headers, the
 PCM stream terminates early; the final WAV is still checked server-side when
 generation succeeds. `--tts-persistent` loads the backbone, projector, and
 default speaker reference once, emits an explicit ready frame, accepts bounded
-base64 prompts on stdin, resets model/sampler state between prompts, and emits
-length-framed PCM windows on stdout. The Python wrapper keeps that process
-resident for matching profiles and exposes the same HTTP contracts. A changed
-profile restarts it deliberately; inline speaker bytes use the isolated
-single-shot path and then rewarm the default.
+base64 prompts on stdin, resets model/sampler state, constructs a fresh
+audio-generation helper for each prompt, and emits length-framed PCM windows on
+stdout. The helper must not be reused: its decoded-output state otherwise makes
+audio trail the displayed response by one request. The Python wrapper keeps the
+weight-bearing process resident for matching profiles and exposes the same HTTP
+contracts. A changed profile restarts it deliberately; inline speaker bytes use
+the isolated single-shot path and then rewarm the default.
 
 ## 4. Start the unified adapter
 

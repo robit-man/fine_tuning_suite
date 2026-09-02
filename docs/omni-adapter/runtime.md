@@ -109,15 +109,21 @@ calls broker `prepare`, starts the persistent process, verifies that PID's
 residency and explicit ready frame, and calls `ready`. Matching voice profiles
 reuse the loaded graph while preserving the same `/synthesize` contract.
 
-The interactive wrapper default is `OMNI_TTS_STREAM_FRAMES=1`, approximately
-80 ms of codec audio per state-carrying decode window. The phone schedules the
-first PCM buffer with a 3 ms floor. On the reference deployment, a cold
-single-process request reached first PCM in 899.2 ms; the next matching-profile
-request reused the resident worker and reached first PCM in 96.8 ms. Treat
-those host-specific values as evidence of the loading-path change, not a
-universal benchmark. Deployment pays model loading during worker warmup;
-subsequent matching-profile requests begin generation without that reload.
-Changing the voice profile intentionally replaces the resident worker.
+The interactive wrapper default is `OMNI_TTS_STREAM_FRAMES=2`, approximately
+160 ms of codec audio per state-carrying decode window. The phone schedules the
+first PCM buffer with a 3 ms floor. In a post-isolation reference probe, a warm
+one-frame request reached first PCM in 774.1 ms and a warm two-frame request in
+814.1 ms. The roughly 40 ms cost halves the number of decoder boundaries; a
+voice-profile switch caused a one-time approximately 2.38 second first-PCM
+result. Treat these host-specific values as tuning evidence, not a universal
+benchmark. Deployment pays model loading during worker warmup; subsequent
+matching-profile requests begin generation without that reload. Changing the
+voice profile intentionally replaces the resident worker.
+
+The persistent process keeps model, projector, and speaker weights resident,
+but constructs a fresh audio-generation helper for every prompt. Reusing that
+helper carries decoded output into the next request and can make spoken audio
+lag displayed text by exactly one turn even when KV memory and samplers reset.
 
 ## Start the unified adapter
 

@@ -96,7 +96,7 @@ def test_adapter_contract_separates_wire_schema_from_bundle_schema() -> None:
 
 def test_tts_stream_window_validation_and_cli_arguments(tmp_path: Path) -> None:
     config = _tts_config(tmp_path)
-    assert config.stream_frames == 1
+    assert config.stream_frames == 2
     spec = _synthesis_spec(config, {"text": "Hello", "stream_frames": 12})
     command = _command(config, spec, tmp_path / "speech.wav", stream=True)
 
@@ -139,6 +139,15 @@ for line in sys.stdin.buffer:
         assert worker.process.pid == first_pid
     finally:
         worker.close()
+
+
+def test_persistent_tts_patch_recreates_audio_helper_per_prompt() -> None:
+    patch = Path(
+        "training_suite/patches/llama.cpp-qwen3tts-persistent.patch"
+    ).read_text()
+
+    assert "+        mtmd_helper::gen_audio gen(lctx, mctx.get());" in patch
+    assert "+        gen.reset();" not in patch
 
 
 def test_tts_accepts_bounded_wav_speaker_envelope(tmp_path: Path) -> None:
@@ -1028,7 +1037,7 @@ def test_reference_server_streams_pcm_and_keeps_final_wav_envelope() -> None:
     ]
 
     assert [path for path, _body in seen] == ["/api/chat", "/synthesize/stream"]
-    assert seen[1][1]["stream_frames"] == 1
+    assert seen[1][1]["stream_frames"] == 2
     assert [event["type"] for event in events] == [
         "stage",
         "delta",

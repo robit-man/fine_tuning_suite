@@ -26,7 +26,7 @@ owns the schemas and implementations.
 | `memory_write` | Store a compact temporary fact or research note | Current browser session only |
 | `memory_read` | Read an exact temporary topic/key | Current browser session only |
 | `memory_search` | Lexically retrieve temporary memories by relevance | Current browser session only |
-| `tool_search` | Search the server-owned allowlisted tool catalog | Read-only runtime metadata |
+| `tool_search` | Search the allowlisted catalog when capability mapping is unclear; discovery never completes an action request | Read-only runtime metadata |
 | `safe_math_eval` | Evaluate bounded arithmetic and common math functions with an AST interpreter | Pure computation; no code execution |
 | `structured_read` | Read/query attached JSON, JSONL, CSV, TSV, or YAML | Current browser-session attachments only |
 | `web_crawl` | Fetch a bounded same-origin page graph | Public HTTP(S), 8 pages and depth 2 maximum |
@@ -106,7 +106,11 @@ The server injects its schemas, so callers need only opt into execution:
 ```
 
 A typical dependent chain is
-`tool_search -> web_search(mode=discover) -> web_fetch -> memory_write -> final answer`.
+`web_search(mode=discover) -> web_fetch -> memory_write -> final answer`.
+All schemas are already visible to the model, so `tool_search` is not a default
+first step. When it is genuinely needed, its result is explicitly marked
+`task_complete=false` and directs the model to invoke the smallest relevant
+tool sequence rather than answer with a catalog.
 A later turn in the same browser session can use `memory_read` or
 `memory_search`; `web_search(mode=session)` searches the already indexed result
 and fetched-page text without another discovery request. Independent read-only

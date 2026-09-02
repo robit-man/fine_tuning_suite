@@ -455,9 +455,11 @@ media base64 or the access token.
   activity count and ephemeral diagnostic journal. It is never supplied to a
   model or used to recover conversation context. `/api/activity` exposes only
   aggregate counts and requires the same bearer token as inference.
-- Per-session diagnostics contain request IDs, modality flags, queue/transport
+- Per-session diagnostics contain request IDs, modality/tool-enable flags,
+  request-local media digests, tool names/rounds/success states, queue/transport
   timings, status codes, and browser milestones such as first text and first
-  PCM. They never contain prompts, replies, transcripts, thinking, media,
+  PCM. They never contain prompts, replies, transcripts, thinking, media bytes,
+  media descriptions, tool arguments/results,
   waveforms, bearer tokens, IP addresses, or user-agent strings. Journals are
   stored under hashed filenames, are inaccessible across browser sessions, and
   are purged five minutes after the session heartbeat stops.

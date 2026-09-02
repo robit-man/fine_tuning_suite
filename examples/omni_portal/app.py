@@ -100,6 +100,7 @@ DIAGNOSTIC_NUMERIC_FIELDS = {
     "complete_ms",
     "total_ms",
     "status",
+    "tool_round",
 }
 DIAGNOSTIC_BOOLEAN_FIELDS = {
     "audio_requested",
@@ -108,8 +109,16 @@ DIAGNOSTIC_BOOLEAN_FIELDS = {
     "has_image_input",
     "has_video_input",
     "has_document_input",
+    "tools_requested",
+    "tool_ok",
 }
-DIAGNOSTIC_STRING_FIELDS = {"request_id", "task", "outcome"}
+DIAGNOSTIC_STRING_FIELDS = {
+    "request_id",
+    "task",
+    "outcome",
+    "tool_name",
+    "media_id",
+}
 
 def load_voice_profile(path: Path) -> dict[str, Any]:
     try:
@@ -547,7 +556,9 @@ def _diagnostic_fields(raw: Mapping[str, Any]) -> dict[str, Any]:
         numeric = float(value)
         if not math.isfinite(numeric) or numeric < 0 or numeric > 86_400_000:
             continue
-        result[key] = int(numeric) if key == "status" else round(numeric, 2)
+        result[key] = (
+            int(numeric) if key in {"status", "tool_round"} else round(numeric, 2)
+        )
     for key in DIAGNOSTIC_BOOLEAN_FIELDS:
         value = raw.get(key)
         if isinstance(value, bool):
@@ -597,6 +608,35 @@ def _request_diagnostic_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
             for message in message_items
         ),
     }
+
+
+def _request_media_digests(payload: Mapping[str, Any]) -> list[str]:
+    """Return bounded content identities without retaining or decoding uploaded media."""
+
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return []
+    result: list[str] = []
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        for media_field in ("audios", "images", "videos", "documents"):
+            values = message.get(media_field)
+            if not isinstance(values, list):
+                continue
+            for envelope in values:
+                if not isinstance(envelope, Mapping):
+                    continue
+                encoded = envelope.get("data")
+                if not isinstance(encoded, str) or not encoded:
+                    continue
+                digest = hashlib.sha256(
+                    f"{media_field}\0{encoded}".encode()
+                ).hexdigest()[:16]
+                result.append(f"{media_field[:-1]}-{digest}")
+                if len(result) >= 8:
+                    return result
+    return result
 
 
 def _voice_override(raw: Any) -> dict[str, Any]:
@@ -928,6 +968,61 @@ def _tool_start_trace(calls: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return trace
+
+
+def _record_media_diagnostics(
+    diagnostics: _SessionDiagnostics,
+    session_id: str,
+    request_id: str,
+    media_ids: list[str],
+) -> None:
+    """Record request-local media identities without retaining media or descriptions."""
+
+    for media_id in media_ids[:8]:
+        diagnostics.record(
+            session_id,
+            "media_observed",
+            {"request_id": request_id, "media_id": media_id},
+            request_id=request_id,
+        )
+
+
+def _record_tool_diagnostics(
+    diagnostics: _SessionDiagnostics,
+    session_id: str,
+    request_id: str,
+    round_index: int,
+    phase: str,
+    items: list[Mapping[str, Any]],
+) -> None:
+    """Record tool name/status only; arguments and results remain outside diagnostics."""
+
+    for item in items[:MAX_TOOL_CALLS_PER_ROUND]:
+        if phase == "started":
+            function = item.get("function")
+            name = (
+                str(function.get("name") or "unknown")
+                if isinstance(function, Mapping)
+                else "unknown"
+            )
+            fields: dict[str, Any] = {
+                "request_id": request_id,
+                "tool_name": name,
+                "tool_round": round_index,
+            }
+        else:
+            fields = {
+                "request_id": request_id,
+                "tool_name": str(item.get("name") or "unknown"),
+                "tool_round": round_index,
+                "tool_ok": item.get("ok") is True,
+            }
+        diagnostics.record(
+            session_id,
+            f"tool_call_{phase}",
+            fields,
+            request_id=request_id,
+        )
 
 
 def _probe(client: httpx.Client, url: str) -> dict[str, Any]:
@@ -1286,6 +1381,8 @@ def create_app(
             if payload.get("stream") is not False:
                 return jsonify({"error": "portal requires stream=false"}), 400
             diagnostic_fields = _request_diagnostic_fields(payload)
+            diagnostic_fields["tools_requested"] = auto_tools
+            diagnostic_media_ids = _request_media_digests(payload)
             apply_reasoning_mode(payload)
             apply_voice_profile(payload)
             apply_runtime_environment(payload, tools_enabled=auto_tools)
@@ -1297,6 +1394,9 @@ def create_app(
                 session_id,
                 request_id,
                 diagnostic_fields,
+            )
+            _record_media_diagnostics(
+                diagnostics, session_id, request_id, diagnostic_media_ids
             )
             request_logged = True
             queue_started = time.monotonic()
@@ -1334,6 +1434,15 @@ def create_app(
                     raise PortalError("safe tool loop exceeded its per-turn call limit")
                 if calls and _round >= MAX_TOOL_ROUNDS:
                     raise PortalError("safe tool loop exceeded its round limit")
+                if calls:
+                    _record_tool_diagnostics(
+                        diagnostics,
+                        session_id,
+                        request_id,
+                        _round + 1,
+                        "started",
+                        calls,
+                    )
                 followup, round_tools = _tool_followup(
                     current_payload,
                     data,
@@ -1344,6 +1453,14 @@ def create_app(
                 if followup is None:
                     break
                 executed.extend(round_tools)
+                _record_tool_diagnostics(
+                    diagnostics,
+                    session_id,
+                    request_id,
+                    _round + 1,
+                    "completed",
+                    round_tools,
+                )
                 current_payload = followup
             else:
                 raise PortalError("safe tool loop exceeded its round limit")
@@ -1393,6 +1510,8 @@ def create_app(
             return jsonify({"error": "stream endpoint requires stream=true"}), 400
         session_id = request_session_id()
         diagnostic_fields = _request_diagnostic_fields(payload)
+        diagnostic_fields["tools_requested"] = auto_tools
+        diagnostic_media_ids = _request_media_digests(payload)
         try:
             apply_reasoning_mode(payload)
             apply_voice_profile(payload)
@@ -1409,6 +1528,9 @@ def create_app(
             session_id,
             request_id,
             diagnostic_fields,
+        )
+        _record_media_diagnostics(
+            diagnostics, session_id, request_id, diagnostic_media_ids
         )
         queue_started = time.monotonic()
         ticket = inference_queue.acquire(session_id, runtime.timeout_s)
@@ -1552,6 +1674,14 @@ def create_app(
                             )
                             return
                         if calls:
+                            _record_tool_diagnostics(
+                                diagnostics,
+                                session_id,
+                                request_id,
+                                round_index + 1,
+                                "started",
+                                calls,
+                            )
                             yield event_bytes(
                                 {
                                     "type": "tool",
@@ -1577,6 +1707,14 @@ def create_app(
                         yield event_bytes({"type": "final", "response": final_response})
                         return
                     executed.extend(round_tools)
+                    _record_tool_diagnostics(
+                        diagnostics,
+                        session_id,
+                        request_id,
+                        round_index + 1,
+                        "completed",
+                        round_tools,
+                    )
                     yield event_bytes(
                         {
                             "type": "tool",

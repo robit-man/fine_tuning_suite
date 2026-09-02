@@ -185,7 +185,9 @@ SAFE_TOOLS = [
     _function_tool(
         "tool_search",
         "Search the portal's allowlisted tool catalog by capability. This discovers "
-        "safe tools only; it cannot install code or activate arbitrary host tools.",
+        "safe tools only; it cannot install code, activate arbitrary host tools, or "
+        "complete an action request by itself. After discovery, invoke the selected "
+        "tool unless the user asked only for a capability inventory.",
         {
             "query": {"type": "string", "description": "Capability or task to find."},
             "max_results": {
@@ -1744,6 +1746,14 @@ class PortalToolHarness:
                 result = {
                     "query": query,
                     "allowlisted_only": True,
+                    "task_complete": False,
+                    "suggested_tools": [
+                        function["name"] for _, function in ranked[:limit]
+                    ],
+                    "next_action": (
+                        "Select the smallest relevant tool sequence from these results and "
+                        "invoke it now. Do not answer an action request with this catalog."
+                    ),
                     "results": [
                         {
                             "name": function["name"],
@@ -1887,7 +1897,9 @@ def tool_use_instructions() -> str:
         "structured tool_calls; never print tool-call JSON as answer text. Use a tool only "
         "when external/current/session evidence is needed, then wait for its role=tool result "
         "before deciding the next action. Independent read-only calls may share one response; "
-        "dependent work must chain across rounds. Never repeat an identical call.\n"
+        "dependent work must chain across rounds. Before the first call, choose the smallest "
+        "tool sequence that can actually finish the request. Do not expose private chain-of-thought; "
+        "the structured tool trace is the visible action record. Never repeat an identical call.\n"
         "Web workflow: web_search(mode=discover) finds candidates through local Chromium; "
         "web_fetch reads the selected primary page; web_search(mode=session) recalls already "
         "indexed pages without another discovery request. Cite fetched source URLs.\n"
@@ -1895,7 +1907,11 @@ def tool_use_instructions() -> str:
         "Memory workflow: use memory_search when the exact topic/key is unknown, memory_read "
         "for an exact key, and memory_write only for an explicit user memory request or a "
         "compact fact needed later in this session.\n"
-        "Extended workflow: tool_search finds an allowlisted capability; structured_read and "
+        "Extended workflow: all schemas are already visible, so do not call tool_search as a "
+        "default first step. Use it only when capability mapping is genuinely unclear. A "
+        "tool_search result never completes an action request: select a result and continue with "
+        "the actual tool call unless the user asked only to enumerate capabilities. "
+        "structured_read and "
         "ocr_pdf operate only on attached documents; web_crawl is bounded and same-origin; "
         "session_search federates this session's evidence. safe_math_eval never executes code. "
         "audio_analyze and video_scan inspect only media observed in this session. working_notes "

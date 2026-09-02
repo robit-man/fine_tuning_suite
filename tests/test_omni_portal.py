@@ -571,7 +571,10 @@ def test_tool_search_discovers_allowlisted_tools_only() -> None:
     result = harness.execute("one", "tool_search", {"query": "OCR scanned PDF"})
 
     assert result["allowlisted_only"] is True
+    assert result["task_complete"] is False
     assert result["results"][0]["name"] == "ocr_pdf"
+    assert result["suggested_tools"][0] == "ocr_pdf"
+    assert "invoke it now" in result["next_action"]
     assert {item["name"] for item in result["results"]} <= {
         item["function"]["name"] for item in SAFE_TOOLS
     }
@@ -926,7 +929,10 @@ def test_session_diagnostics_are_isolated_redacted_clearable_and_expiring(
     first_response = first.post(
         "/api/chat",
         headers=headers,
-        json=_request(messages=[{"role": "user", "content": "secret-one"}]),
+        json=_request(
+            messages=[{"role": "user", "content": "secret-one"}],
+            portal_auto_tools=True,
+        ),
     )
     second.post(
         "/api/chat",
@@ -942,6 +948,8 @@ def test_session_diagnostics_are_isolated_redacted_clearable_and_expiring(
     assert first_log != second_log
     assert "secret-one" not in json.dumps(first_log)
     assert "secret-two" not in json.dumps(second_log)
+    assert first_log["events"][0]["tools_requested"] is True
+    assert second_log["events"][0]["tools_requested"] is False
     assert len(list(tmp_path.glob("*.json"))) == 2
 
     request_id = first_response.headers["X-Omni-Request-ID"]
@@ -1334,6 +1342,8 @@ def test_portal_executes_only_allowlisted_tool_and_strips_media_on_followup() ->
         )
 
     app = create_app(_config(), httpx.Client(transport=httpx.MockTransport(handler)))
+    client = app.test_client()
+    client.get("/")
     body = _request(
         messages=[
             {
@@ -1353,7 +1363,7 @@ def test_portal_executes_only_allowlisted_tool_and_strips_media_on_followup() ->
             }
         ],
     )
-    response = app.test_client().post(
+    response = client.post(
         "/api/chat",
         headers={"Authorization": f"Bearer {TOKEN}"},
         json=body,
@@ -1363,6 +1373,7 @@ def test_portal_executes_only_allowlisted_tool_and_strips_media_on_followup() ->
     assert len(requests) == 2
     assert "portal_auto_tools" not in requests[0]
     assert "<portal_tools>" in requests[0]["messages"][0]["content"]
+    assert "tool_search result never completes an action request" in requests[0]["messages"][0]["content"]
     assert "web_search(mode=discover)" in requests[0]["messages"][0]["content"]
     assert "images" not in requests[1]["messages"][0]
     tool_result = requests[1]["messages"][-1]
@@ -1372,6 +1383,23 @@ def test_portal_executes_only_allowlisted_tool_and_strips_media_on_followup() ->
         response.json["portal"]["safe_tools_executed"][0]["name"] == "get_current_time"
     )
     assert response.json["portal"]["safe_tools_executed"][0]["result"]
+    diagnostic_events = client.get(
+        "/api/diagnostics", headers={"Authorization": f"Bearer {TOKEN}"}
+    ).json["events"]
+    tool_events = [
+        event for event in diagnostic_events if event["event"].startswith("tool_call_")
+    ]
+    assert [event["event"] for event in tool_events] == [
+        "tool_call_started",
+        "tool_call_completed",
+    ]
+    assert {event["tool_name"] for event in tool_events} == {"get_current_time"}
+    assert tool_events[-1]["tool_ok"] is True
+    media_events = [
+        event for event in diagnostic_events if event["event"] == "media_observed"
+    ]
+    assert len(media_events) == 1
+    assert media_events[0]["media_id"].startswith("image-")
 
 
 def test_portal_allows_tool_chains_longer_than_four_calls() -> None:

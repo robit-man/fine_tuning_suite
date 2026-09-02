@@ -195,10 +195,12 @@ journal; `POST /api/diagnostics` accepts the browser's content-redacted stream
 milestones; `DELETE /api/diagnostics` deletes only that journal. All require the
 same bearer token as inference.
 
-Diagnostic events may contain a request ID, modality flags, status,
+Diagnostic events may contain a request ID, modality/tool-enable flags,
+request-local media digests, tool names/rounds/success states, status,
 queue/transport time, first text, TTS-stage, first PCM, and completion timing.
-They never contain prompt/reply text, transcripts, thinking, audio, frames,
-waveforms, tokens, IP addresses, or user-agent strings. Journals use hashed
+They never contain prompt/reply text, transcripts, thinking, tool
+arguments/results, media descriptions, audio, frames, waveforms, tokens, IP
+addresses, or user-agent strings. Journals use hashed
 filenames under `OMNI_PORTAL_SESSION_LOG_DIR`, expire five minutes after the
 last heartbeat, and are purged at portal startup/shutdown. The trash control
 aborts active page work, stops playback/call capture, clears browser history,

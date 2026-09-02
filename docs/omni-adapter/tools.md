@@ -48,19 +48,22 @@ user/media turn
   -> optional Qwen3-TTS after no unresolved calls remain
 ```
 
-Up to four tool rounds and four calls per round are allowed. Identical calls in
-one turn are de-duplicated. Media bytes and raw document envelopes are removed
-from follow-up rounds; tagged observations, retrieved text, and prior dialogue
-remain as bounded text context. TTS is deferred while a tool call is unresolved
-and runs only for the final answer.
+Up to 50 tool calls per turn are allowed, whether the model emits them one at a
+time across 50 sequential rounds or batches several calls in a round. A single
+round is also capped at 50, and the combined per-turn total never exceeds 50.
+Identical calls in one turn are de-duplicated. Media bytes and raw document
+envelopes are removed from follow-up rounds; tagged observations, retrieved
+text, and prior dialogue remain as bounded text context. TTS is deferred while
+a tool call is unresolved and runs only for the final answer.
 
 The portal's NDJSON stream adds `type: "tool"` start/completion events between
 normal adapter events. Start events identify running calls; completion events
 carry their success state and a bounded result preview. The authoritative final
 response repeats this evidence in `portal.safe_tools_executed`. The UI merges
 the two phases by call ID and exposes arguments/results in a collapsible
-**Tools** row, parallel to the reasoning disclosure. A trace entry is capped at
-1,600 characters and is retained only in that browser session's existing
+**Tools** row, parallel to the reasoning disclosure. JSON arguments and results
+render as bounded, nested key/value rows; plain-text previews are capped at
+12,000 characters. Traces are retained only in that browser session's existing
 five-minute cache.
 
 Native `message.tool_calls` remain authoritative. For compatible renderers that

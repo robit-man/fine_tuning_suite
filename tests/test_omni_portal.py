@@ -129,6 +129,10 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "function renderMarkdown" in javascript
     assert "function renderToolTrace" in javascript
     assert "function mergeToolTrace" in javascript
+    assert "function appendToolJsonRows" in javascript
+    assert "MAX_TOOL_TRACE_ITEMS = 50" in javascript
+    assert ".tool-json-row" in css
+    assert ".tool-json-branch" in css
     assert "portal_auto_tools: toolUseEnabled()" in javascript
     assert 'document.getElementById("tool-toggle")' in javascript
     assert "function markdownTableSpec" in javascript
@@ -361,8 +365,9 @@ def test_portal_status_probes_all_internal_stages() -> None:
         "streaming": True,
         "client_opt_in": True,
         "default_enabled": False,
-        "max_rounds": 4,
-        "max_calls_per_round": 4,
+        "max_rounds": 50,
+        "max_calls_per_round": 50,
+        "max_calls_per_turn": 50,
     }
     assert response.json["web"] == {
         "discovery": "local_chromium",
@@ -1117,6 +1122,52 @@ def test_portal_executes_only_allowlisted_tool_and_strips_media_on_followup() ->
         response.json["portal"]["safe_tools_executed"][0]["name"] == "get_current_time"
     )
     assert response.json["portal"]["safe_tools_executed"][0]["result"]
+
+
+def test_portal_allows_tool_chains_longer_than_four_calls() -> None:
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        call_number = len(requests)
+        if call_number <= 6:
+            return httpx.Response(
+                200,
+                json={
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "memory_write",
+                                    "arguments": {
+                                        "topic": "chain-test",
+                                        "key": f"step-{call_number}",
+                                        "value": str(call_number),
+                                    },
+                                },
+                            }
+                        ],
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": "Chain complete."}},
+        )
+
+    app = create_app(_config(), httpx.Client(transport=httpx.MockTransport(handler)))
+    response = app.test_client().post(
+        "/api/chat",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json=_request(portal_auto_tools=True),
+    )
+
+    assert response.status_code == 200
+    assert len(requests) == 7
+    assert len(response.json["portal"]["safe_tools_executed"]) == 6
 
 
 def test_portal_parses_omnius_style_text_tool_call_fallback() -> None:

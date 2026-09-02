@@ -14,6 +14,8 @@
   const PCM_CROSSFADE_SECONDS = 0.003;
   const PCM_CROSSFADE_MIN_BUFFER_SECONDS = 0.08;
   const CONVERSATION_BOTTOM_THRESHOLD_PX = 64;
+  const MAX_TOOL_TRACE_ITEMS = 50;
+  const MAX_TOOL_RESULT_CHARS = 12_000;
   const LIVE_CALL_SYSTEM_PROMPT = (
     "You are participating in a live two-way spoken conversation. Answer the "
     + "user's intent directly in a natural, concise spoken turn. Do not echo, "
@@ -812,20 +814,55 @@
       : `Generated ${metrics.createdAt}`;
   }
 
+  function normalizedToolJsonValue(value, depth = 0) {
+    if (depth >= 8) return "[nested value omitted]";
+    if (value === null || typeof value === "boolean" || typeof value === "number") return value;
+    if (typeof value === "string") return value.slice(0, 4_000);
+    if (Array.isArray(value)) {
+      return value.slice(0, 100).map(item => normalizedToolJsonValue(item, depth + 1));
+    }
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).slice(0, 100).map(
+        ([key, item]) => [String(key).slice(0, 120), normalizedToolJsonValue(item, depth + 1)],
+      ));
+    }
+    return String(value || "").slice(0, 4_000);
+  }
+
+  function parsedToolResult(value) {
+    const complete = String(value || "");
+    const raw = complete.slice(0, MAX_TOOL_RESULT_CHARS);
+    if (!complete) return { raw, json: null, structured: false };
+    try {
+      return { raw, json: normalizedToolJsonValue(JSON.parse(complete)), structured: true };
+    } catch (_error) {
+      return { raw, json: null, structured: false };
+    }
+  }
+
   function normalizedToolTrace(value) {
     if (!Array.isArray(value)) return [];
-    return value.slice(0, 20).map(item => ({
-      id: String((item || {}).id || "").slice(0, 80),
-      name: String((item || {}).name || "unknown").slice(0, 80),
-      arguments: (item && typeof item.arguments === "object" && item.arguments)
-        ? Object.fromEntries(Object.entries(item.arguments).slice(0, 6).map(
-          ([key, argument]) => [String(key).slice(0, 80), String(argument).slice(0, 240)],
-        ))
-        : {},
-      ok: Boolean((item || {}).ok),
-      status: String((item || {}).status || "complete") === "running" ? "running" : "complete",
-      result: String((item || {}).result || "").slice(0, 1600),
-    }));
+    return value.slice(0, MAX_TOOL_TRACE_ITEMS).map(item => {
+      const result = (item || {}).resultIsJson
+        ? {
+          raw: String((item || {}).result || "").slice(0, MAX_TOOL_RESULT_CHARS),
+          json: normalizedToolJsonValue((item || {}).resultJson),
+          structured: true,
+        }
+        : parsedToolResult((item || {}).result);
+      return {
+        id: String((item || {}).id || "").slice(0, 80),
+        name: String((item || {}).name || "unknown").slice(0, 80),
+        arguments: normalizedToolJsonValue(
+          (item && typeof item.arguments === "object" && item.arguments) ? item.arguments : {},
+        ),
+        ok: Boolean((item || {}).ok),
+        status: String((item || {}).status || "complete") === "running" ? "running" : "complete",
+        result: result.raw,
+        resultJson: result.json,
+        resultIsJson: result.structured,
+      };
+    });
   }
 
   function mergeToolTrace(current, event) {
@@ -845,7 +882,62 @@
       if (pendingIndex >= 0 && item.status !== "running") trace[pendingIndex] = item;
       else trace.push(item);
     }
-    return trace.slice(-20);
+    return trace.slice(-MAX_TOOL_TRACE_ITEMS);
+  }
+
+  function appendToolJsonRows(container, value, depth = 0, budget = { remaining: 300 }) {
+    const isArray = Array.isArray(value);
+    const isObject = value && typeof value === "object" && !isArray;
+    const entries = isArray
+      ? value.map((item, index) => [`[${index}]`, item])
+      : (isObject ? Object.entries(value) : [["value", value]]);
+    if (!entries.length) {
+      const empty = document.createElement("div");
+      empty.className = "tool-json-empty";
+      empty.textContent = isArray ? "Empty array" : "Empty object";
+      container.appendChild(empty);
+      return;
+    }
+    for (const [key, item] of entries) {
+      if (budget.remaining <= 0) {
+        const omitted = document.createElement("div");
+        omitted.className = "tool-json-empty";
+        omitted.textContent = "Additional values omitted";
+        container.appendChild(omitted);
+        return;
+      }
+      budget.remaining -= 1;
+      const row = document.createElement("div");
+      row.className = "tool-json-row";
+      const keyNode = document.createElement("span");
+      keyNode.className = "tool-json-key";
+      keyNode.textContent = key;
+      const valueNode = document.createElement("div");
+      valueNode.className = "tool-json-value";
+      const nestedArray = Array.isArray(item);
+      const nestedObject = item && typeof item === "object" && !nestedArray;
+      if (nestedArray || nestedObject) {
+        const branch = document.createElement("details");
+        branch.className = "tool-json-branch";
+        branch.open = depth < 1;
+        const summary = document.createElement("summary");
+        const count = nestedArray ? item.length : Object.keys(item).length;
+        summary.textContent = `${nestedArray ? "Array" : "Object"} · ${count}`;
+        const children = document.createElement("div");
+        children.className = "tool-json-children";
+        appendToolJsonRows(children, item, depth + 1, budget);
+        branch.append(summary, children);
+        valueNode.appendChild(branch);
+      } else {
+        const primitive = document.createElement("span");
+        const type = item === null ? "null" : typeof item;
+        primitive.className = `tool-json-primitive ${type}`;
+        primitive.textContent = item === null ? "null" : String(item);
+        valueNode.appendChild(primitive);
+      }
+      row.append(keyNode, valueNode);
+      container.appendChild(row);
+    }
   }
 
   function renderToolTrace(record) {
@@ -869,14 +961,26 @@
       stateNode.textContent = item.status === "running" ? "Running" : (item.ok ? "Complete" : "Failed");
       const argumentsNode = document.createElement("div");
       argumentsNode.className = "tool-arguments";
-      argumentsNode.textContent = Object.entries(item.arguments)
-        .map(([key, value]) => `${key}: ${value}`)
-        .join(" · ") || "No arguments";
+      const argumentsLabel = document.createElement("div");
+      argumentsLabel.className = "tool-section-label";
+      argumentsLabel.textContent = "Arguments";
+      argumentsNode.appendChild(argumentsLabel);
+      appendToolJsonRows(argumentsNode, item.arguments);
       row.append(name, stateNode, argumentsNode);
       if (item.result) {
         const resultNode = document.createElement("div");
         resultNode.className = "tool-result";
-        resultNode.textContent = item.result;
+        const resultLabel = document.createElement("div");
+        resultLabel.className = "tool-section-label";
+        resultLabel.textContent = "Result";
+        resultNode.appendChild(resultLabel);
+        if (item.resultIsJson) appendToolJsonRows(resultNode, item.resultJson);
+        else {
+          const plain = document.createElement("div");
+          plain.className = "tool-result-plain";
+          plain.textContent = item.result;
+          resultNode.appendChild(plain);
+        }
         row.appendChild(resultNode);
       }
       content.appendChild(row);

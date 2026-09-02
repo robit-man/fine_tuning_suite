@@ -764,16 +764,24 @@ def _finish_response(
     executed: list[str],
     text_streamed: bool = False,
     audio_streamed: bool = False,
+    suppress_tts: bool = False,
 ) -> dict[str, Any]:
     message = result.get("message")
     if not isinstance(message, dict):
         raise AdapterStageError("result contains no Ollama message object")
     _normalize_reasoning(message, enabled=_thinking_requested(parsed))
     tool_calls = message.get("tool_calls")
-    wants_tts = parsed.synthesize and not tool_calls and "tts" not in executed
+    wants_tts = (
+        parsed.synthesize
+        and not suppress_tts
+        and not tool_calls
+        and "tts" not in executed
+    )
     tts_blocks = 0
     tts_skipped_reason: str | None = None
-    if parsed.synthesize and tool_calls:
+    if suppress_tts and parsed.synthesize:
+        tts_skipped_reason = "required_speech_not_found"
+    elif parsed.synthesize and tool_calls:
         tts_skipped_reason = "unresolved_tool_calls"
     if wants_tts:
         text = str(message.get("content") or "").strip()
@@ -820,6 +828,18 @@ def execute(
     if "comprehension" in parsed.route:
         observation = _comprehend(parsed, config, client)
         executed.append("comprehension")
+
+    if parsed.require_speech and observation is not None and not _observation_transcript(observation):
+        result = _direct_response(parsed.model, "")
+        return _finish_response(
+            result,
+            parsed,
+            config,
+            client,
+            observation=observation,
+            executed=executed,
+            suppress_tts=True,
+        )
 
     if parsed.task in {"transcribe", "describe"}:
         result = _direct_response(parsed.model, observation or "")
@@ -894,6 +914,19 @@ def execute_stream(
         if audio_observation:
             values["audio_observation"] = audio_observation
         yield _stream_event("observation", **values)
+        if parsed.require_speech and not transcript:
+            result = _direct_response(parsed.model, "")
+            result = _finish_response(
+                result,
+                parsed,
+                config,
+                client,
+                observation=observation,
+                executed=executed,
+                suppress_tts=True,
+            )
+            yield _stream_event("final", response=result)
+            return
 
     if parsed.task in {"transcribe", "describe"}:
         result = _direct_response(parsed.model, observation or "")

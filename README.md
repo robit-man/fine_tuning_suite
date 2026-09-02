@@ -425,7 +425,7 @@ pipe tables, viewport-bounded
 token-pinned chat scrolling, native Ollama reasoning control, deterministic
 Qwen3-TTS profiles, allowlisted Female/Male presets, request-local WAV voice
 cloning, streamed PCM playback, and bounded single-flight barge-in voice-call
-turn consolidation. An explicit wrench toggle beside reasoning adds 19
+turn consolidation. An explicit wrench toggle beside reasoning adds 20
 server-pinned Ollama tool schemas for locally
 browser-driven public web discovery/fetch,
 attached-document search, on-demand host snapshots, time/capabilities, and
@@ -449,7 +449,12 @@ while retaining prior text dialogue as explicitly non-current context. Call
 prompting answers intent rather than parroting the transcript. With tools
 enabled, an explicit privacy-bounded `get_system_snapshot` call can sample
 portal-host CPU/RAM/GPU/network/date-time data; it is not dumped into every
-turn. The broker-compliant CUDA-only supervisor publishes a
+turn. A browser-side location lookup similarly exposes only sanitized,
+approximate session geography through `get_user_location`; raw IP and provider
+metadata never reach the portal or model. Sound-only call captures stop after
+comprehension without language/TTS, render as dim **Audio context**, and retain
+at most six bounded environmental observations for the next spoken turn. The
+broker-compliant CUDA-only supervisor publishes a
 temporary Cloudflare HTTPS tunnel. See the [phone portal runbook](docs/omni-adapter/phone-portal.md)
 for endpoints, lifecycle, isolation, diagnostics, and the complete verification
 matrix.

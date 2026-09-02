@@ -70,6 +70,7 @@ class ParsedAdapterRequest:
     speech_mode: str
     synthesize: bool
     include_audio_from_video: bool
+    require_speech: bool
     passthrough: Mapping[str, Any]
     speech: Mapping[str, Any]
 
@@ -110,6 +111,7 @@ class ParsedAdapterRequest:
             "speech_mode": self.speech_mode,
             "synthesize": self.synthesize,
             "include_audio_from_video": self.include_audio_from_video,
+            "require_speech": self.require_speech,
             "route": list(self.route),
             "media": [item.summary() for item in self.media],
         }
@@ -153,6 +155,9 @@ def adapter_contract() -> dict[str, Any]:
                 "schema": ADAPTER_SCHEMA,
                 "task": "chat | transcribe | describe | synthesize",
                 "include_audio_from_video": True,
+                "require_speech": (
+                    "optional boolean; stop after comprehension when no speech transcript is found"
+                ),
             },
             "response_modalities": ["text", "audio"],
             "speech_mode": "auto | always | never",
@@ -481,6 +486,9 @@ def parse_adapter_request(payload: Mapping[str, Any]) -> ParsedAdapterRequest:
     include_audio = omni.get("include_audio_from_video", True)
     if not isinstance(include_audio, bool):
         raise OmniAdapterError("omni.include_audio_from_video must be a boolean")
+    require_speech = omni.get("require_speech", False)
+    if not isinstance(require_speech, bool):
+        raise OmniAdapterError("omni.require_speech must be a boolean")
 
     raw_modalities = payload.get("response_modalities") or ["text"]
     if not isinstance(raw_modalities, list) or not raw_modalities:
@@ -540,6 +548,7 @@ def parse_adapter_request(payload: Mapping[str, Any]) -> ParsedAdapterRequest:
         speech_mode=speech_mode,
         synthesize=synthesize,
         include_audio_from_video=include_audio,
+        require_speech=require_speech,
         passthrough=passthrough,
         speech=speech,
     )

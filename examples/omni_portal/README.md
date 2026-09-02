@@ -54,9 +54,9 @@ this provides bounded live visual conversation without presenting an unbounded
 video stream to the model context.
 
 The phone icon at the upper right starts hands-free voice mode. Browser-side
-voice activity detection first calibrates ambient noise for 900 ms, requires
-200 ms of sustained activity above an adaptive threshold, requires at least
-420 ms of confirmed activity, and closes an utterance after 700 ms of silence.
+voice activity detection first calibrates ambient noise for 1,200 ms, requires
+260 ms of sustained activity above an adaptive threshold, requires at least
+520 ms of confirmed activity, and closes an utterance after 700 ms of silence.
 It submits a 16 kHz WAV only after that confirmed utterance; silence, transient
 clicks, and elevated steady room noise do not call remote ASR. Playback-time
 barge-in uses a stricter 480 ms confirmation to reject speaker echo. The
@@ -64,6 +64,12 @@ waveform border, line, and label remain translucent
 while inactive and become opaque only while VAD is active. Confirmed speech is
 sent through Qwen3-Omni and Qwen3.8, response text is relayed as Ollama produces
 it, and Qwen3-TTS speech is streamed back.
+If Omni comprehension finds no intelligible transcript, the adapter's
+`omni.require_speech` gate returns immediately after the observation event:
+Qwen3.8 and Qwen3-TTS are not invoked. The user turn remains a dim **Audio
+context** item. The call retains at most six bounded acoustic observations and
+adds them as non-instruction environmental evidence to the next actual spoken
+turn, then consumes them after that response.
 The microphone remains active during inference and playback, but the browser
 permits only one cognitive request at a time. Consecutive confirmed segments
 are joined with short silence boundaries into one bounded latest-turn buffer.
@@ -217,6 +223,13 @@ output is deferred until no unresolved calls remain. Native structured calls
 are preferred; strict Omnius-style `<tool_call>` JSON is accepted as a renderer
 compatibility fallback and removed from visible text.
 
+The allowlist also includes `get_user_location`. With tools enabled, the
+browser—not the portal host—calls the HTTPS geolocation endpoint, keeps only
+coarse geographic fields and three-decimal coordinates, and sends that
+sanitized value with the request. Raw IP, ISP/connection, security, and currency
+metadata never reach the portal or model. The result is session-scoped,
+approximate, VPN/carrier-sensitive, and cleared by Trash or five-minute expiry.
+
 Web discovery uses an ephemeral locally launched Chromium/Chrome process and a
 normal public search-results page—there is no external search API client, key,
 or SDK. A separate bounded fetch step permits only public HTTP(S),
@@ -347,7 +360,7 @@ The command:
 The core portal does not require a browser executable on the host. The optional
 `web_search(mode=discover)` tool does: install Chromium or Chrome, or set
 `OMNI_WEB_BROWSER` to its executable. If no local browser is available, that
-tool returns a bounded error while the other seven tools continue to work.
+tool returns a bounded error while the rest of the allowlist continues to work.
 
 The URL has this form:
 

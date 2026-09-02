@@ -20,6 +20,7 @@ owns the schemas and implementations.
 |---|---|---|
 | `get_current_time` | Current portal-host date, time, timezone, and UTC offset | Read-only host metadata |
 | `get_system_snapshot` | Fresh bounded platform, CPU/load, RAM, NVIDIA GPU, network-counter, date, and time snapshot | Read-only portal-host metadata; no hostnames, addresses, processes, credentials, or session content |
+| `get_user_location` | Return coarse IP-derived city/region/country, rounded coordinates, and timezone for location-dependent requests | Browser performs the HTTPS lookup; sanitized result is isolated to the current session; raw IP is never sent to or retained by the portal |
 | `get_portal_capabilities` | Report model, media, document, and safe-tool capabilities | Read-only runtime metadata |
 | `web_search` | Discover public result links in a locally launched Chromium/Chrome process, or search this session's local page index | Public search page for `discover`; no network for `session` |
 | `web_fetch` | Fetch and extract bounded text from one source URL | Public HTTP(S) only |
@@ -52,6 +53,17 @@ stable behavioral system policy and no hardware/utilization blob. When a user
 asks about the portal host, or a task materially depends on current resources,
 the model can call `get_system_snapshot`; each call samples fresh bounded data.
 The result describes the server running the portal, never the user's phone.
+
+User location is also explicit and tool-only. When tools are enabled, the
+browser calls `https://ipwho.is/` directly, allowlists only coarse geographic
+fields, rounds coordinates to three decimals, and sends that sanitized object
+with the model request. The portal never receives the lookup's raw `ip`, ISP,
+connection, security, or currency fields. `get_user_location` returns only the
+current opaque browser session's sanitized value; Trash clears it and the
+normal five-minute session TTL expires it. IP location is approximate and may
+identify a carrier gateway or VPN rather than the physical device. A typical
+dependent chain is `get_user_location -> web_search -> web_fetch`, while an
+unavailable location requires an explicit city from the user.
 
 ## Tool round lifecycle
 

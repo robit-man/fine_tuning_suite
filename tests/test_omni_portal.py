@@ -111,6 +111,7 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
     assert TOKEN.encode() not in response.data
     assert "microphone=(self)" in response.headers["Permissions-Policy"]
     assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+    assert "connect-src 'self' https://ipwho.is" in response.headers["Content-Security-Policy"]
     assert response.headers["Referrer-Policy"] == "no-referrer"
     assert response.headers["Cache-Control"] == "no-store"
     cookie = response.headers["Set-Cookie"]
@@ -136,6 +137,9 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert ".tool-json-row" in css
     assert ".tool-json-branch" in css
     assert "portal_auto_tools: toolUseEnabled()" in javascript
+    assert "CLIENT_LOCATION_ENDPOINT = \"https://ipwho.is/\"" in javascript
+    assert "function sanitizeClientLocation" in javascript
+    assert "portal_client_location" in javascript
     assert 'document.getElementById("tool-toggle")' in javascript
     assert "function markdownTableSpec" in javascript
     assert "function renderMarkdownTable" in javascript
@@ -146,6 +150,10 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "function enqueueCallUtterance" in javascript
     assert "function flushPendingCallUtterances" in javascript
     assert "function abortActiveCallTurns" in javascript
+    assert "function rememberCallAudioContext" in javascript
+    assert "callQueue.classifyObservation" in javascript
+    assert "require_speech: true" in javascript
+    assert 'content: frame ? "Camera audio context" : "Audio context"' in javascript
     assert "CALL_PENDING_MAX_SECONDS = 45" in javascript
     assert "preserveUnanswered: true" in javascript
     assert "|| call.inflight" in javascript
@@ -324,6 +332,8 @@ def test_mock_call_queue_consolidates_segments_and_bounds_pending_audio() -> Non
         "consolidated_samples": 1100,
         "bounded_samples": 10,
         "single_flight_contract": "one active inference plus one bounded pending turn",
+        "sound_only_aborts_reply": True,
+        "bounded_audio_contexts": 6,
     }
 
 
@@ -386,6 +396,14 @@ def test_portal_status_probes_all_internal_stages() -> None:
     }
     assert response.json["memory"]["scope"] == "browser_session"
     assert response.json["memory"]["entries"] == 0
+    assert response.json["location"] == {
+        "scope": "browser_session",
+        "delivery": "get_user_location tool",
+        "source": "browser HTTPS IP geolocation",
+        "precision": "approximate",
+        "raw_ip_retained": False,
+        "available": False,
+    }
     assert response.json["runtime_environment"] == {
         "delivery": "tool_only",
         "tool": "get_system_snapshot",
@@ -589,6 +607,43 @@ def test_safe_tools_search_fetch_memory_and_block_private_networks() -> None:
     assert harness.execute("two", "memory_search", {"query": "copper"})["results"] == []
     harness.clear("one")
     assert harness.execute("one", "memory_search", {"query": "copper"})["results"] == []
+
+
+def test_user_location_tool_is_sanitized_session_scoped_and_clearable() -> None:
+    harness = PortalToolHarness(SessionDocumentStore(ttl_s=300))
+    supplied = harness.set_client_location(
+        "one",
+        {
+            "ip": "203.0.113.42",
+            "city": "Seattle",
+            "region": "Washington",
+            "region_code": "wa",
+            "country": "United States",
+            "country_code": "us",
+            "latitude": 47.60621,
+            "longitude": -122.33207,
+            "timezone": {
+                "id": "America/Los_Angeles",
+                "abbreviation": "PDT",
+                "utc_offset": "-07:00",
+            },
+            "connection": {"isp": "must not be retained"},
+        },
+    )
+
+    result = harness.execute("one", "get_user_location", {})
+    serialized = json.dumps(result)
+    assert supplied == result
+    assert result["city"] == "Seattle"
+    assert result["region_code"] == "WA"
+    assert result["latitude"] == 47.606
+    assert result["longitude"] == -122.332
+    assert result["raw_ip_included"] is False
+    assert "203.0.113.42" not in serialized
+    assert "connection" not in result
+    assert harness.execute("two", "get_user_location", {})["available"] is False
+    harness.clear("one")
+    assert harness.execute("one", "get_user_location", {})["available"] is False
 
 
 def test_document_search_tool_is_session_isolated() -> None:
@@ -1349,6 +1404,68 @@ def test_portal_rejects_invalid_voice_clone_before_proxy() -> None:
     assert response.status_code == 400
     assert "invalid voice reference" in response.json["error"]
     assert calls == 0
+
+
+def test_portal_routes_sanitized_browser_location_through_session_tool() -> None:
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        if len(requests) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "get_user_location",
+                                    "arguments": {},
+                                },
+                            }
+                        ],
+                    },
+                    "adapter": {"route": ["language"]},
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "message": {"role": "assistant", "content": "You are near Seattle."},
+                "adapter": {"route": ["language"]},
+            },
+        )
+
+    app = create_app(_config(), httpx.Client(transport=httpx.MockTransport(handler)))
+    client = app.test_client()
+    client.get("/")
+    response = client.post(
+        "/api/chat",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json=_request(
+            portal_auto_tools=True,
+            portal_client_location={
+                "ip": "203.0.113.42",
+                "city": "Seattle",
+                "region": "Washington",
+                "country": "United States",
+                "latitude": 47.606,
+                "longitude": -122.332,
+            },
+        ),
+    )
+
+    assert response.status_code == 200
+    assert "portal_client_location" not in requests[0]
+    tool_result = json.loads(requests[1]["messages"][-1]["content"])
+    assert tool_result["city"] == "Seattle"
+    assert tool_result["raw_ip_included"] is False
+    assert "203.0.113.42" not in json.dumps(requests)
+    assert response.json["portal"]["safe_tools_executed"][0]["name"] == "get_user_location"
 
 
 def test_portal_executes_only_allowlisted_tool_and_strips_media_on_followup() -> None:

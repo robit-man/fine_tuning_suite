@@ -71,10 +71,14 @@ explicit `omni.task="transcribe"` outside the composer when a
 transcription-only response is required.
 The speaker icon switches between text-only and text-plus-TTS replies. The
 waveform button opens Qwen3-TTS voice cloning and sampling controls. The phone
-icon starts automatic voice turns. Local VAD calibrates ambient noise for 900
-ms, requires 200 ms of sustained activity and 420 ms of confirmed activity, and
+icon starts automatic voice turns. Local VAD calibrates ambient noise for 1,200
+ms, requires 260 ms of sustained activity and 520 ms of confirmed activity, and
 closes after 700 ms of silence. Quiet, clicks, and elevated steady noise do not
-call remote ASR. The green waveform is translucent while inactive and opaque
+call remote ASR. A comprehension result with no speech transcript becomes a
+dim **Audio context** entry and stops before language generation or TTS. Up to
+six bounded non-speech observations are retained as environmental evidence and
+consumed with the next real spoken turn; they never form an inference queue.
+The green waveform is translucent while inactive and opaque
 only during confirmed activity. The microphone remains active while inference
 or playback runs, but call cognition is single-flight: consecutive segments are
 consolidated into one bounded pending turn, stale unanswered inference is
@@ -89,6 +93,10 @@ structured tool array; it is off by default. The model can discover allowlisted
 capabilities, chain browser search/fetch/crawl, query or OCR attached documents,
 evaluate bounded math, inspect media metadata, federate session recall, and use
 temporary memory, notes, and tasks.
+For location-dependent work, the enabled browser performs a direct HTTPS
+IP-geolocation lookup, strips the raw IP and non-geographic metadata, and makes
+the approximate session-scoped result available only through
+`get_user_location`. Trash and five-minute expiry clear it.
 Tool results return through standard assistant `tool_calls` and `role="tool"`
 messages; running/completed calls and bounded results appear in a collapsible
 **Tools** disclosure, and speech waits for the final answer. Web discovery uses
@@ -238,6 +246,7 @@ speaker-embedding cloning and separate VoiceDesign/CustomVoice checkpoints.
 | Call control | silence-delimited audio turn followed by automatic playback |
 | VAD sensitivity and rejection | silence/click/steady-noise fixtures create zero requests; quiet and normal sustained speech create one per segment |
 | Call pressure control | rapid segments consolidate into one bounded pending turn; active inference count never exceeds one per browser call |
+| Sound-only call gate | no-transcript observation emits Audio context and a final event without language or TTS; the next spoken turn receives bounded acoustic context |
 | Voice clone | recorded/uploaded WAV changes speaker timbre and remains replayable |
 | Image | non-empty visual description |
 | Video with audio | ordered visual description plus spoken content |

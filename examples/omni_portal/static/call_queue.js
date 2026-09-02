@@ -101,5 +101,35 @@
     return result;
   }
 
-  return { DEFAULTS, createState, enqueue, stats, hasPending, clear, take };
+  function classifyObservation(transcript, observation, maxChars = 800) {
+    const spoken = String(transcript || "").replace(/\s+/g, " ").trim();
+    const heard = String(observation || "").replace(/\s+/g, " ").trim();
+    return {
+      hasSpeech: Boolean(spoken),
+      transcript: spoken,
+      audioContext: heard.slice(0, Math.max(1, maxChars)),
+    };
+  }
+
+  function appendAudioContext(contexts, observation, options = {}) {
+    const maxItems = Math.max(1, Number(options.maxItems) || 6);
+    const maxChars = Math.max(1, Number(options.maxChars) || 800);
+    const value = String(observation || "").replace(/\s+/g, " ").trim().slice(0, maxChars);
+    if (!value) return contexts;
+    contexts.push(value);
+    if (contexts.length > maxItems) contexts.splice(0, contexts.length - maxItems);
+    return contexts;
+  }
+
+  return {
+    DEFAULTS,
+    createState,
+    enqueue,
+    stats,
+    hasPending,
+    clear,
+    take,
+    classifyObservation,
+    appendAudioContext,
+  };
 }));

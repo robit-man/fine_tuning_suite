@@ -877,6 +877,72 @@ def test_environmental_audio_does_not_become_user_transcript() -> None:
     )
 
 
+def test_require_speech_stops_after_sound_only_comprehension() -> None:
+    requested_hosts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_hosts.append(request.url.host)
+        assert request.url.host == "comprehension"
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "<speech_transcript></speech_transcript>"
+                                "<audio_observation>A fan and room tone.</audio_observation>"
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    parsed = parse_adapter_request(
+        _base_request(
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Live call audio.",
+                    "audios": [{"data": _encoded(_wav(16000))}],
+                }
+            ],
+            omni={
+                "schema": ADAPTER_SCHEMA,
+                "task": "chat",
+                "require_speech": True,
+            },
+            response_modalities=["text", "audio"],
+            speech_mode="always",
+            think=False,
+        )
+    )
+    events = [
+        json.loads(chunk)
+        for chunk in execute_stream(
+            parsed,
+            Config(
+                "http://comprehension/v1/chat/completions",
+                "qwen3-omni",
+                "http://language",
+                "http://tts/synthesize",
+                30,
+            ),
+            httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+    ]
+
+    assert requested_hosts == ["comprehension"]
+    assert [event["type"] for event in events] == ["stage", "observation", "final"]
+    assert events[1]["audio_observation"] == "A fan and room tone."
+    final = events[-1]["response"]
+    assert final["adapter"]["route"] == ["comprehension"]
+    assert final["adapter"]["tts_skipped_reason"] == "required_speech_not_found"
+    assert final["message"]["content"] == ""
+    assert "audio" not in final["message"]
+
+
 def test_video_context_overflow_retries_with_lower_frame_cap() -> None:
     seen_caps = []
 

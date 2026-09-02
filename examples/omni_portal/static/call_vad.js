@@ -7,14 +7,14 @@
   "use strict";
 
   const DEFAULTS = Object.freeze({
-    calibrationMs: 900,
-    startThreshold: 0.015,
-    releaseThreshold: 0.009,
-    noiseMultiplier: 3.0,
-    releaseMultiplier: 1.7,
-    startConfirmMs: 200,
+    calibrationMs: 1200,
+    startThreshold: 0.018,
+    releaseThreshold: 0.010,
+    noiseMultiplier: 3.5,
+    releaseMultiplier: 1.9,
+    startConfirmMs: 260,
     silenceMs: 700,
-    minActiveMs: 420,
+    minActiveMs: 520,
     preRollFrames: 8,
     initialNoiseFloor: 0.003,
   });

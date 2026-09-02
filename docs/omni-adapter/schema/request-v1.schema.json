@@ -26,7 +26,8 @@
           "enum": ["chat", "transcribe", "describe", "synthesize"],
           "default": "chat"
         },
-        "include_audio_from_video": {"type": "boolean", "default": true}
+        "include_audio_from_video": {"type": "boolean", "default": true},
+        "require_speech": {"type": "boolean", "default": false}
       },
       "additionalProperties": false
     },

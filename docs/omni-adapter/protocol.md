@@ -68,6 +68,7 @@ misrouted assistant answer during perception.
 | `omni.schema` | Recommended | Must be `robit.ollama.omni-adapter.v1` when supplied |
 | `omni.task` | No | `chat`, `transcribe`, `describe`, or `synthesize`; default `chat` |
 | `omni.include_audio_from_video` | No | Whether video decoding exposes its audio track; default `true` |
+| `omni.require_speech` | No | When `true`, a comprehension result without a tagged speech transcript finalizes before language/TTS; default `false` |
 | `response_modalities` | No | Non-empty subset of `text`, `audio`; default `text` |
 | `speech_mode` | No | `auto`, `always`, or `never`; default `auto` |
 | `speech` | No | Backend-specific voice, language, cloning, sampling, and style hints |
@@ -81,6 +82,10 @@ misrouted assistant answer during perception.
 `omni.task=synthesize` always executes TTS. `transcribe` and `describe` bypass
 the language stage; they return comprehension text directly and may synthesize
 that text when `speech_mode` requests audio.
+`require_speech` is intended for VAD-driven live-call turns: environmental
+evidence is still returned in the observation/final adapter metadata, but a
+sound-only capture cannot consume the language or TTS stages. Leave it false
+for explicit environmental-audio questions.
 
 The reference Qwen3-TTS Base worker supports `language`, trusted server-local
 `speaker_file`, request-local base64 WAV `speaker_audio`, `temperature`,

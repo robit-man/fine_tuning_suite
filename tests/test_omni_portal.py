@@ -80,6 +80,9 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
     assert b"image/gif" in response.data
     assert b"multiple" in response.data
     assert response.data.index(b"/assets/call_vad.js") < response.data.index(
+        b"/assets/call_playback.js"
+    )
+    assert response.data.index(b"/assets/call_playback.js") < response.data.index(
         b"/assets/session_cache.js"
     )
     assert response.data.index(b"/assets/session_cache.js") < response.data.index(
@@ -118,6 +121,10 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "function renderMarkdown" in javascript
     assert "function startCall" in javascript
     assert "function submitCallUtterance" in javascript
+    assert "function supersedeCallAudio" in javascript
+    assert "callPlayback.canStart(call, turn)" in javascript
+    assert "supersedeCallAudio(call, call.nextSequence)" in javascript
+    assert "if (requestSequence !== state.requestSequence) return" in javascript
     assert "function startCameraCapture" in javascript
     assert "function stopCameraCapture" in javascript
     assert "function streamChat" in javascript
@@ -207,6 +214,8 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "state.cacheDeleted = true" in javascript
     assert "!state.cacheDeleted" in javascript
     assert "robit.omni.browser-session.v1" in javascript
+    assert 'transientComposerStatus("Press and hold to record voice clip")' in javascript
+    assert 'throw new Error("The microphone clip contained no samples")' not in javascript
 
 
 def test_browser_session_cache_harness_restores_expires_and_clears() -> None:
@@ -239,6 +248,22 @@ def test_mock_call_vad_harness_rejects_noise_and_accepts_confirmed_events() -> N
         "sustained_alarm": 1,
         "quiet_speech": 1,
         "continued_speech_segments": 2,
+    }
+
+
+def test_mock_call_playback_harness_rejects_stale_audio() -> None:
+    completed = subprocess.run(
+        ["node", "examples/omni_portal/playback_harness.mjs"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout) == {
+        "status": "passed",
+        "stale_pending_audio_suppressed": True,
+        "active_playback_interrupted": True,
+        "newest_turn_owns_playback": True,
     }
 
 

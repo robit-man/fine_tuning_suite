@@ -5,6 +5,7 @@
   const MAX_UPLOAD_MIB = Number(document.body.dataset.maxUploadMib || 96);
   const SCHEMA = "robit.ollama.omni-adapter.v1";
   const MAX_RECORD_MS = 60_000;
+  const MIN_MIC_HOLD_MS = 250;
   const MAX_VOICE_REFERENCE_MS = 10_000;
   const MAX_VOICE_REFERENCE_BYTES = 10 * 1024 * 1024;
   const MAX_VIDEO_RECORD_MS = 30_000;
@@ -129,6 +130,8 @@
     return { DEFAULTS, createState, processFrame, resetState };
   }
   const callVad = window.OmniCallVad || fallbackCallVad();
+  const callPlayback = window.OmniCallPlayback;
+  if (!callPlayback) throw new Error("Call playback ownership helper failed to load");
   const BARGE_VAD_OPTIONS = {
     calibrationMs: 0,
     startThreshold: 0.05,
@@ -198,6 +201,8 @@
     messages: [],
     recording: null,
     holdingMic: false,
+    micHoldStartedAt: 0,
+    discardMicRecording: false,
     recordTimer: null,
     recordClock: null,
     playbackContext: null,
@@ -206,6 +211,8 @@
     playbackEpoch: 0,
     streamController: null,
     requestController: null,
+    requestSequence: 0,
+    composerHintTimer: null,
     scrollFrame: null,
     cacheScope: `${location.origin}:${MODEL}:${document.body.dataset.sessionScope || ""}`,
     cacheReady: false,
@@ -403,6 +410,15 @@
   function setComposerStatus(text, error = false) {
     elements.composerStatus.textContent = text;
     elements.composerStatus.classList.toggle("error", error);
+  }
+
+  function transientComposerStatus(text, durationMs = 1400) {
+    clearTimeout(state.composerHintTimer);
+    setComposerStatus(text);
+    state.composerHintTimer = setTimeout(() => {
+      state.composerHintTimer = null;
+      if (elements.composerStatus.textContent === text) setComposerStatus("");
+    }, durationMs);
   }
 
   function scrollConversationToBottom({ smooth = true } = {}) {
@@ -1297,7 +1313,10 @@
     source.connect(processor);
     processor.connect(sink);
     sink.connect(context.destination);
-    state.recording = { stream, context, source, analyser, processor, sink, chunks, started: Date.now(), animationFrame: null };
+    state.recording = {
+      stream, context, source, analyser, processor, sink, chunks,
+      started: Date.now(), animationFrame: null, stopping: null, discard: false,
+    };
     elements.waveform.hidden = false;
     elements.micButton.classList.add("recording");
     elements.cameraButton.disabled = true;
@@ -1310,31 +1329,42 @@
       state.holdingMic = false;
       stopRecording().catch(showError);
     }, MAX_RECORD_MS);
-    if (!state.holdingMic) await stopRecording();
+    if (!state.holdingMic) {
+      await stopRecording({ discard: state.discardMicRecording });
+    }
   }
 
-  async function stopRecording() {
+  async function stopRecording({ discard = false } = {}) {
     const recording = state.recording;
     if (!recording) return;
-    clearTimeout(state.recordTimer);
-    clearInterval(state.recordClock);
-    cancelAnimationFrame(recording.animationFrame);
-    recording.processor.disconnect();
-    recording.source.disconnect();
-    recording.sink.disconnect();
-    recording.stream.getTracks().forEach(track => track.stop());
-    const samples = downsample(mergeSamples(recording.chunks), recording.context.sampleRate);
-    await recording.context.close();
-    state.recording = null;
-    elements.waveform.hidden = true;
-    elements.micButton.classList.remove("recording");
-    elements.cameraButton.disabled = false;
-    elements.micButton.setAttribute("aria-label", "Hold to record microphone");
-    if (!samples.length) throw new Error("The microphone clip contained no samples");
-    const blob = pcmWav(samples);
-    const file = new File([blob], `microphone-${Date.now()}.wav`, { type: "audio/wav" });
-    await addFile(file, "audio");
-    setComposerStatus(`Audio attached · ${(samples.length / 16000).toFixed(1)} seconds`);
+    if (discard) recording.discard = true;
+    if (recording.stopping) return recording.stopping;
+    recording.stopping = (async () => {
+      clearTimeout(state.recordTimer);
+      clearInterval(state.recordClock);
+      cancelAnimationFrame(recording.animationFrame);
+      recording.processor.disconnect();
+      recording.source.disconnect();
+      recording.sink.disconnect();
+      recording.stream.getTracks().forEach(track => track.stop());
+      const samples = downsample(mergeSamples(recording.chunks), recording.context.sampleRate);
+      state.recording = null;
+      await recording.context.close();
+      elements.waveform.hidden = true;
+      elements.micButton.classList.remove("recording");
+      elements.cameraButton.disabled = false;
+      elements.micButton.setAttribute("aria-label", "Hold to record microphone");
+      if (recording.discard || !samples.length) {
+        transientComposerStatus("Press and hold to record voice clip");
+        return false;
+      }
+      const blob = pcmWav(samples);
+      const file = new File([blob], `microphone-${Date.now()}.wav`, { type: "audio/wav" });
+      await addFile(file, "audio");
+      setComposerStatus(`Audio attached · ${(samples.length / 16000).toFixed(1)} seconds`);
+      return true;
+    })();
+    return recording.stopping;
   }
 
   function rms(samples) {
@@ -1633,6 +1663,15 @@
       : `${label} · listening`;
   }
 
+  function supersedeCallAudio(call, sequence) {
+    const result = callPlayback.supersedeBefore(call, sequence);
+    for (const turn of result.turns) {
+      if (turn.assistant) turn.assistant.node.classList.add("interrupted");
+    }
+    if (result.playbackInterrupted) stopCurrentPlayback();
+    return result.turns.length;
+  }
+
   function flushCallHistory(call) {
     while (call.completedHistory.has(call.nextHistorySequence)) {
       const item = call.completedHistory.get(call.nextHistorySequence);
@@ -1677,6 +1716,7 @@
       historyQueued: false,
       assistant: null,
     };
+    supersedeCallAudio(call, turn.sequence);
     call.nextSequence += 1;
     call.inflight += 1;
     call.turns.add(turn);
@@ -1777,7 +1817,7 @@
             } else if (event.type === "stage" && event.stage === "tts") {
               setComposerStatus("Call · preparing voice…");
             } else if (event.type === "audio_start") {
-              if (call.vadActive) turn.discardReply = true;
+              if (!callPlayback.canStart(call, turn)) turn.discardReply = true;
               if (!turn.discardReply) {
                 if (call.playbackTurn && call.playbackTurn !== turn) {
                   call.playbackTurn.discardReply = true;
@@ -1802,6 +1842,7 @@
         },
       );
       const reply = data.message || {};
+      if (!callPlayback.canStart(call, turn)) turn.discardReply = true;
       if (!(reply.audio && reply.audio.data)) throw new Error("Voice call reply contained no audio");
       applyCallAudioEvidence(
         (data.adapter || {}).input_transcript,
@@ -1915,12 +1956,7 @@
       }
       if (detection.event === "start") {
         setVadActive(call, true);
-        if (call.playbackTurn) {
-          const interrupted = call.playbackTurn;
-          interrupted.discardReply = true;
-          if (interrupted.assistant) interrupted.assistant.node.classList.add("interrupted");
-          call.playbackTurn = null;
-          stopCurrentPlayback();
+        if (supersedeCallAudio(call, call.nextSequence)) {
           setComposerStatus("Call · interruption heard…");
         } else {
           setComposerStatus(call.inflight
@@ -2089,6 +2125,10 @@
       return showError(error);
     }
 
+    const requestSequence = ++state.requestSequence;
+    if (state.call) supersedeCallAudio(state.call, state.call.nextSequence);
+    stopCurrentPlayback();
+
     const sentMedia = [...state.attachments];
     const user = addMessage({
       role: "user",
@@ -2140,6 +2180,7 @@
       const data = await streamChat(built.payload, {
         signal: requestController.signal,
         onEvent: event => {
+          if (requestSequence !== state.requestSequence) return;
           if (event.type === "observation") {
             applyInputAudioEvidence(event.transcript, event.audio_observation);
           } else if (event.type === "delta") {
@@ -2177,6 +2218,10 @@
           }
         },
       });
+      if (requestSequence !== state.requestSequence) {
+        removeMessage(assistant);
+        return;
+      }
       const reply = data.message || {};
       applyInputAudioEvidence(
         (data.adapter || {}).input_transcript,
@@ -2228,6 +2273,8 @@
     if (event.type === "pointerdown" && event.button !== 0) return;
     event.preventDefault();
     state.holdingMic = true;
+    state.micHoldStartedAt = Date.now();
+    state.discardMicRecording = false;
     if (event.pointerId !== undefined) elements.micButton.setPointerCapture(event.pointerId);
     startRecording().catch(error => {
       state.holdingMic = false;
@@ -2237,8 +2284,12 @@
 
   function endMicHold(event) {
     event.preventDefault();
+    const heldMs = Date.now() - state.micHoldStartedAt;
+    const briefTap = heldMs < MIN_MIC_HOLD_MS;
     state.holdingMic = false;
-    if (state.recording) stopRecording().catch(showError);
+    state.discardMicRecording = briefTap;
+    if (briefTap) transientComposerStatus("Press and hold to record voice clip");
+    if (state.recording) stopRecording({ discard: briefTap }).catch(showError);
   }
 
   async function closeVoiceDialog() {
@@ -2327,6 +2378,7 @@
     }
   });
   elements.clear.addEventListener("click", () => {
+    state.requestSequence += 1;
     if (state.requestController) state.requestController.abort();
     if (state.call) stopCall().catch(showError);
     stopCurrentPlayback();

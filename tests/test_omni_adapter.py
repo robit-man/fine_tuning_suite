@@ -141,6 +141,46 @@ for line in sys.stdin.buffer:
         worker.close()
 
 
+def test_persistent_tts_worker_discards_protocol_after_cancelled_stream(
+    tmp_path: Path,
+) -> None:
+    binary = tmp_path / "fake-llama-tts"
+    binary.write_text(
+        """#!/usr/bin/env python3
+import base64
+import sys
+
+def frame(kind, data=b''):
+    sys.stdout.buffer.write(kind.encode() + len(data).to_bytes(8, 'little') + data)
+    sys.stdout.buffer.flush()
+
+frame('R')
+for line in sys.stdin.buffer:
+    prompt = base64.b64decode(line.strip())
+    frame('A', prompt + b':head')
+    frame('A', prompt + b':tail')
+    frame('D')
+"""
+    )
+    binary.chmod(0o755)
+    config = _tts_config(tmp_path, binary=binary, persistent=True, timeout_s=5)
+    worker = PersistentTTSWorker(config)
+    try:
+        first = worker.stream(
+            _synthesis_spec(config, {"text": "first", "stream_frames": 1})
+        )
+        assert next(first) == b"first:head"
+        first.close()
+        assert not worker.ready
+
+        second = worker.stream(
+            _synthesis_spec(config, {"text": "second", "stream_frames": 1})
+        )
+        assert b"".join(second) == b"second:headsecond:tail"
+    finally:
+        worker.close()
+
+
 def test_persistent_tts_patch_recreates_audio_helper_per_prompt() -> None:
     patch = Path(
         "training_suite/patches/llama.cpp-qwen3tts-persistent.patch"

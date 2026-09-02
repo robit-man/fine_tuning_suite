@@ -174,7 +174,9 @@ stdout. The helper must not be reused: its decoded-output state otherwise makes
 audio trail the displayed response by one request. The Python wrapper keeps the
 weight-bearing process resident for matching profiles and exposes the same HTTP
 contracts. A changed profile restarts it deliberately; inline speaker bytes use
-the isolated single-shot path and then rewarm the default.
+the isolated single-shot path and then rewarm the default. Cancelling an active
+PCM response invalidates the framed worker session before its lock is released;
+the next prompt cannot consume abandoned audio.
 
 ## 4. Start the unified adapter
 

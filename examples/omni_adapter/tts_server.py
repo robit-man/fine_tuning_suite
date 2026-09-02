@@ -711,6 +711,11 @@ class PersistentTTSWorker:
                     raise TTSError(
                         f"persistent TTS emitted unknown frame {frame_type!r}"
                     )
+        except GeneratorExit:
+            # A downstream disconnect can stop iteration before the done frame.
+            # The remaining framed PCM must never be consumed by the next prompt.
+            self.close()
+            raise
         except Exception:
             self.close()
             raise

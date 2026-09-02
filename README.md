@@ -420,7 +420,8 @@ and [examples](examples/omni_adapter/README.md).
 For phone testing, the [authenticated Omni portal](examples/omni_portal/README.md)
 adds hold-to-record WAV capture, adaptive VAD, environmental-audio analysis,
 image/video/GIF uploads, silent-video handling, PDF/DOCX/text retrieval, a live
-camera preview, bounded camera-call frames, safe Markdown, viewport-bounded
+camera preview, bounded camera-call frames, safe Markdown with responsive GFM
+pipe tables, viewport-bounded
 token-pinned chat scrolling, native Ollama reasoning control, deterministic
 Qwen3-TTS profiles, allowlisted Female/Male presets, request-local WAV voice
 cloning, streamed PCM playback, and

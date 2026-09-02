@@ -137,7 +137,6 @@ RENDERER qwen3.5
 PARSER qwen3.5
 
 PARAMETER num_ctx 262144
-PARAMETER num_predict 16384
 PARAMETER temperature 0.6
 PARAMETER top_p 0.95
 PARAMETER top_k 20

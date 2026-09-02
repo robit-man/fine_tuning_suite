@@ -98,6 +98,8 @@ so “streaming” never describes a request that is still in model prefill.
 The 512-frame ceiling applies to each synthesis block. Longer replies are split
 at natural text boundaries, retain one continuous PCM sequence across blocks,
 and finish as a single assembled replay WAV instead of stopping near 40 seconds.
+There is no aggregate TTS block ceiling, and the portal does not impose a
+`num_predict` override on either typed chat or live-call language generation.
 
 The camera icon captures device video and microphone audio with a live preview
 inside the composer. Tap again or send to finalize a 30-second-maximum MP4/WebM
@@ -122,11 +124,13 @@ evidence; prior media bytes are never replayed. The adapter also sets
 multimodal prompt-slot reuse can otherwise answer a new clip from the previous
 clip's decoded embeddings.
 
-Assistant responses render a DOM-built safe Markdown subset. The composer clears
-as soon as send accepts a request, its focus border remains neutral, and the
-locked mobile viewport prevents focus/pinch zoom. Page content is not
-selectable and does not expose iOS touch callouts; text entry fields retain
-normal cursor and editing behavior.
+Assistant responses render a DOM-built safe Markdown subset. GFM pipe tables
+support header delimiters, escaped pipes, inline formatting, and alignment
+markers; wide tables scroll horizontally inside the message on narrow screens.
+The composer clears as soon as send accepts a request, its focus border remains
+neutral, and the locked mobile viewport prevents focus/pinch zoom. Page content
+is not selectable and does not expose iOS touch callouts; text entry fields
+retain normal cursor and editing behavior.
 
 The live-call instruction answers the user's intent directly and forbids
 echoing, transcription, or paraphrase unless requested. Both audio-only and

@@ -43,7 +43,6 @@ def base_request(model: str, task: str, message: dict[str, Any]) -> dict[str, An
         "speech_mode": "never",
         "think": task == "chat",
         "stream": False,
-        "options": {"num_predict": 512},
     }
 
 

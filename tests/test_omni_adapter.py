@@ -107,6 +107,16 @@ def test_tts_stream_window_validation_and_cli_arguments(tmp_path: Path) -> None:
         _synthesis_spec(config, {"text": "Hello", "stream_frames": 73})
 
 
+def test_tts_text_blocks_have_no_aggregate_reply_ceiling() -> None:
+    sentences = [f"{index:02d} {'x' * 390}." for index in range(40)]
+    text = " ".join(sentences)
+
+    blocks = _tts_text_blocks(text, {})
+
+    assert len(blocks) == 40
+    assert " ".join(blocks) == text
+
+
 def test_persistent_tts_worker_reuses_one_process_and_streams_framed_pcm(
     tmp_path: Path,
 ) -> None:

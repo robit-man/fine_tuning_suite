@@ -510,6 +510,89 @@
     if (offset < text.length) parent.appendChild(document.createTextNode(text.slice(offset)));
   }
 
+  function markdownCharacterIsEscaped(text, index) {
+    let slashes = 0;
+    for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) slashes += 1;
+    return slashes % 2 === 1;
+  }
+
+  function splitMarkdownTableRow(line) {
+    let source = String(line || "").trim();
+    if (source.startsWith("|")) source = source.slice(1);
+    if (source.endsWith("|") && !markdownCharacterIsEscaped(source, source.length - 1)) {
+      source = source.slice(0, -1);
+    }
+    const cells = [];
+    let cell = "";
+    for (let index = 0; index < source.length; index += 1) {
+      if (source[index] === "|" && !markdownCharacterIsEscaped(source, index)) {
+        cells.push(cell.trim().replace(/\\\|/g, "|"));
+        cell = "";
+      } else {
+        cell += source[index];
+      }
+    }
+    cells.push(cell.trim().replace(/\\\|/g, "|"));
+    return cells;
+  }
+
+  function markdownTableSpec(lines, index) {
+    if (index + 1 >= lines.length || !lines[index].includes("|") || !lines[index + 1].includes("|")) return null;
+    const header = splitMarkdownTableRow(lines[index]);
+    const delimiters = splitMarkdownTableRow(lines[index + 1]);
+    if (!header.length || header.length !== delimiters.length
+      || delimiters.some(cell => !/^:?-+:?$/.test(cell))) return null;
+    return {
+      header,
+      alignments: delimiters.map((cell) => {
+        if (cell.startsWith(":") && cell.endsWith(":")) return "center";
+        if (cell.endsWith(":")) return "right";
+        if (cell.startsWith(":")) return "left";
+        return "left";
+      }),
+    };
+  }
+
+  function appendMarkdownTableCell(row, tagName, text, alignment) {
+    const cell = document.createElement(tagName);
+    cell.classList.add(`align-${alignment}`);
+    if (tagName === "th") cell.scope = "col";
+    appendInlineMarkdown(cell, text);
+    row.appendChild(cell);
+  }
+
+  function renderMarkdownTable(parent, lines, index, spec) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "markdown-table-wrap";
+    const table = document.createElement("table");
+    table.className = "markdown-table";
+    const head = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    spec.header.forEach((cell, cellIndex) => {
+      appendMarkdownTableCell(headerRow, "th", cell, spec.alignments[cellIndex]);
+    });
+    head.appendChild(headerRow);
+    table.appendChild(head);
+
+    const body = document.createElement("tbody");
+    index += 2;
+    while (index < lines.length && lines[index].trim() && lines[index].includes("|")
+      && !/^(#{1,3})\s+|^```|^[-*]\s+|^\d+\.\s+|^>\s+/.test(lines[index])) {
+      const values = splitMarkdownTableRow(lines[index]).slice(0, spec.header.length);
+      while (values.length < spec.header.length) values.push("");
+      const row = document.createElement("tr");
+      values.forEach((cell, cellIndex) => {
+        appendMarkdownTableCell(row, "td", cell, spec.alignments[cellIndex]);
+      });
+      body.appendChild(row);
+      index += 1;
+    }
+    if (body.children.length) table.appendChild(body);
+    wrapper.appendChild(table);
+    parent.appendChild(wrapper);
+    return index;
+  }
+
   function renderMarkdown(parent, markdown) {
     parent.replaceChildren();
     const lines = String(markdown || "").replace(/\r\n?/g, "\n").split("\n");
@@ -534,6 +617,11 @@
         code.textContent = codeLines.join("\n");
         pre.appendChild(code);
         parent.appendChild(pre);
+        continue;
+      }
+      const tableSpec = markdownTableSpec(lines, index);
+      if (tableSpec) {
+        index = renderMarkdownTable(parent, lines, index, tableSpec);
         continue;
       }
       const heading = /^(#{1,3})\s+(.+)$/.exec(line);
@@ -575,7 +663,8 @@
       const paragraphLines = [line];
       index += 1;
       while (index < lines.length && lines[index].trim()
-        && !/^(#{1,3})\s+|^```|^[-*]\s+|^\d+\.\s+|^>\s+/.test(lines[index])) {
+        && !/^(#{1,3})\s+|^```|^[-*]\s+|^\d+\.\s+|^>\s+/.test(lines[index])
+        && !markdownTableSpec(lines, index)) {
         paragraphLines.push(lines[index]);
         index += 1;
       }
@@ -1845,7 +1934,6 @@
           speech_mode: "always",
           portal_voice: voicePayload(),
           think: showThinking,
-          options: { num_predict: 512 },
           portal_auto_tools: false,
         },
         {
@@ -2155,7 +2243,6 @@
         portal_voice: voicePayload(),
         think: wantsThinking,
         stream: false,
-        options: { num_predict: 2048 },
         portal_auto_tools: false,
       },
     };

@@ -236,7 +236,9 @@ frame ceiling. Each block uses the same voice, seed, and sampling controls;
 stream sequence numbers continue across blocks, and the final response contains
 one WAV assembled from every PCM block. `adapter.tts_blocks` reports the block
 count. `OMNI_TTS_BLOCK_CHARS` defaults to 420 (bounded to 80–2,000), and one
-request is limited to 32 blocks.
+request may use as many sequential blocks as its completed model response
+requires. The decoder frame ceiling therefore remains local to each block and
+does not truncate or reject the aggregate spoken reply.
 
 For media `chat`, comprehension is perception-only: it cannot answer the user.
 Its output uses `<speech_transcript>`, `<audio_observation>`, and

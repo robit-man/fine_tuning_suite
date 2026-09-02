@@ -96,7 +96,6 @@ MAX_VIDEO_FPS = 2.0
 MAX_GIF_SECONDS = 30
 DEFAULT_TTS_BLOCK_CHARS = 420
 DEFAULT_TTS_STREAM_FRAMES = 2
-MAX_TTS_BLOCKS = 32
 THINK_OPEN = "<think>"
 THINK_CLOSE = "</think>"
 THINK_BLOCK = re.compile(r"<think>(.*?)</think>", re.IGNORECASE | re.DOTALL)
@@ -717,10 +716,6 @@ def _tts_text_blocks(text: str, speech: Mapping[str, Any]) -> list[str]:
             blocks[-1] = candidate
         else:
             blocks.append(unit)
-    if len(blocks) > MAX_TTS_BLOCKS:
-        raise AdapterStageError(
-            f"spoken response requires {len(blocks)} blocks; limit is {MAX_TTS_BLOCKS}"
-        )
     return blocks
 
 

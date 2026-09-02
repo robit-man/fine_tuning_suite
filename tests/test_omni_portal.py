@@ -125,6 +125,10 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     css = Path("examples/omni_portal/static/portal.css").read_text()
 
     assert "function renderMarkdown" in javascript
+    assert "function markdownTableSpec" in javascript
+    assert "function renderMarkdownTable" in javascript
+    assert ".markdown-table-wrap" in css
+    assert ".markdown-table .align-right" in css
     assert "function startCall" in javascript
     assert "function submitCallUtterance" in javascript
     assert "function supersedeCallAudio" in javascript
@@ -138,6 +142,7 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "think: wantsThinking" in javascript
     assert "think: showThinking" in javascript
     assert "built.wantsThinking" in javascript
+    assert "num_predict" not in javascript
     assert "max_frames: 24" in javascript
     assert "function voicePayload" in javascript
     assert "function startVoiceReferenceRecording" in javascript

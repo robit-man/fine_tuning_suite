@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from training_suite.models.ollama import ModelfileSpec, generate_modelfile, parse_ollama_show
 
 
@@ -61,3 +63,16 @@ def test_generate_modelfile_supports_separate_multimodal_projector() -> None:
     assert text.count("FROM ") == 2
     assert "FROM ./model.gguf" in text
     assert "FROM ./mmproj.gguf" in text
+
+
+def test_packaged_model_recipes_do_not_cap_generation_length() -> None:
+    for path in (
+        Path("training_suite/tool_splice.py"),
+        Path("training_suite/ornith_vision_splice.py"),
+        Path("training_suite/AGENTS.md"),
+        Path("training_suite/templates/export.html"),
+    ):
+        assert "PARAMETER num_predict" not in path.read_text(encoding="utf-8")
+
+    export_form = Path("training_suite/templates/export.html").read_text(encoding="utf-8")
+    assert 'name="param_num_predict" value=' not in export_form

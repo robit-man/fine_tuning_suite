@@ -146,8 +146,11 @@ streaming token updates use immediate scrolling so repeated deltas cannot keep
 restarting a smooth animation behind the response. Manually scrolling upward
 pauses auto-follow and reveals a floating down-arrow above the composer; tapping
 it returns to the newest turn and resumes following. Completed assistant replies
-have a bottom-right copy control that writes the original raw Markdown to the
-clipboard, including table pipes and code fences. The small number beside
+show measured Ollama generation throughput and the browser-local generation time
+at bottom left, with a bottom-right copy control that writes the original raw
+Markdown to the clipboard, including table pipes and code fences. Audio replies
+use this same metrics footer and do not add a redundant replay-status caption.
+The small number beside
 **ONLINE** reports distinct browser sessions with
 an active or queued inference request; it is an aggregate only and is never
 used as conversation state.

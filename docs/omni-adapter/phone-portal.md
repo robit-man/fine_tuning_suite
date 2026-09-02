@@ -128,7 +128,10 @@ Assistant responses render a DOM-built safe Markdown subset. GFM pipe tables
 support header delimiters, escaped pipes, inline formatting, and alignment
 markers; wide tables scroll horizontally inside the message on narrow screens.
 Completed assistant messages include a bottom-right copy control that copies the
-original Markdown source. Scrolling upward pauses token auto-follow and reveals a
+original Markdown source. Immediately to its left, the footer shows measured
+Ollama decode tokens per second and the browser-local time for the response.
+Audio replies use the same footer without a replay-status caption. Scrolling
+upward pauses token auto-follow and reveals a
 floating down-arrow above the composer; activating it returns to the latest turn
 and resumes automatic following.
 The composer clears as soon as send accepts a request, its focus border remains

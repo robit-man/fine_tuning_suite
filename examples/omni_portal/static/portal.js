@@ -317,6 +317,7 @@
           thinking: String(record.thinking || ""),
           audioObservation: String(record.audioObservation || ""),
           soundOnly: Boolean(record.soundOnly),
+          generationMetrics: record.generationMetrics ? { ...record.generationMetrics } : null,
           audio: record.audio && record.audio.data ? { ...record.audio } : null,
           media: (record.media || []).map(item => mediaCacheValue(item)),
           error: Boolean(record.error),
@@ -401,6 +402,7 @@
           thinking: String(item.thinking || ""),
           audioObservation: String(item.audioObservation || ""),
           soundOnly: Boolean(item.soundOnly),
+          generationMetrics: item.generationMetrics || null,
           audio: item.audio && item.audio.data ? item.audio : null,
           media: (Array.isArray(item.media) ? item.media : []).map(hydrateMediaValue),
           error: Boolean(item.error),
@@ -747,11 +749,70 @@
     }
   }
 
+  function normalizedGenerationMetrics(value) {
+    if (!value || typeof value !== "object") return null;
+    const parsedTime = Date.parse(String(value.createdAt || ""));
+    const tokensPerSecond = value.tokensPerSecond == null
+      ? Number.NaN
+      : Number(value.tokensPerSecond);
+    const evalCount = value.evalCount == null ? Number.NaN : Number(value.evalCount);
+    return {
+      createdAt: Number.isFinite(parsedTime)
+        ? new Date(parsedTime).toISOString()
+        : new Date().toISOString(),
+      tokensPerSecond: Number.isFinite(tokensPerSecond) && tokensPerSecond >= 0
+        ? tokensPerSecond
+        : null,
+      evalCount: Number.isFinite(evalCount) && evalCount >= 0 ? Math.round(evalCount) : null,
+    };
+  }
+
+  function generationMetricsFromResponse(response) {
+    const evalCount = Number(response && response.eval_count);
+    const evalDuration = Number(response && response.eval_duration);
+    const tokensPerSecond = (
+      Number.isFinite(evalCount) && evalCount >= 0
+      && Number.isFinite(evalDuration) && evalDuration > 0
+    ) ? evalCount / (evalDuration / 1_000_000_000) : null;
+    return normalizedGenerationMetrics({
+      createdAt: response && response.created_at,
+      tokensPerSecond,
+      evalCount,
+    });
+  }
+
+  function renderGenerationMetrics(record) {
+    const node = record.node.querySelector(".message-generation-metrics");
+    const metrics = record.generationMetrics;
+    if (!metrics) {
+      node.hidden = true;
+      node.textContent = "";
+      node.removeAttribute("title");
+      return;
+    }
+    const time = new Intl.DateTimeFormat([], {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(new Date(metrics.createdAt));
+    const parts = [];
+    if (Number.isFinite(metrics.tokensPerSecond)) {
+      parts.push(`${metrics.tokensPerSecond.toFixed(1)} tok/s`);
+    }
+    parts.push(time);
+    node.textContent = parts.join(" · ");
+    node.hidden = false;
+    node.title = Number.isFinite(metrics.evalCount)
+      ? `${metrics.evalCount} generated tokens · ${metrics.createdAt}`
+      : `Generated ${metrics.createdAt}`;
+  }
+
   function updateMessage(record, {
     content,
     thinking,
     audioObservation,
     soundOnly,
+    generationMetrics,
     audio,
     streaming = false,
     autoplayAudio = true,
@@ -782,6 +843,9 @@
       record.soundOnly = Boolean(soundOnly);
       record.node.classList.toggle("sound-only", record.soundOnly);
     }
+    if (generationMetrics !== undefined) {
+      record.generationMetrics = normalizedGenerationMetrics(generationMetrics);
+    }
     record.node.classList.toggle("streaming", streaming);
     if (audio && audio.data && !record.node.querySelector(".audio-output audio")) {
       record.audio = { ...audio };
@@ -789,6 +853,7 @@
       if (autoplayAudio) record.playback = playback;
     }
     record.streaming = Boolean(streaming);
+    renderGenerationMetrics(record);
     const footer = record.node.querySelector(".message-footer");
     footer.hidden = (
       record.role !== "assistant"
@@ -907,6 +972,7 @@
     thinking,
     audioObservation,
     soundOnly = false,
+    generationMetrics,
     audio,
     media = [],
     error = false,
@@ -926,6 +992,7 @@
       thinking: "",
       audioObservation: "",
       soundOnly: false,
+      generationMetrics: null,
       audio: null,
       media,
       streaming,
@@ -941,6 +1008,7 @@
       thinking,
       audioObservation,
       soundOnly,
+      generationMetrics,
       audio,
       streaming,
       autoplayAudio,
@@ -974,7 +1042,7 @@
     return new Blob(chunks, { type: mime || "audio/wav" });
   }
 
-  async function playWithUnlockedContext(envelope, note, epoch) {
+  async function playWithUnlockedContext(envelope, epoch) {
     const context = state.playbackContext;
     if (!context) return false;
     if (context.state === "suspended") await context.resume();
@@ -993,11 +1061,9 @@
     source.buffer = decoded;
     source.connect(context.destination);
     state.playbackSource = source;
-    note.textContent = "Playing spoken reply…";
     return new Promise(resolve => {
       source.addEventListener("ended", () => {
         if (state.playbackSource === source) state.playbackSource = null;
-        note.textContent = "Spoken reply · replay with the player";
         resolve(true);
       }, { once: true });
       source.start();
@@ -1035,13 +1101,12 @@
     }
   }
 
-  function playHtmlAudio(audio, note, epoch) {
+  function playHtmlAudio(audio, epoch) {
     if (state.playbackEpoch !== epoch) return Promise.resolve(false);
     state.playbackElement = audio;
     return audio.play().then(() => new Promise(resolve => {
       const done = () => {
         if (state.playbackElement === audio) state.playbackElement = null;
-        note.textContent = "Spoken reply · replay with the player";
         resolve(true);
       };
       audio.addEventListener("ended", done, { once: true });
@@ -1059,22 +1124,17 @@
     const url = URL.createObjectURL(base64ToBlob(envelope.data, envelope.mime_type));
     audio.src = url;
     audio.dataset.objectUrl = url;
-    const note = document.createElement("p");
-    note.className = "audio-note";
-    note.textContent = autoplay ? "Spoken reply ready" : "Streamed reply · replay with the player";
     box.appendChild(audio);
-    node.querySelector(".message-footer").prepend(note);
     if (!autoplay) return Promise.resolve(false);
     const epoch = state.playbackEpoch;
-    return playWithUnlockedContext(envelope, note, epoch)
+    return playWithUnlockedContext(envelope, epoch)
       .then(playing => {
         if (state.playbackEpoch !== epoch) return false;
-        if (!playing) return playHtmlAudio(audio, note, epoch);
+        if (!playing) return playHtmlAudio(audio, epoch);
         return playing;
       })
       .catch(() => {
-        note.textContent = "Spoken reply ready · tap play";
-        return playHtmlAudio(audio, note, epoch).catch(() => false);
+        return playHtmlAudio(audio, epoch).catch(() => false);
       });
   }
 
@@ -2123,6 +2183,7 @@
       updateMessage(assistant, {
         content: reply.content || "Spoken response",
         thinking: showThinking ? (reply.thinking || streamedThinking) : "",
+        generationMetrics: generationMetricsFromResponse(data),
         audio: turn.discardReply ? null : reply.audio,
         streaming: false,
         autoplayAudio: !streamedAudio,
@@ -2499,6 +2560,7 @@
       updateMessage(assistant, {
         content: reply.content || (reply.audio ? "Spoken response" : "No response returned."),
         thinking: built.wantsThinking ? (reply.thinking || streamedThinking) : "",
+        generationMetrics: generationMetricsFromResponse(data),
         audio: reply.audio,
         streaming: false,
         autoplayAudio: !streamedAudio,

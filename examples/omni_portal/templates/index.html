@@ -11,7 +11,7 @@
   <title>Omni Chat</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/assets/favicon.svg">
-  <link rel="stylesheet" href="/assets/portal.css?v=20260902-sticky-follow">
+  <link rel="stylesheet" href="/assets/portal.css?v=20260902-generation-metrics">
 </head>
 <body data-model="{{ model }}" data-max-upload-mib="{{ max_upload_mib }}" data-session-scope="{{ session_scope }}">
   <main class="app-shell">
@@ -175,6 +175,7 @@
       </details>
       <div class="audio-output" hidden></div>
       <div class="message-footer" hidden>
+        <span class="message-generation-metrics" hidden></span>
         <button class="message-copy-button" type="button" aria-label="Copy raw Markdown reply" title="Copy raw Markdown">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 8h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2Z"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2"/></svg>
         </button>
@@ -185,6 +186,6 @@
   <script src="/assets/call_vad.js" defer></script>
   <script src="/assets/call_playback.js" defer></script>
   <script src="/assets/session_cache.js" defer></script>
-  <script src="/assets/portal.js?v=20260902-sticky-follow" defer></script>
+  <script src="/assets/portal.js?v=20260902-generation-metrics" defer></script>
 </body>
 </html>

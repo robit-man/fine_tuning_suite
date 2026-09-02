@@ -204,7 +204,14 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "navigator.clipboard.writeText(markdown)" in javascript
     assert 'String(record.content || "")' in javascript
     assert ".message-copy-button" in css
-    assert ".message-footer .audio-note" in css
+    assert "function generationMetricsFromResponse" in javascript
+    assert "eval_count" in javascript
+    assert "eval_duration" in javascript
+    assert "1_000_000_000" in javascript
+    assert "new Intl.DateTimeFormat" in javascript
+    assert ".message-generation-metrics" in css
+    assert "Streamed reply · replay with the player" not in javascript
+    assert ".audio-note" not in css
     assert "scroll-behavior: smooth" not in css
     assert ".app-shell {\n  display: flex;\n  height: 100dvh;" in css
     assert "max-height: 100dvh;\n  overflow: hidden;" in css

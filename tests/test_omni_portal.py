@@ -962,6 +962,34 @@ def test_runtime_environment_snapshot_is_bounded_and_omits_sensitive_network_dat
     assert '"mac"' not in serialized.lower()
 
 
+def test_runtime_environment_merges_into_existing_leading_system_message() -> None:
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"message": {"role": "assistant", "content": "Done."}}
+        )
+
+    app = create_app(_config(), httpx.Client(transport=httpx.MockTransport(handler)))
+    response = app.test_client().post(
+        "/api/chat",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json=_request(
+            messages=[
+                {"role": "system", "content": "Answer naturally."},
+                {"role": "user", "content": "Hello."},
+            ]
+        ),
+    )
+
+    assert response.status_code == 200
+    messages = seen[0]["messages"]
+    assert [item["role"] for item in messages] == ["system", "user"]
+    assert messages[0]["content"].startswith("Answer naturally.")
+    assert "<runtime_environment>" in messages[0]["content"]
+
+
 def test_portal_stream_route_requires_auth_and_disables_auto_tools() -> None:
     calls = 0
 

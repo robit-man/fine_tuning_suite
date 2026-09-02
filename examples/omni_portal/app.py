@@ -814,7 +814,16 @@ def create_app(
         messages = payload.get("messages")
         if not isinstance(messages, list) or not messages:
             raise PortalRequestError("messages must be a non-empty array")
-        messages.insert(0, runtime_environment_system_message())
+        environment = runtime_environment_system_message()
+        if isinstance(messages[0], dict) and messages[0].get("role") == "system":
+            existing = str(messages[0].get("content") or "").strip()
+            messages[0]["content"] = (
+                f"{existing}\n\n{environment['content']}"
+                if existing
+                else environment["content"]
+            )
+        else:
+            messages.insert(0, environment)
 
     def apply_document_context(
         payload: dict[str, Any], session_id: str

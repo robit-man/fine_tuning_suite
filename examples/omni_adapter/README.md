@@ -71,7 +71,7 @@ export OMNI_TTS_PORT=8892
 python examples/omni_adapter/tts_server.py
 ```
 
-The wrapper is serial and reloads the model on each request. In a manually
+The wrapper is serial but keeps one matching voice profile resident. In a manually
 scoped CUDA deployment, pass `OLLAMA_UNIFY_GPU_LEASE`, `OMNI_TTS_GPU_UUID`, and
 `CUDA_VISIBLE_DEVICES` with the exact reserved UUID. The wrapper then calls
 broker `prepare`, verifies that `llama-tts` is resident on that GPU, and calls
@@ -123,6 +123,7 @@ code2wav decoder window before generation ends:
 
 The tracked bootstrap checks out the verified llama.cpp commit, applies
 `training_suite/patches/llama.cpp-qwen3tts-pcm-stream.patch` idempotently, and
+then applies `training_suite/patches/llama.cpp-qwen3tts-persistent.patch`. It
 builds CUDA-enabled `llama-server` and `llama-tts`. Set
 `LLAMA_CPP_BUILD_JOBS` or `LLAMA_CPP_BUILD_DIR` when needed; an existing source
 checkout must already be at the pinned commit.
@@ -137,7 +138,7 @@ audio/pcm;rate=24000;channels=1;format=s16le` plus `X-Audio-Codec`,
 and may override `stream_frames`; `OMNI_TTS_STREAM_FRAMES` sets the server
 default.
 
-The interactive default is four codec frames, about 320 ms for the packaged
+The interactive default is one codec frame, about 80 ms for the packaged
 12 Hz model. Values from 1 through 72 are accepted; larger windows improve
 aggregate decoder throughput, while smaller windows reduce time to first PCM
 at the cost of more decoder invocations. A shorter utterance flushes once at
@@ -147,9 +148,13 @@ boundaries, so clients must buffer incomplete 16-bit samples.
 
 This route is experimental. If generation fails after response headers, the
 PCM stream terminates early; the final WAV is still checked server-side when
-generation succeeds. The reference worker also reloads the model per request,
-so its startup latency remains unsuitable for hard realtime or full duplex.
-A resident libmtmd worker can retain the same PCM contract.
+generation succeeds. `--tts-persistent` loads the backbone, projector, and
+default speaker reference once, emits an explicit ready frame, accepts bounded
+base64 prompts on stdin, resets model/sampler state between prompts, and emits
+length-framed PCM windows on stdout. The Python wrapper keeps that process
+resident for matching profiles and exposes the same HTTP contracts. A changed
+profile restarts it deliberately; inline speaker bytes use the isolated
+single-shot path and then rewarm the default.
 
 ## 4. Start the unified adapter
 

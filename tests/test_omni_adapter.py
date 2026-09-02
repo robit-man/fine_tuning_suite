@@ -20,7 +20,12 @@ from examples.omni_adapter.server import (
     execute_stream,
 )
 from examples.omni_adapter.tts_server import Config as TTSConfig
-from examples.omni_adapter.tts_server import TTSError, _command, _synthesis_spec
+from examples.omni_adapter.tts_server import (
+    PersistentTTSWorker,
+    TTSError,
+    _command,
+    _synthesis_spec,
+)
 from examples.omni_adapter.tts_server import create_app as create_tts_app
 from training_suite.models.audio import decode_wav_payload
 from training_suite.models.omni_adapter import (
@@ -91,7 +96,7 @@ def test_adapter_contract_separates_wire_schema_from_bundle_schema() -> None:
 
 def test_tts_stream_window_validation_and_cli_arguments(tmp_path: Path) -> None:
     config = _tts_config(tmp_path)
-    assert config.stream_frames == 4
+    assert config.stream_frames == 1
     spec = _synthesis_spec(config, {"text": "Hello", "stream_frames": 12})
     command = _command(config, spec, tmp_path / "speech.wav", stream=True)
 
@@ -100,6 +105,40 @@ def test_tts_stream_window_validation_and_cli_arguments(tmp_path: Path) -> None:
         _synthesis_spec(config, {"text": "Hello", "stream_frames": 0})
     with pytest.raises(TTSError, match="between 1 and 72"):
         _synthesis_spec(config, {"text": "Hello", "stream_frames": 73})
+
+
+def test_persistent_tts_worker_reuses_one_process_and_streams_framed_pcm(
+    tmp_path: Path,
+) -> None:
+    binary = tmp_path / "fake-llama-tts"
+    binary.write_text(
+        """#!/usr/bin/env python3
+import base64
+import sys
+
+def frame(kind, data=b''):
+    sys.stdout.buffer.write(kind.encode() + len(data).to_bytes(8, 'little') + data)
+    sys.stdout.buffer.flush()
+
+frame('R')
+for line in sys.stdin.buffer:
+    prompt = base64.b64decode(line.strip())
+    frame('A', b'\\x01\\x00' * max(1, len(prompt)))
+    frame('D')
+"""
+    )
+    binary.chmod(0o755)
+    config = _tts_config(tmp_path, binary=binary, persistent=True, timeout_s=5)
+    spec = _synthesis_spec(config, {"text": "first", "stream_frames": 1})
+    worker = PersistentTTSWorker(config)
+    try:
+        assert b"".join(worker.stream(spec)) == b"\x01\x00" * 5
+        first_pid = worker.process.pid
+        second = _synthesis_spec(config, {"text": "second", "stream_frames": 1})
+        assert b"".join(worker.stream(second)) == b"\x01\x00" * 6
+        assert worker.process.pid == first_pid
+    finally:
+        worker.close()
 
 
 def test_tts_accepts_bounded_wav_speaker_envelope(tmp_path: Path) -> None:
@@ -155,7 +194,9 @@ sys.stdout.buffer.flush()
 """
     )
     os.chmod(binary, 0o755)
-    config = _tts_config(tmp_path, binary=binary, stream_frames=12)
+    config = _tts_config(
+        tmp_path, binary=binary, stream_frames=12, persistent=False
+    )
     response = create_tts_app(config).test_client().post(
         "/synthesize/stream",
         json={"text": "Hello"},
@@ -987,6 +1028,7 @@ def test_reference_server_streams_pcm_and_keeps_final_wav_envelope() -> None:
     ]
 
     assert [path for path, _body in seen] == ["/api/chat", "/synthesize/stream"]
+    assert seen[1][1]["stream_frames"] == 1
     assert [event["type"] for event in events] == [
         "stage",
         "delta",

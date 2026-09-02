@@ -76,7 +76,8 @@ sidecar blob, not unrelated source paths.
 - Adapter v1 is turn-based and does not support streaming.
 - Video audio is demuxed and submitted separately; sample-accurate alignment is
   not guaranteed.
-- The reference TTS HTTP worker is serial and reloads a single-shot binary.
+- The reference TTS HTTP worker is serial but keeps one matching voice profile
+  resident; a voice-profile change intentionally replaces that worker.
 - This is semantic routing, not a trained hidden-state fusion of Qwen3.8 and
   Qwen3-Omni.
 

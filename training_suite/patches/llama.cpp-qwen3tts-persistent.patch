@@ -1,0 +1,381 @@
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -4452,6 +4452,14 @@
+             params.tts_stream_frames = value;
+         }
+     ).set_examples({LLAMA_EXAMPLE_TTS}));
++    add_opt(common_arg(
++        {"--tts-persistent"},
++        "keep TTS weights loaded and accept base64 prompts on stdin using framed stdout",
++        [](common_params & params) {
++            params.tts_persistent = true;
++            params.tts_stream = true;
++        }
++    ).set_examples({LLAMA_EXAMPLE_TTS}));
+ 
+     //
+     // diffusion params
+--- a/common/common.h
++++ b/common/common.h
+@@ -755,6 +755,7 @@
+     std::string tts_speaker_file = "";
+     bool tts_stream = false;
+     int32_t tts_stream_frames = 72;
++    bool tts_persistent = false;
+ 
+     bool is_gen_docs = false; // whether we are running inside llama-gen-docs
+ };
+--- a/tools/tts/tts.cpp
++++ b/tools/tts/tts.cpp
+@@ -1,4 +1,5 @@
+ #include "arg.h"
++#include "base64.hpp"
+ #include "common.h"
+ #include "sampling.h"
+ #include "log.h"
+@@ -9,6 +10,7 @@
+ #include <cstdio>
+ #include <cstdint>
+ #include <cstring>
++#include <iostream>
+ #include <string>
+ 
+ #ifdef _WIN32
+@@ -43,6 +45,20 @@
+     fflush(stderr);
+ }
+ 
++static bool tts_write_frame(char type, const char * data = nullptr, uint64_t size = 0) {
++    uint8_t header[9] = { (uint8_t) type };
++    for (int i = 0; i < 8; ++i) {
++        header[i + 1] = (uint8_t) ((size >> (i * 8)) & 0xff);
++    }
++    if (fwrite(header, 1, sizeof(header), stdout) != sizeof(header)) {
++        return false;
++    }
++    if (size > 0 && fwrite(data, 1, size, stdout) != size) {
++        return false;
++    }
++    return fflush(stdout) == 0;
++}
++
+ static void print_usage(int, char ** argv) {
+     LOG("\nexample usage:\n");
+     LOG("\n    %s -m backbone.gguf -mm mmproj.gguf -p \"text to speak\" -o output.wav", argv[0]);
+@@ -79,7 +95,7 @@
+         mtmd_helper_log_set(common_log_default_callback, nullptr);
+     }
+ 
+-    if (params.prompt.empty()) {
++    if (params.prompt.empty() && !params.tts_persistent) {
+         LOG_ERR("no prompt provided, use -p \"text\"\n");
+         return 1;
+     }
+@@ -138,142 +154,171 @@
+     }
+ 
+     mtmd_helper::gen_audio gen(lctx, mctx.get());
+-    mtmd_helper_gen_audio_inp inp{};
+-    inp.seq_id      = 0;
+-    inp.prompt      = params.prompt.c_str();
+-    inp.prompt_len  = params.prompt.size();
+-    inp.speaker_ref = speaker_bitmap.get();
+-    inp.lang        = params.tts_lang.c_str();
+-    inp.top_k       = params.sampling.top_k;
+-    inp.top_p       = params.sampling.top_p;
+-    inp.seed        = params.sampling.seed;
+-    inp.out_type    = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+-
+-    //
+-    // stage 1: process prompt via backbone model, generate semantic representation
+-    //
+-
+-    if (gen.set_input(&inp) != 0) {
+-        LOG_ERR("set_input failed\n");
+-        return 1;
+-    }
+-
+-    const int64_t t_prompt_start_us = ggml_time_us();
+-
+-    for (;;) {
+-        int32_t ret = gen.step_prompt(params.n_batch);
+-        if (ret < 0) {
+-            LOG_ERR("prompt processing failed\n");
+-            return 1;
+-        }
+-        if (ret == 0) {
+-            break;
+-        }
+-    }
+-
+-    // note: some pipelines ignore this token and use the hidden state instead
+-    auto sample_semantic_code = [&]() -> llama_token {
+-        llama_token t = common_sampler_sample(smpl, lctx, -1);
+-        common_sampler_accept(smpl, t, true);
+-        return t;
+-    };
+-
+-    const int max_new = params.n_predict > 0 ? params.n_predict : 512;
+-    int n_frames = 0;
+-    llama_token sampled = sample_semantic_code();
+-    const float * h_state = llama_get_embeddings_ith(lctx, -1);
+-
+-    tts_timings timings;
+-    const int64_t t_gen_start_us = ggml_time_us();
+-
+-    bool stop = false;
+-    int64_t n_streamed_samples = 0;
+-    auto stream_audio = [&]() -> bool {
+-        int32_t      sample_rate = 0;
+-        const char * data        = nullptr;
+-        size_t       data_len    = 0;
+-        int64_t      n_samples   = 0;
+-        if (gen.get_output(&sample_rate, &data, &data_len, &n_samples) != 0) {
+-            return false;
+-        }
+-        const size_t wav_header_size = 44;
+-        const size_t pcm_size = (size_t) n_samples * sizeof(int16_t);
+-        if (n_samples < n_streamed_samples || data_len != wav_header_size + pcm_size) {
+-            LOG_ERR("invalid incremental WAV output\n");
+-            return false;
+-        }
+-        const size_t byte_offset = wav_header_size + (size_t) n_streamed_samples * sizeof(int16_t);
+-        const size_t chunk_size = data_len - byte_offset;
+-        if (chunk_size > 0 && fwrite(data + byte_offset, 1, chunk_size, stdout) != chunk_size) {
+-            LOG_ERR("failed to write streamed PCM to stdout\n");
+-            return false;
+-        }
+-        if (fflush(stdout) != 0) {
+-            LOG_ERR("failed to flush streamed PCM to stdout\n");
+-            return false;
+-        }
+-        n_streamed_samples = n_samples;
+-        return true;
+-    };
+-    while (!stop && n_frames < max_new) {
+-        const float * h_next = nullptr;
+-
+-        // stage 2+3: semantic --> acoustic details --> audio waveform
+-        //            step_gen() runs both stages and returns new h_state for next step
+-        if (gen.step_gen(sampled, h_state, &h_next, &stop) != 0) {
+-            LOG_ERR("step_gen failed at frame %d\n", n_frames);
+-            return 1;
+-        }
+-        if (!h_next) {
+-            break; // stopped without generating a frame
+-        }
+-
+-        n_frames++;
+-        h_state = h_next;
+-        sampled = sample_semantic_code();
+-        if (params.tts_stream && n_frames % params.tts_stream_frames == 0 && !stream_audio()) {
+-            LOG_ERR("incremental waveform decode failed at frame %d\n", n_frames);
+-            return 1;
+-        }
+-        timings.report(n_frames);
+-    }
+-    const double t_gen_s = (ggml_time_us() - t_gen_start_us) / 1e6;
+-
+-    int32_t      sample_rate = 0;
+-    const char * data        = nullptr;
+-    size_t       data_len    = 0;
+-    int64_t      n_samples   = 0;
+-    const int64_t t_wav_start_us = ggml_time_us();
+-    if (params.tts_stream && !stream_audio()) {
+-        LOG_ERR("final incremental waveform decode failed\n");
+-        return 1;
+-    }
+-    if (gen.get_output(&sample_rate, &data, &data_len, &n_samples) != 0) {
+-        LOG_ERR("get_output failed\n");
+-        return 1;
+-    }
+-    const double t_wav_s = (ggml_time_us() - t_wav_start_us) / 1e6;
+-
+-    LOG_INF("generated %d frames, %zu bytes of WAV audio (%d Hz)\n", n_frames, data_len, sample_rate);
+-
+-    const double t_prompt_s = (t_gen_start_us - t_prompt_start_us) / 1e6;
+-    const double t_total_s  = t_prompt_s + t_gen_s + t_wav_s;
+-    const double audio_s    = sample_rate > 0 ? (double) n_samples / sample_rate : 0.0;
+-    LOG_INF("timings: prompt eval %.2fs + generation %.2fs + vocoder %.2fs = total %.2fs\n",
+-            t_prompt_s, t_gen_s, t_wav_s, t_total_s);
+-    LOG_INF("         output audio = %.2fs (audio time = %.2fx process time)\n", audio_s, t_total_s > 0 ? audio_s / t_total_s : 0.0);
+-    FILE * f = fopen(params.out_file.c_str(), "wb");
+-    if (!f) {
+-        LOG_ERR("failed to open %s\n", params.out_file.c_str());
+-        return 1;
+-    }
+-    const bool write_ok = fwrite(data, 1, data_len, f) == data_len;
+-    fclose(f);
+-    if (!write_ok) {
+-        LOG_ERR("failed to write %s\n", params.out_file.c_str());
+-        return 1;
+-    }
+-    LOG_INF("wrote %s\n", params.out_file.c_str());
++    auto generate = [&](const std::string & prompt, bool framed) -> bool {
++        gen.reset();
++        llama_memory_clear(llama_get_memory(lctx), true);
++        common_sampler_reset(smpl);
++
++        mtmd_helper_gen_audio_inp inp{};
++        inp.seq_id      = 0;
++        inp.prompt      = prompt.c_str();
++        inp.prompt_len  = prompt.size();
++        inp.speaker_ref = speaker_bitmap.get();
++        inp.lang        = params.tts_lang.c_str();
++        inp.top_k       = params.sampling.top_k;
++        inp.top_p       = params.sampling.top_p;
++        inp.seed        = params.sampling.seed;
++        inp.out_type    = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
++
++        if (gen.set_input(&inp) != 0) {
++            LOG_ERR("set_input failed\n");
++            return false;
++        }
++
++        const int64_t t_prompt_start_us = ggml_time_us();
++        for (;;) {
++            int32_t ret = gen.step_prompt(params.n_batch);
++            if (ret < 0) {
++                LOG_ERR("prompt processing failed\n");
++                return false;
++            }
++            if (ret == 0) {
++                break;
++            }
++        }
++
++        auto sample_semantic_code = [&]() -> llama_token {
++            llama_token t = common_sampler_sample(smpl, lctx, -1);
++            common_sampler_accept(smpl, t, true);
++            return t;
++        };
++
++        const int max_new = params.n_predict > 0 ? params.n_predict : 512;
++        int n_frames = 0;
++        llama_token sampled = sample_semantic_code();
++        const float * h_state = llama_get_embeddings_ith(lctx, -1);
++        tts_timings timings;
++        const int64_t t_gen_start_us = ggml_time_us();
++        bool stop = false;
++        int64_t n_streamed_samples = 0;
++        auto stream_audio = [&]() -> bool {
++            int32_t      sample_rate = 0;
++            const char * data        = nullptr;
++            size_t       data_len    = 0;
++            int64_t      n_samples   = 0;
++            if (gen.get_output(&sample_rate, &data, &data_len, &n_samples) != 0) {
++                return false;
++            }
++            const size_t wav_header_size = 44;
++            const size_t pcm_size = (size_t) n_samples * sizeof(int16_t);
++            if (n_samples < n_streamed_samples || data_len != wav_header_size + pcm_size) {
++                LOG_ERR("invalid incremental WAV output\n");
++                return false;
++            }
++            const size_t byte_offset = wav_header_size + (size_t) n_streamed_samples * sizeof(int16_t);
++            const size_t chunk_size = data_len - byte_offset;
++            if (chunk_size > 0) {
++                if (framed) {
++                    if (!tts_write_frame('A', data + byte_offset, chunk_size)) {
++                        return false;
++                    }
++                } else if (fwrite(data + byte_offset, 1, chunk_size, stdout) != chunk_size || fflush(stdout) != 0) {
++                    return false;
++                }
++            }
++            n_streamed_samples = n_samples;
++            return true;
++        };
++
++        while (!stop && n_frames < max_new) {
++            const float * h_next = nullptr;
++            if (gen.step_gen(sampled, h_state, &h_next, &stop) != 0) {
++                LOG_ERR("step_gen failed at frame %d\n", n_frames);
++                return false;
++            }
++            if (!h_next) {
++                break;
++            }
++            n_frames++;
++            h_state = h_next;
++            sampled = sample_semantic_code();
++            if (params.tts_stream && n_frames % params.tts_stream_frames == 0 && !stream_audio()) {
++                LOG_ERR("incremental waveform decode failed at frame %d\n", n_frames);
++                return false;
++            }
++            timings.report(n_frames);
++        }
++        const double t_gen_s = (ggml_time_us() - t_gen_start_us) / 1e6;
++
++        int32_t      sample_rate = 0;
++        const char * data        = nullptr;
++        size_t       data_len    = 0;
++        int64_t      n_samples   = 0;
++        const int64_t t_wav_start_us = ggml_time_us();
++        if (params.tts_stream && !stream_audio()) {
++            LOG_ERR("final incremental waveform decode failed\n");
++            return false;
++        }
++        if (gen.get_output(&sample_rate, &data, &data_len, &n_samples) != 0) {
++            LOG_ERR("get_output failed\n");
++            return false;
++        }
++        const double t_wav_s = (ggml_time_us() - t_wav_start_us) / 1e6;
++        LOG_INF("generated %d frames, %zu bytes of WAV audio (%d Hz)\n", n_frames, data_len, sample_rate);
++        const double t_prompt_s = (t_gen_start_us - t_prompt_start_us) / 1e6;
++        const double t_total_s  = t_prompt_s + t_gen_s + t_wav_s;
++        const double audio_s    = sample_rate > 0 ? (double) n_samples / sample_rate : 0.0;
++        LOG_INF("timings: prompt eval %.2fs + generation %.2fs + vocoder %.2fs = total %.2fs\n",
++                t_prompt_s, t_gen_s, t_wav_s, t_total_s);
++        LOG_INF("         output audio = %.2fs (audio time = %.2fx process time)\n", audio_s, t_total_s > 0 ? audio_s / t_total_s : 0.0);
++
++        if (framed) {
++            return tts_write_frame('D');
++        }
++        FILE * f = fopen(params.out_file.c_str(), "wb");
++        if (!f) {
++            LOG_ERR("failed to open %s\n", params.out_file.c_str());
++            return false;
++        }
++        const bool write_ok = fwrite(data, 1, data_len, f) == data_len;
++        fclose(f);
++        if (!write_ok) {
++            LOG_ERR("failed to write %s\n", params.out_file.c_str());
++            return false;
++        }
++        LOG_INF("wrote %s\n", params.out_file.c_str());
++        return true;
++    };
++
++    if (params.tts_persistent) {
++        if (!tts_write_frame('R')) {
++            LOG_ERR("failed to write persistent worker readiness frame\n");
++            return 1;
++        }
++        std::string encoded_prompt;
++        while (std::getline(std::cin, encoded_prompt)) {
++            try {
++                if (encoded_prompt.size() > 32768) {
++                    throw base64_error("prompt frame is too large");
++                }
++                const std::string prompt = base64::decode(encoded_prompt);
++                if (prompt.empty()) {
++                    throw base64_error("prompt is empty");
++                }
++                if (!generate(prompt, true)) {
++                    const std::string error = "persistent TTS generation failed";
++                    tts_write_frame('E', error.data(), error.size());
++                }
++            } catch (const std::exception & error) {
++                const std::string message = error.what();
++                if (!tts_write_frame('E', message.data(), message.size())) {
++                    break;
++                }
++            }
++        }
++    } else if (!generate(params.prompt, false)) {
++        return 1;
++    }
+ 
+     llama_backend_free();
+     return 0;

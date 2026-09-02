@@ -19,7 +19,7 @@ Omni phone portal :8920
 Omni adapter :8910
   ├── Qwen3-Omni comprehension :8901  (broker-scoped CUDA, persistent)
   ├── Ollama language :11434           (broker-owned lanes)
-  └── Qwen3-TTS :8892                  (broker-coordinated CUDA, single-shot)
+  └── Qwen3-TTS :8892                  (broker-scoped CUDA, persistent)
 ```
 
 The portal remains externally pinned to the combined Omni tag. Its language
@@ -80,13 +80,14 @@ stopping capture. Portable adapter v1 remains `stream:false`;
 `/api/chat/stream` is an authenticated portal extension with stage, text,
 thinking, PCM, and one authoritative final adapter event.
 
-Qwen3-TTS uses four codec frames per streaming decoder window by default,
-approximately 320 ms for the packaged 12 Hz model. The browser schedules the
-first received PCM with a 10 ms floor and queues later chunks on the Web Audio
-timeline. The final response retains a complete replayable WAV even when live
-PCM playback succeeded. `stage=tts` is a preparing state; `audio_start` is now
-emitted only with the first actual PCM chunk, so “streaming” never describes a
-request that is still in model prefill.
+Qwen3-TTS uses one codec frame per state-carrying decoder window by default,
+approximately 80 ms for the packaged 12 Hz model. Its persistent CUDA worker
+loads the model/projector/speaker once and resets generation state between
+requests. The browser schedules the first received PCM with a 3 ms floor and
+queues later chunks on the Web Audio timeline. The final response retains a
+complete replayable WAV even when live PCM playback succeeded. `stage=tts` is a
+preparing state; `audio_start` is emitted only with the first actual PCM chunk,
+so “streaming” never describes a request that is still in model prefill.
 The 512-frame ceiling applies to each synthesis block. Longer replies are split
 at natural text boundaries, retain one continuous PCM sequence across blocks,
 and finish as a single assembled replay WAV instead of stopping near 40 seconds.
@@ -107,8 +108,9 @@ and the document index; idle indexes expire after five minutes.
 
 Re-recording replaces the previous unsent camera capture. The exact submitted
 blob remains visible as a muted looping thumbnail in the user turn. Each media
-submission sends only its current media bytes and starts a new media context;
-prior media and generated descriptions are not replayed. The adapter also sets
+submission sends only its current media bytes. Prior text dialogue remains as
+conversation context, but an explicit boundary says it is not current visual
+evidence; prior media bytes are never replayed. The adapter also sets
 `cache_prompt:false` on the llama.cpp comprehension request. This is mandatory:
 multimodal prompt-slot reuse can otherwise answer a new clip from the previous
 clip's decoded embeddings.
@@ -118,6 +120,23 @@ as soon as send accepts a request, its focus border remains neutral, and the
 locked mobile viewport prevents focus/pinch zoom. Page content is not
 selectable and does not expose iOS touch callouts; text entry fields retain
 normal cursor and editing behavior.
+
+The live-call instruction answers the user's intent directly and forbids
+echoing, transcription, or paraphrase unless requested. Both audio-only and
+camera-call turns include the prior bounded text dialogue. A camera turn adds
+only the newest frame and labels older scene descriptions as historical.
+
+Same-origin IndexedDB persists rendered messages, text context, drafts, reply
+audio, pending attachments, and bounded media previews across reload. Its key
+contains a one-way scope derived from the Secure cookie. Active pages renew a
+five-minute lease; page leave starts expiry, and trash deletes browser cache,
+document index, and diagnostics immediately. Restored media is display-only and
+never enters a new request automatically.
+
+Each request prepends a fresh trusted runtime snapshot with date/time,
+OS/architecture, CPU/load, RAM, bounded interface counters, and NVIDIA
+utilization. Hostnames, addresses, routes, sockets, processes, credentials, and
+session content are excluded.
 
 Reasoning defaults off. The portal always sends a boolean Ollama `think` field:
 `false` until the brain control is explicitly enabled, then `true`. Native
@@ -132,8 +151,9 @@ The default portal admits four simultaneous HTTP requests and serializes them
 through one GPU inference lane. The number beside **ONLINE** counts distinct
 browser sessions with active or queued work. Request bodies, streams, media,
 voice overrides, tool rounds, and responses remain request-local. Conversation
-history exists only in each browser page; the server has no shared conversation
-or media history to bleed into another user. The optional in-memory document
+history exists only in each session-scoped IndexedDB record; the server has no
+shared conversation or media history to bleed into another user. Records expire
+five minutes after page leave and trash removes them immediately. The optional in-memory document
 index is keyed by the hashed opaque session cookie, has independent bounds and
 expiry, and is never searched across sessions.
 
@@ -189,7 +209,7 @@ speaker-embedding cloning and separate VoiceDesign/CustomVoice checkpoints.
 | PDF/DOCX/text | relevant extracted chunks answer the query; another session retrieves none |
 | Sequential video isolation | red → blue → red clips describe red → blue → red; `cache_prompt=false` |
 | TTS | valid 24 kHz mono PCM16 WAV playable on phone |
-| TTS first PCM | four-frame window and browser first-audio milestone recorded |
+| TTS first PCM | one-frame window, resident worker reuse, and browser first-audio milestone recorded |
 | Concurrent sessions | two users show active/queued counts and receive only their own marker |
 | Diagnostic lifecycle | journals are session-isolated; trash deletes immediately; idle data expires in 300 s |
 | CUDA scope | comprehension and each TTS process resident on reserved UUID |

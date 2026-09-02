@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Session cache browser harness</title></head>
+<body data-result="pending">
+  <script src="./static/session_cache.js"></script>
+  <script>
+    (async () => {
+      const action = new URLSearchParams(location.search).get("action") || "read";
+      const scope = "omni-session-cache-browser-harness";
+      if (action === "write") {
+        await window.OmniSessionCache.save(scope, {
+          schema: "robit.omni.browser-session.v1",
+          history: [{ role: "user", content: "reload survives" }],
+          messages: [{
+            role: "user",
+            content: "reload survives",
+            media: [{ kind: "video", mime: "video/webm", data: "AAAA" }],
+          }],
+        });
+      } else if (action === "clear") {
+        await window.OmniSessionCache.clear(scope);
+      }
+      const snapshot = await window.OmniSessionCache.load(scope);
+      document.body.dataset.result = snapshot ? "present" : "empty";
+      document.body.textContent = JSON.stringify(snapshot);
+    })().catch(error => {
+      document.body.dataset.result = "error";
+      document.body.textContent = String(error);
+    });
+  </script>
+</body>
+</html>

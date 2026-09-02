@@ -91,8 +91,8 @@ after the worker exits and CUDA memory is freed.
 
 ## Start TTS
 
-`examples/omni_adapter/tts_server.py` is a serial reference wrapper around the
-upstream single-shot `llama-tts` program. It can resolve the sidecar directly:
+`examples/omni_adapter/tts_server.py` is a serial wrapper around the patched
+persistent/streaming `llama-tts` program. It can resolve the sidecar directly:
 
 ```bash
 export OMNI_OLLAMA_MODEL="$MODEL"
@@ -105,20 +105,19 @@ python examples/omni_adapter/tts_server.py
 For CPU validation set `OMNI_TTS_GPU_LAYERS=0`. For a manually scoped CUDA
 deployment, give the wrapper `OLLAMA_UNIFY_GPU_LEASE`, `OMNI_TTS_GPU_UUID`, and
 an exactly matching `CUDA_VISIBLE_DEVICES`. With `OMNI_TTS_GPU_LAYERS=-1`, it
-calls broker `prepare`, starts the single-shot process, verifies that PID's
-residency on the reserved UUID, and calls `ready`. A production implementation
-should keep a libmtmd TTS worker resident while retaining the same
-`/synthesize` contract.
+calls broker `prepare`, starts the persistent process, verifies that PID's
+residency and explicit ready frame, and calls `ready`. Matching voice profiles
+reuse the loaded graph while preserving the same `/synthesize` contract.
 
-The interactive wrapper default is `OMNI_TTS_STREAM_FRAMES=4`, approximately
-320 ms of codec audio per state-carrying decode window. The phone schedules the
-first PCM buffer with a 10 ms floor. A live 12-frame versus four-frame probe on
-the reference worker reduced measured first PCM from 2454.7 ms to 2253.8 ms
-for the same short sentence; total generation increased from 2933.5 ms to
-3000.9 ms. Treat those host-specific values as a latency/throughput example,
-not a universal benchmark. The larger remaining startup cost comes from the
-single-shot worker's per-request model load; a persistent libmtmd service is the
-next architectural optimization.
+The interactive wrapper default is `OMNI_TTS_STREAM_FRAMES=1`, approximately
+80 ms of codec audio per state-carrying decode window. The phone schedules the
+first PCM buffer with a 3 ms floor. On the reference deployment, a cold
+single-process request reached first PCM in 899.2 ms; the next matching-profile
+request reused the resident worker and reached first PCM in 96.8 ms. Treat
+those host-specific values as evidence of the loading-path change, not a
+universal benchmark. Deployment pays model loading during worker warmup;
+subsequent matching-profile requests begin generation without that reload.
+Changing the voice profile intentionally replaces the resident worker.
 
 ## Start the unified adapter
 

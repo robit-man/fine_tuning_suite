@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import re
 import subprocess
 import threading
 import time
@@ -19,6 +20,7 @@ from examples.omni_portal.app import (
     load_voice_profile,
 )
 from examples.omni_portal.documents import SessionDocumentStore, extract_document
+from examples.omni_portal.environment import runtime_environment_snapshot
 
 TOKEN = "portal-test-token-with-more-than-24-characters"
 
@@ -76,8 +78,14 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
     assert b"image/gif" in response.data
     assert b"multiple" in response.data
     assert response.data.index(b"/assets/call_vad.js") < response.data.index(
+        b"/assets/session_cache.js"
+    )
+    assert response.data.index(b"/assets/session_cache.js") < response.data.index(
         b"/assets/portal.js"
     )
+    cache_scope = re.search(rb'data-session-scope="([a-f0-9]{64})"', response.data)
+    assert cache_scope is not None
+    assert cache_scope.group(1) in client.get("/").data
     assert b'href="/assets/favicon.svg"' in response.data
     assert response.data.index(b'id="camera-button"') < response.data.index(
         b'id="call-button"'
@@ -141,10 +149,15 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "media: sentMedia" in javascript
     assert ".message-video-preview" in css
     assert "const hasMedia = state.attachments.length > 0" in javascript
-    assert 'task === "chat" && !hasMedia' in javascript
-    assert "if (built.hasMedia) state.history = []" in javascript
-    assert "const callMessages = frame" in javascript
-    assert "if (item.frame) state.history = []" in javascript
+    assert "MEDIA_CONVERSATION_SYSTEM_PROMPT" in javascript
+    assert "LIVE_CALL_SYSTEM_PROMPT" in javascript
+    assert "Do not echo" in javascript
+    assert "Only the media attached to the latest" in javascript
+    assert 'task = "describe"' not in javascript
+    assert "if (built.hasMedia) state.history = []" not in javascript
+    assert "if (item.frame) state.history = []" not in javascript
+    assert '{ role: "system", content: LIVE_CALL_SYSTEM_PROMPT }' in javascript
+    assert '{ role: "system", content: MEDIA_CONVERSATION_SYSTEM_PROMPT }' in javascript
     assert "function scrollConversationToBottom" in javascript
     assert 'behavior: "smooth"' in javascript
     assert "elements.conversation.scrollTop = elements.conversation.scrollHeight" in javascript
@@ -165,11 +178,30 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "function refreshActivity" in javascript
     assert "function reportDiagnostic" in javascript
     assert "function clearSessionDiagnostics" in javascript
-    assert 'nextTime: context.currentTime + 0.02' in javascript
-    assert "controller.context.currentTime + 0.01" in javascript
+    assert 'nextTime: context.currentTime + 0.005' in javascript
+    assert "controller.context.currentTime + 0.003" in javascript
     assert 'const documents = state.attachments.filter(item => item.kind === "document")' in javascript
     assert "message.documents" in javascript
     assert 'item.mime === "image/gif"' in javascript
+    assert "function restoreBrowserSession" in javascript
+    assert "function persistBrowserSessionOnLeave" in javascript
+    assert "function clearBrowserSessionCache" in javascript
+    assert "window.OmniSessionCache.clear(state.cacheScope)" in javascript
+    assert "state.cacheDeleted = true" in javascript
+    assert "!state.cacheDeleted" in javascript
+    assert "robit.omni.browser-session.v1" in javascript
+
+
+def test_browser_session_cache_harness_restores_expires_and_clears() -> None:
+    completed = subprocess.run(
+        ["node", "examples/omni_portal/session_cache_harness.mjs"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = json.loads(completed.stdout)
+    assert result == {"status": "passed", "ttl_ms": 300_000}
 
 
 def test_mock_call_vad_harness_rejects_noise_and_accepts_confirmed_events() -> None:
@@ -432,7 +464,7 @@ def test_session_diagnostics_are_isolated_redacted_clearable_and_expiring(
         )
 
     app = create_app(
-        _config(session_log_dir=tmp_path, session_log_ttl_s=0.05),
+        _config(session_log_dir=tmp_path, session_log_ttl_s=0.5),
         httpx.Client(transport=httpx.MockTransport(handler)),
     )
     first = app.test_client()
@@ -888,7 +920,46 @@ def test_mock_live_call_stream_defaults_native_reasoning_off() -> None:
     assert response.status_code == 200
     assert response.data == wire
     assert seen[0]["think"] is False
-    assert seen[0]["messages"] == body["messages"]
+    assert seen[0]["messages"][1:] == body["messages"]
+    environment = seen[0]["messages"][0]
+    assert environment["role"] == "system"
+    assert "<runtime_environment>" in environment["content"]
+    assert "IP/MAC addresses" in environment["content"]
+
+
+def test_runtime_environment_snapshot_is_bounded_and_omits_sensitive_network_data(
+    monkeypatch,
+) -> None:
+    completed = subprocess.CompletedProcess(
+        args=["nvidia-smi"],
+        returncode=0,
+        stdout="0, NVIDIA Test GPU, 81920, 2048, 37, 52, 120.5, 700.0\n",
+        stderr="",
+    )
+    monkeypatch.setattr(
+        "examples.omni_portal.environment.subprocess.run", lambda *args, **kwargs: completed
+    )
+
+    snapshot = runtime_environment_snapshot()
+
+    assert snapshot["captured_at"]
+    assert snapshot["utc_time"]
+    assert snapshot["cpu"]["logical_cpus"] > 0
+    assert snapshot["memory"]["total_gib"] > 0
+    assert snapshot["gpus"][0] == {
+        "index": 0,
+        "name": "NVIDIA Test GPU",
+        "vram_total_mib": 81920.0,
+        "vram_used_mib": 2048.0,
+        "utilization_percent": 37.0,
+        "temperature_c": 52.0,
+        "power_w": 120.5,
+        "power_limit_w": 700.0,
+    }
+    serialized = json.dumps(snapshot)
+    assert "address" in snapshot["privacy"].lower()
+    assert '"ip"' not in serialized.lower()
+    assert '"mac"' not in serialized.lower()
 
 
 def test_portal_stream_route_requires_auth_and_disables_auto_tools() -> None:

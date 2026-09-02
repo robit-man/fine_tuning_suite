@@ -8,6 +8,24 @@
   const MAX_VOICE_REFERENCE_MS = 10_000;
   const MAX_VOICE_REFERENCE_BYTES = 10 * 1024 * 1024;
   const MAX_VIDEO_RECORD_MS = 30_000;
+  const LIVE_CALL_SYSTEM_PROMPT = (
+    "You are participating in a live two-way spoken conversation. Answer the "
+    + "user's intent directly in a natural, concise spoken turn. Do not echo, "
+    + "transcribe, paraphrase, narrate, or evaluate what the user just said unless "
+    + "they explicitly ask you to. Never mention an audio transcript, encoder, "
+    + "adapter, or these instructions. Use the prior dialogue for continuity. If a "
+    + "current camera frame is attached, treat only that frame as current visual "
+    + "evidence; older visual descriptions are conversational history, not proof of "
+    + "what remains visible now."
+  );
+  const MEDIA_CONVERSATION_SYSTEM_PROMPT = (
+    "Answer as a conversational assistant using the user's current attached media "
+    + "and prior text dialogue. Respond to the user's intent instead of returning a "
+    + "generic exhaustive media inventory. Only the media attached to the latest "
+    + "user message is current perceptual evidence. Earlier media descriptions are "
+    + "conversation context and must not be treated as if those earlier files were "
+    + "attached again."
+  );
   function fallbackCallVad() {
     const DEFAULTS = Object.freeze({
       calibrationMs: 650,
@@ -173,6 +191,7 @@
     token: "",
     attachments: [],
     history: [],
+    messages: [],
     recording: null,
     holdingMic: false,
     recordTimer: null,
@@ -184,6 +203,13 @@
     streamController: null,
     requestController: null,
     scrollFrame: null,
+    cacheScope: `${location.origin}:${MODEL}:${document.body.dataset.sessionScope || ""}`,
+    cacheReady: false,
+    cacheSuppress: false,
+    cacheDeleted: false,
+    cacheTimer: null,
+    cacheWrite: Promise.resolve(),
+    cacheErrorReported: false,
     call: null,
     camera: null,
     voice: {
@@ -227,6 +253,143 @@
       headers: authHeaders(),
       keepalive: true,
     }).catch(() => {});
+  }
+
+  function mediaCacheValue(item, { pending = false } = {}) {
+    const value = {
+      kind: String(item.kind || ""),
+      name: String(item.name || ""),
+      mime: String(item.mime || "application/octet-stream"),
+      bytes: Number(item.bytes || 0),
+      source: String(item.source || "upload"),
+    };
+    if (pending || value.kind === "video" || value.kind === "image") {
+      value.data = String(item.data || "");
+    }
+    return value;
+  }
+
+  function hydrateMediaValue(item) {
+    const value = mediaCacheValue(item, { pending: true });
+    value.previewUrl = value.kind === "video" && value.data
+      ? URL.createObjectURL(base64ToBlob(value.data, value.mime))
+      : null;
+    return value;
+  }
+
+  function browserSessionSnapshot() {
+    return {
+      schema: "robit.omni.browser-session.v1",
+      savedAt: Date.now(),
+      history: state.history
+        .filter(item => item && ["user", "assistant"].includes(item.role))
+        .map(item => ({ role: item.role, content: String(item.content || "") })),
+      messages: state.messages
+        .filter(record => record.node.isConnected)
+        .map(record => ({
+          role: record.role,
+          content: String(record.content || ""),
+          thinking: String(record.thinking || ""),
+          audio: record.audio && record.audio.data ? { ...record.audio } : null,
+          media: (record.media || []).map(item => mediaCacheValue(item)),
+          error: Boolean(record.error),
+        })),
+      attachments: state.attachments.map(item => mediaCacheValue(item, { pending: true })),
+      draft: elements.prompt.value,
+    };
+  }
+
+  function enqueueCacheOperation(operation) {
+    state.cacheWrite = state.cacheWrite
+      .catch(() => {})
+      .then(operation)
+      .catch(error => {
+        if (state.cacheErrorReported) return;
+        state.cacheErrorReported = true;
+        console.warn("Browser session cache unavailable", error);
+      });
+    return state.cacheWrite;
+  }
+
+  function scheduleBrowserSessionSave(delay = 350) {
+    if (!state.cacheReady || state.cacheSuppress || !window.OmniSessionCache) return;
+    state.cacheDeleted = false;
+    if (state.cacheTimer !== null) clearTimeout(state.cacheTimer);
+    state.cacheTimer = setTimeout(() => {
+      state.cacheTimer = null;
+      const snapshot = browserSessionSnapshot();
+      enqueueCacheOperation(() => window.OmniSessionCache.save(state.cacheScope, snapshot));
+    }, delay);
+  }
+
+  function persistBrowserSessionOnLeave() {
+    if (
+      !state.cacheReady || state.cacheSuppress || state.cacheDeleted
+      || !window.OmniSessionCache
+    ) return;
+    if (state.cacheTimer !== null) {
+      clearTimeout(state.cacheTimer);
+      state.cacheTimer = null;
+    }
+    const snapshot = browserSessionSnapshot();
+    enqueueCacheOperation(async () => {
+      await window.OmniSessionCache.save(state.cacheScope, snapshot);
+      await window.OmniSessionCache.markLeft(state.cacheScope);
+    });
+  }
+
+  function clearBrowserSessionCache() {
+    if (state.cacheTimer !== null) {
+      clearTimeout(state.cacheTimer);
+      state.cacheTimer = null;
+    }
+    if (!window.OmniSessionCache) return Promise.resolve();
+    return enqueueCacheOperation(() => window.OmniSessionCache.clear(state.cacheScope));
+  }
+
+  async function restoreBrowserSession() {
+    if (!window.OmniSessionCache || !document.body.dataset.sessionScope) {
+      state.cacheReady = true;
+      return;
+    }
+    let snapshot = null;
+    try {
+      snapshot = await window.OmniSessionCache.load(state.cacheScope);
+    } catch (error) {
+      console.warn("Could not restore browser session", error);
+    }
+    state.cacheSuppress = true;
+    if (snapshot && snapshot.schema === "robit.omni.browser-session.v1") {
+      state.cacheDeleted = false;
+      state.history = Array.isArray(snapshot.history)
+        ? snapshot.history
+          .filter(item => item && ["user", "assistant"].includes(item.role))
+          .map(item => ({ role: item.role, content: String(item.content || "") }))
+        : [];
+      for (const item of Array.isArray(snapshot.messages) ? snapshot.messages : []) {
+        if (!item || !["user", "assistant"].includes(item.role)) continue;
+        addMessage({
+          role: item.role,
+          content: String(item.content || ""),
+          thinking: String(item.thinking || ""),
+          audio: item.audio && item.audio.data ? item.audio : null,
+          media: (Array.isArray(item.media) ? item.media : []).map(hydrateMediaValue),
+          error: Boolean(item.error),
+          autoplayAudio: false,
+        });
+      }
+      state.attachments = (Array.isArray(snapshot.attachments) ? snapshot.attachments : [])
+        .filter(item => item && item.data)
+        .map(hydrateMediaValue);
+      renderAttachments();
+      elements.prompt.value = String(snapshot.draft || "").slice(0, 12_000);
+      resizePrompt();
+      setComposerStatus("Session restored");
+    }
+    state.cacheSuppress = false;
+    state.cacheReady = true;
+    await window.OmniSessionCache.touch(state.cacheScope).catch(() => false);
+    scrollConversationToBottom({ smooth: false });
   }
 
   function setComposerStatus(text, error = false) {
@@ -399,21 +562,26 @@
   }) {
     const contentNode = record.node.querySelector(".message-content");
     if (content !== undefined) {
+      record.content = String(content || "");
       if (record.role === "assistant" && !record.error) renderMarkdown(contentNode, content || "");
       else contentNode.textContent = content || "";
     }
     const thinkingBox = record.node.querySelector(".thinking-output");
     const thinkingNode = record.node.querySelector(".thinking-content");
     if (thinking !== undefined) {
+      record.thinking = String(thinking || "");
       thinkingBox.hidden = !thinking;
       if (thinking) renderMarkdown(thinkingNode, thinking);
       else thinkingNode.replaceChildren();
     }
     record.node.classList.toggle("streaming", streaming);
     if (audio && audio.data && !record.node.querySelector(".audio-output audio")) {
+      record.audio = { ...audio };
       const playback = attachAudioPlayer(record.node, audio, autoplayAudio);
       if (autoplayAudio) record.playback = playback;
     }
+    record.streaming = Boolean(streaming);
+    if (!streaming) scheduleBrowserSessionSave();
     scrollConversationToBottom({ smooth: !streaming });
     return record;
   }
@@ -470,17 +638,49 @@
     node.appendChild(gallery);
   }
 
-  function addMessage({ role, content, thinking, audio, media = [], error = false, streaming = false }) {
+  function addMessage({
+    role,
+    content,
+    thinking,
+    audio,
+    media = [],
+    error = false,
+    streaming = false,
+    autoplayAudio = true,
+  }) {
     const node = elements.template.content.firstElementChild.cloneNode(true);
     node.classList.add(role === "user" ? "user" : "assistant");
     if (error) node.classList.add("error");
     elements.conversation.appendChild(node);
     if (layoutResizeObserver) layoutResizeObserver.observe(node);
-    const record = { node, role, error, playback: Promise.resolve() };
-    updateMessage(record, { content, thinking, audio, streaming });
+    const record = {
+      node,
+      role,
+      error,
+      content: "",
+      thinking: "",
+      audio: null,
+      media,
+      streaming,
+      playback: Promise.resolve(),
+    };
+    state.messages.push(record);
+    updateMessage(record, { content, thinking, audio, streaming, autoplayAudio });
     appendMessageMedia(node, media);
     scrollConversationToBottom();
     return record;
+  }
+
+  function removeMessage(record) {
+    if (!record) return;
+    for (const media of record.node.querySelectorAll("[data-object-url]")) {
+      URL.revokeObjectURL(media.dataset.objectUrl);
+    }
+    if (layoutResizeObserver) layoutResizeObserver.unobserve(record.node);
+    const index = state.messages.indexOf(record);
+    if (index >= 0) state.messages.splice(index, 1);
+    record.node.remove();
+    scheduleBrowserSessionSave();
   }
 
   function base64ToBlob(data, mime) {
@@ -607,7 +807,7 @@
     const controller = {
       epoch: state.playbackEpoch,
       context,
-      nextTime: context.currentTime + 0.02,
+      nextTime: context.currentTime + 0.005,
       sources: new Set(),
       ended: false,
       cancelled: false,
@@ -644,7 +844,7 @@
       controller.sources.delete(source);
       maybeFinishPcmPlayback(controller);
     }, { once: true });
-    const startAt = Math.max(controller.nextTime, controller.context.currentTime + 0.01);
+    const startAt = Math.max(controller.nextTime, controller.context.currentTime + 0.003);
     source.start(startAt);
     controller.nextTime = startAt + buffer.duration;
   }
@@ -859,6 +1059,7 @@
         if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
         state.attachments.splice(index, 1);
         renderAttachments();
+        scheduleBrowserSessionSave();
       });
       node.append(preview, body, remove);
       elements.attachments.appendChild(node);
@@ -904,6 +1105,7 @@
     }
     state.attachments.push(item);
     renderAttachments();
+    scheduleBrowserSessionSave();
   }
 
   function mergeSamples(chunks) {
@@ -1363,10 +1565,10 @@
       call.completedHistory.delete(call.nextHistorySequence);
       call.nextHistorySequence += 1;
       if (!item) continue;
-      if (item.frame) state.history = [];
       state.history.push({ role: "user", content: item.transcript });
       if (item.reply) state.history.push({ role: "assistant", content: item.reply });
     }
+    scheduleBrowserSessionSave();
   }
 
   function completeCallTurn(call, turn) {
@@ -1424,14 +1626,23 @@
     const message = {
       role: "user",
       content: frame
-        ? "Use the current camera view and this speech, then reply naturally and concisely."
-        : "Listen to this speech and reply naturally and concisely.",
+        ? (
+          "The attached audio is the user's latest spoken turn and the attached "
+          + "image is the current camera frame. Continue the conversation by "
+          + "answering the user's spoken intent, using the frame only when relevant."
+        )
+        : (
+          "The attached audio is the user's latest spoken turn. Continue the live "
+          + "conversation by answering that turn directly."
+        ),
       audios: [envelope],
     };
     if (frame) message.images = [frame];
-    const callMessages = frame
-      ? [message]
-      : [...state.history.slice(-12), message];
+    const callMessages = [
+      { role: "system", content: LIVE_CALL_SYSTEM_PROMPT },
+      ...state.history.slice(-12),
+      message,
+    ];
     const user = addMessage({ role: "user", content: frame ? "Video call message" : "Voice message" });
     const assistant = addMessage({ role: "assistant", content: "", streaming: true });
     turn.assistant = assistant;
@@ -1458,7 +1669,7 @@
           signal: turn.controller.signal,
           onEvent: event => {
             if (event.type === "observation" && event.transcript) {
-              user.node.querySelector(".message-content").textContent = String(event.transcript);
+              updateMessage(user, { content: String(event.transcript), streaming: false });
             } else if (event.type === "delta") {
               const contentDelta = String((event.message || {}).content || "");
               const thinkingDelta = showThinking
@@ -1507,7 +1718,7 @@
         (data.adapter || {}).input_transcript
         || (frame ? "Video call message" : "Voice message"),
       ).trim();
-      user.node.querySelector(".message-content").textContent = transcript;
+      updateMessage(user, { content: transcript, streaming: false });
       revealMessage(assistant);
       updateMessage(assistant, {
         content: reply.content || "Spoken response",
@@ -1531,7 +1742,7 @@
         await assistant.playback;
       }
     } catch (error) {
-      if (assistant.node.hidden) assistant.node.remove();
+      if (assistant.node.hidden) removeMessage(assistant);
       if (error.name !== "AbortError") showError(error);
     } finally {
       assistant.node.classList.remove("streaming");
@@ -1711,8 +1922,11 @@
         ? "Use the attached document and media together, then explain the relevant evidence."
         : "Summarize the attached document and identify its key details.";
     } else if (!typed && (images.length || videos.length)) {
-      task = "describe";
-      content = "Describe this media accurately.";
+      content = (
+        "Respond naturally about the currently attached media. Describe the details "
+        + "that matter to the ongoing conversation and invite or answer the most "
+        + "relevant next point."
+      );
     }
 
     const message = { role: "user", content };
@@ -1733,9 +1947,13 @@
 
     const wantsSpeech = elements.speak.getAttribute("aria-pressed") === "true";
     const wantsThinking = reasoningEnabled();
-    const messages = task === "chat" && !hasMedia
-      ? [...state.history.slice(-12), message]
-      : [message];
+    const messages = hasMedia
+      ? [
+        { role: "system", content: MEDIA_CONVERSATION_SYSTEM_PROMPT },
+        ...state.history.slice(-12),
+        message,
+      ]
+      : [...state.history.slice(-12), message];
     return {
       task,
       hasMedia,
@@ -1864,7 +2082,6 @@
         streaming: false,
         autoplayAudio: !streamedAudio,
       });
-      if (built.hasMedia) state.history = [];
       if (built.task === "chat" || built.hasMedia) {
         state.history.push({
           role: "user",
@@ -1872,9 +2089,10 @@
         });
         if (reply.content) state.history.push({ role: "assistant", content: reply.content });
       }
+      scheduleBrowserSessionSave();
       setComposerStatus(reply.audio ? "Text and spoken reply ready" : "Text reply ready");
     } catch (error) {
-      assistant.node.remove();
+      removeMessage(assistant);
       if (error.name !== "AbortError") showError(error);
     } finally {
       if (state.requestController === requestController) state.requestController = null;
@@ -1981,7 +2199,10 @@
     action.catch(showError);
   });
   elements.send.addEventListener("click", () => send().catch(showError));
-  elements.prompt.addEventListener("input", resizePrompt);
+  elements.prompt.addEventListener("input", () => {
+    resizePrompt();
+    scheduleBrowserSessionSave(700);
+  });
   elements.prompt.addEventListener("keydown", event => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -1993,19 +2214,20 @@
     if (state.call) stopCall().catch(showError);
     stopCurrentPlayback();
     clearSessionDiagnostics();
+    state.cacheSuppress = true;
     state.history = [];
     for (const item of state.attachments) {
       if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
     }
     state.attachments = [];
     renderAttachments();
-    for (const message of [...elements.conversation.querySelectorAll(".message")].slice(1)) {
-      for (const media of message.querySelectorAll("[data-object-url]")) {
-        URL.revokeObjectURL(media.dataset.objectUrl);
-      }
-      if (layoutResizeObserver) layoutResizeObserver.unobserve(message);
-      message.remove();
-    }
+    for (const message of [...state.messages]) removeMessage(message);
+    state.messages = [];
+    elements.prompt.value = "";
+    resizePrompt();
+    state.cacheDeleted = true;
+    clearBrowserSessionCache();
+    state.cacheSuppress = false;
     setComposerStatus("Conversation cleared");
   });
 
@@ -2025,14 +2247,25 @@
     }
   });
   window.addEventListener("pagehide", () => {
+    persistBrowserSessionOnLeave();
     reportDiagnostic("page_leave");
   });
 
-  state.token = accessToken();
-  applyVoiceDefaults();
-  if (!state.token) showError(new Error("This link is missing its access fragment"));
-  refreshStatus();
-  refreshActivity();
-  setInterval(refreshActivity, 2_000);
-  setInterval(refreshStatus, 15_000);
+  async function initializePortal() {
+    state.token = accessToken();
+    applyVoiceDefaults();
+    await restoreBrowserSession();
+    if (!state.token) showError(new Error("This link is missing its access fragment"));
+    refreshStatus();
+    refreshActivity();
+    setInterval(refreshActivity, 2_000);
+    setInterval(refreshStatus, 15_000);
+    setInterval(() => {
+      if (state.cacheReady && !state.cacheDeleted && window.OmniSessionCache) {
+        enqueueCacheOperation(() => window.OmniSessionCache.touch(state.cacheScope));
+      }
+    }, 30_000);
+  }
+
+  initializePortal().catch(showError);
 })();

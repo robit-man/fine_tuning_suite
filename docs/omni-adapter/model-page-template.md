@@ -110,8 +110,8 @@ This is a multi-graph semantic router, not a hidden-state tensor graft.
   layer and does not parse `audios`, `videos`, or `message.audio`.
 - Comprehension crosses into Qwen3.8 as untrusted semantic text, so dense
   cross-modal information is not preserved.
-- The reference TTS wrapper is serial and reloads `llama-tts`; production
-  deployments should use a persistent worker.
+- The reference TTS wrapper is serial and keeps one matching voice profile
+  resident; production deployments should size concurrency explicitly.
 - Current video-audio handling demuxes the audio track separately and does not
   promise sample-accurate alignment.
 - Only capabilities demonstrated by the linked release record are claimed.

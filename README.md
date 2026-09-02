@@ -423,9 +423,11 @@ image/video/GIF uploads, silent-video handling, PDF/DOCX/text retrieval, a live
 camera preview, bounded camera-call frames, safe Markdown, viewport-bounded
 token-pinned chat scrolling, native Ollama reasoning control, deterministic
 Qwen3-TTS profiles, request-local WAV voice cloning, streamed PCM playback, and
-continuously submitted barge-in voice-call turns. The default four-frame TTS windows target roughly
-320 ms decoder chunks. Distinct browser sessions are queued through a bounded
-GPU lane with no shared conversation history. Document excerpts use a bounded,
+continuously submitted barge-in voice-call turns. The low-latency worker stays
+resident and emits one-frame, roughly 80 ms PCM windows. Distinct browser
+sessions are queued through a bounded GPU lane with no shared conversation
+history. Reload-safe IndexedDB state is scoped per browser session and expires
+five minutes after page leave. Document excerpts use a bounded,
 hashed lexical index isolated to the browser session, while content-redacted
 timing journals expire five minutes after a page leaves and delete immediately
 with the trash control. The active/queued user count is shown beside **ONLINE**.
@@ -434,7 +436,10 @@ Every comprehension call disables llama.cpp prompt-slot reuse so the current
 audio/image/video bytes—not a prior media embedding—are evaluated. Camera
 re-recording replaces the prior unsent camera clip, submitted video appears as
 a looping thumbnail, and each new media turn excludes all earlier media bytes
-and descriptions. The broker-compliant CUDA-only supervisor publishes a
+while retaining prior text dialogue as explicitly non-current context. Call
+prompting answers intent rather than parroting the transcript. A privacy-bounded
+CPU/RAM/GPU/network/date-time snapshot is refreshed into trusted context every
+turn. The broker-compliant CUDA-only supervisor publishes a
 temporary Cloudflare HTTPS tunnel. See the [phone portal runbook](docs/omni-adapter/phone-portal.md)
 for endpoints, lifecycle, isolation, diagnostics, and the complete verification
 matrix.

@@ -95,6 +95,7 @@ MAX_VIDEO_FRAMES = 32
 MAX_VIDEO_FPS = 2.0
 MAX_GIF_SECONDS = 30
 DEFAULT_TTS_BLOCK_CHARS = 420
+DEFAULT_TTS_STREAM_FRAMES = 1
 MAX_TTS_BLOCKS = 32
 THINK_OPEN = "<think>"
 THINK_CLOSE = "</think>"
@@ -1034,6 +1035,7 @@ def execute_stream(
             tts_payload = {
                 "text": block,
                 "output": DEFAULT_AUDIO_CONTRACT.output.to_dict(),
+                "stream_frames": DEFAULT_TTS_STREAM_FRAMES,
                 **dict(parsed.speech),
             }
             pending = b""

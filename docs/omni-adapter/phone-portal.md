@@ -84,9 +84,10 @@ stopping capture. Portable adapter v1 remains `stream:false`;
 thinking, tool-round, PCM, and one authoritative final adapter event.
 
 The wrench button beside reasoning explicitly enables the portal's server-pinned
-structured tool array; it is off by default. The model can chain local-browser
-`web_search(mode=discover)` into bounded `web_fetch`, search the session-local
-web index, query attached documents, or use temporary session-only memory.
+structured tool array; it is off by default. The model can discover allowlisted
+capabilities, chain browser search/fetch/crawl, query or OCR attached documents,
+evaluate bounded math, inspect media metadata, federate session recall, and use
+temporary memory, notes, and tasks.
 Tool results return through standard assistant `tool_calls` and `role="tool"`
 messages; running/completed calls and bounded results appear in a collapsible
 **Tools** disclosure, and speech waits for the final answer. Web discovery uses

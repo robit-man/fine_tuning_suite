@@ -202,11 +202,11 @@ by the GGUF.
 
 Chat and live-call turns keep tools disabled until the user taps the wrench
 beside the brain button. Opted-in turns include the portal's authoritative
-eight-tool schema array and request automatic execution. Qwen3.8 emits standard Ollama
-`message.tool_calls`; the portal executes only `get_current_time`,
-`get_portal_capabilities`, `web_search`, `web_fetch`, `document_search`,
-`memory_write`, `memory_read`, and `memory_search`, appends normal tool-role
-messages, and repeats until a final answer or the four-round ceiling. The
+server-owned allowlisted schema array and request automatic execution. Qwen3.8
+emits standard Ollama `message.tool_calls`; the portal provides discovery,
+web, document/structured/OCR, memory/session recall, safe math, technical media
+analysis, working-note, and task tools, appends normal tool-role messages, and
+repeats until a final answer or the 50-call per-turn ceiling. The
 assistant message shows a compact collapsible **Tools** trace with live running,
 completed/failed state, compact arguments, and bounded result evidence. Spoken
 output is deferred until no unresolved calls remain. Native structured calls

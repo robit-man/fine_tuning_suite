@@ -565,6 +565,256 @@ def test_document_search_tool_is_session_isolated() -> None:
     assert other["results"] == []
 
 
+def test_tool_search_discovers_allowlisted_tools_only() -> None:
+    harness = PortalToolHarness(SessionDocumentStore(ttl_s=300))
+
+    result = harness.execute("one", "tool_search", {"query": "OCR scanned PDF"})
+
+    assert result["allowlisted_only"] is True
+    assert result["results"][0]["name"] == "ocr_pdf"
+    assert {item["name"] for item in result["results"]} <= {
+        item["function"]["name"] for item in SAFE_TOOLS
+    }
+
+
+def test_safe_math_eval_computes_without_code_execution() -> None:
+    harness = PortalToolHarness(SessionDocumentStore(ttl_s=300))
+
+    computed = harness.execute(
+        "one", "safe_math_eval", {"expression": "sqrt(81) + 2 ** 3"}
+    )
+    blocked = harness.execute(
+        "one", "safe_math_eval", {"expression": "__import__('os').system('id')"}
+    )
+
+    assert computed == {
+        "expression": "sqrt(81) + 2 ** 3",
+        "result": 17.0,
+        "engine": "bounded_ast",
+    }
+    assert blocked["error"] == "ToolInputError"
+
+
+def test_structured_read_queries_attached_json_and_yaml() -> None:
+    documents = SessionDocumentStore(ttl_s=300)
+    harness = PortalToolHarness(documents)
+    uploads = [
+        {
+            "name": "people.json",
+            "mime_type": "application/json",
+            "encoding": "base64",
+            "data": base64.b64encode(
+                b'{"people":[{"name":"Ada","score":9},{"name":"Lin","score":8}]}'
+            ).decode(),
+        },
+        {
+            "name": "settings.yaml",
+            "mime_type": "application/yaml",
+            "encoding": "base64",
+            "data": base64.b64encode(b"voice:\n  preset: female\n  speed: 1.1\n").decode(),
+        },
+    ]
+    _context, accepted = documents.prepare("one", uploads, "people and voice")
+
+    json_result = harness.execute(
+        "one",
+        "structured_read",
+        {"document_id": accepted[0]["id"], "path": "people[1]"},
+    )
+    yaml_result = harness.execute(
+        "one",
+        "structured_read",
+        {"document_id": accepted[1]["id"], "path": "voice"},
+    )
+
+    assert json_result["data"] == {"name": "Lin", "score": 8}
+    assert yaml_result["data"] == {"preset": "female", "speed": 1.1}
+
+
+def test_web_crawl_is_bounded_same_origin_and_indexed() -> None:
+    requested = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        if request.url.path == "/":
+            return httpx.Response(
+                200,
+                text=(
+                    '<html><title>Root</title><a href="/guide">Guide</a>'
+                    '<a href="https://elsewhere.example/private">Elsewhere</a></html>'
+                ),
+                headers={"content-type": "text/html"},
+            )
+        return httpx.Response(
+            200,
+            text="<html><title>Guide</title><p>Orchid crawl evidence.</p></html>",
+            headers={"content-type": "text/html"},
+        )
+
+    harness = PortalToolHarness(
+        SessionDocumentStore(ttl_s=300),
+        web_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        resolver=lambda _hostname: ["93.184.216.34"],
+    )
+    result = harness.execute(
+        "one",
+        "web_crawl",
+        {"url": "https://example.com/", "max_pages": 2, "max_depth": 1},
+    )
+    recalled = harness.execute(
+        "one", "web_search", {"query": "orchid evidence", "mode": "session"}
+    )
+
+    assert result["pages_fetched"] == 2
+    assert requested == ["https://example.com/", "https://example.com/guide"]
+    assert recalled["results"][0]["url"] == "https://example.com/guide"
+
+
+def test_ocr_pdf_is_attachment_scoped_and_indexes_recognized_text() -> None:
+    documents = SessionDocumentStore(
+        ttl_s=300,
+        document_extractor=lambda _name, _mime, _raw: "",
+        ocr_runner=lambda raw, language, pages: (
+            f"OCR orchid evidence from {len(raw)} bytes in {language} across {pages} pages."
+        ),
+    )
+    harness = PortalToolHarness(documents)
+    _context, accepted = documents.prepare(
+        "one",
+        [
+            {
+                "name": "scan.pdf",
+                "mime_type": "application/pdf",
+                "encoding": "base64",
+                "data": base64.b64encode(b"%PDF-1.7\nscanned").decode(),
+            }
+        ],
+        "orchid",
+    )
+
+    result = harness.execute(
+        "one",
+        "ocr_pdf",
+        {"document_id": accepted[0]["id"], "language": "eng", "max_pages": 3},
+    )
+    recalled = harness.execute("one", "document_search", {"query": "orchid"})
+    isolated = harness.execute(
+        "two", "ocr_pdf", {"document_id": accepted[0]["id"]}
+    )
+
+    assert result["indexed_for_session_recall"] is True
+    assert "OCR orchid evidence" in recalled["results"][0]["content"]
+    assert isolated["error"] == "DocumentError"
+
+
+def test_working_notes_and_task_list_are_session_scoped() -> None:
+    harness = PortalToolHarness(SessionDocumentStore(ttl_s=300))
+    note = harness.execute(
+        "one",
+        "working_notes",
+        {"action": "add", "category": "finding", "content": "Copper relay is active."},
+    )
+    task = harness.execute(
+        "one",
+        "task_list",
+        {"action": "upsert", "content": "Verify copper relay", "status": "in_progress"},
+    )
+
+    assert note["added"] is True
+    assert harness.execute(
+        "one", "working_notes", {"action": "search", "content": "copper"}
+    )["notes"][0]["content"] == "Copper relay is active."
+    assert task["status"] == "in_progress"
+    assert harness.execute("one", "task_list", {"action": "list"})["tasks"]
+    assert harness.execute("two", "working_notes", {"action": "list"})["notes"] == []
+    assert harness.execute("two", "task_list", {"action": "list"})["tasks"] == []
+
+
+def test_audio_analyze_and_video_scan_use_only_observed_session_media() -> None:
+    def media_runner(raw: bytes, mime_type: str, kind: str) -> dict[str, Any]:
+        return {
+            "kind": kind,
+            "mime_type": mime_type,
+            "duration": len(raw) / 10,
+            "streams": [{"codec_type": kind, "codec_name": "test"}],
+        }
+
+    harness = PortalToolHarness(
+        SessionDocumentStore(ttl_s=300), media_runner=media_runner
+    )
+    harness.observe_request(
+        "one",
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Analyze these.",
+                    "audios": [
+                        {
+                            "mime_type": "audio/wav",
+                            "data": base64.b64encode(b"audio-bytes").decode(),
+                        }
+                    ],
+                    "videos": [
+                        {
+                            "mime_type": "video/mp4",
+                            "data": base64.b64encode(b"video-bytes").decode(),
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    audio = harness.execute("one", "audio_analyze", {})
+    video = harness.execute("one", "video_scan", {})
+
+    assert audio["analysis"]["streams"][0]["codec_type"] == "audio"
+    assert video["analysis"]["streams"][0]["codec_type"] == "video"
+    assert harness.execute("two", "audio_analyze", {})["found"] is False
+    assert harness.execute("two", "video_scan", {})["found"] is False
+
+
+def test_session_search_federates_conversation_memory_notes_tasks_documents_and_web() -> None:
+    documents = SessionDocumentStore(ttl_s=300)
+    harness = PortalToolHarness(documents)
+    harness.observe_request(
+        "one",
+        {"messages": [{"role": "user", "content": "The orchid conversation marker."}]},
+    )
+    harness.execute(
+        "one", "memory_write", {"topic": "orchid", "key": "memory", "value": "Orchid memory marker."}
+    )
+    harness.execute(
+        "one", "working_notes", {"action": "add", "content": "Orchid note marker."}
+    )
+    harness.execute(
+        "one", "task_list", {"action": "upsert", "content": "Orchid task marker."}
+    )
+    documents.prepare(
+        "one",
+        [
+            {
+                "name": "orchid.txt",
+                "mime_type": "text/plain",
+                "encoding": "base64",
+                "data": base64.b64encode(b"Orchid document marker.").decode(),
+            }
+        ],
+        "orchid",
+    )
+
+    result = harness.execute(
+        "one", "session_search", {"query": "orchid marker", "max_results": 20}
+    )
+
+    sources = {item["source"] for item in result["results"]}
+    assert {"conversation", "memory", "working_note", "task", "document"} <= sources
+    assert harness.execute(
+        "two", "session_search", {"query": "orchid marker", "max_results": 20}
+    )["results"] == []
+
+
 def test_portal_queues_concurrent_sessions_without_context_bleed() -> None:
     release_first = threading.Event()
     first_entered = threading.Event()

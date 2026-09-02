@@ -1174,6 +1174,10 @@ def create_app(
                     "index_scope": "browser_session",
                     **tool_harness.web_stats(session_id),
                 },
+                "workspace": {
+                    "scope": "browser_session",
+                    **tool_harness.workspace_stats(session_id),
+                },
                 "voice_profile": {
                     "name": str(runtime.voice_profile.get("name") or "default"),
                     "language": str(runtime.voice_profile.get("language") or "en"),
@@ -1285,6 +1289,7 @@ def create_app(
             apply_reasoning_mode(payload)
             apply_voice_profile(payload)
             apply_runtime_environment(payload, tools_enabled=auto_tools)
+            observed_media = tool_harness.observe_request(session_id, payload) if auto_tools else []
             accepted_documents = apply_document_context(payload, session_id)
             if auto_tools:
                 payload["tools"] = copy.deepcopy(SAFE_TOOLS)
@@ -1347,6 +1352,7 @@ def create_app(
                 "schema": "robit.omni-phone-portal.v1",
                 "safe_tools_executed": _tool_trace(executed),
                 "documents_indexed": accepted_documents,
+                "media_observed": observed_media,
             }
             outcome_status = 200
             response = jsonify(data)
@@ -1391,6 +1397,7 @@ def create_app(
             apply_reasoning_mode(payload)
             apply_voice_profile(payload)
             apply_runtime_environment(payload, tools_enabled=auto_tools)
+            observed_media = tool_harness.observe_request(session_id, payload) if auto_tools else []
             accepted_documents = apply_document_context(payload, session_id)
             if auto_tools:
                 payload["tools"] = copy.deepcopy(SAFE_TOOLS)
@@ -1565,6 +1572,7 @@ def create_app(
                             "schema": "robit.omni-phone-portal.v1",
                             "safe_tools_executed": _tool_trace(executed),
                             "documents_indexed": accepted_documents,
+                            "media_observed": observed_media,
                         }
                         yield event_bytes({"type": "final", "response": final_response})
                         return

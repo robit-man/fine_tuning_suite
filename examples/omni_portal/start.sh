@@ -529,12 +529,63 @@ run_foreground() {
   done
 }
 
+require_adopted_pid() {
+  local variable=$1
+  local label=$2
+  local value=${!variable:-}
+  [[ "$value" =~ ^[0-9]+$ ]] && kill -0 "$value" 2>/dev/null \
+    || die "cannot adopt missing $label pid from $variable"
+  printf -v "$variable" '%s' "$value"
+}
+
+run_adopted_foreground() {
+  cd "$REPO_ROOT"
+  mkdir -p "$RUNTIME_ROOT" "$STATE_DIR" "$LOG_DIR"
+  chmod 700 "$RUNTIME_ROOT" "$STATE_DIR" "$LOG_DIR" 2>/dev/null || true
+
+  COMP_PID=${OMNI_ADOPT_COMP_PID:-}
+  TTS_PID=${OMNI_ADOPT_TTS_PID:-}
+  ADAPTER_PID=${OMNI_ADOPT_ADAPTER_PID:-}
+  PORTAL_PID=${OMNI_ADOPT_PORTAL_PID:-}
+  TUNNEL_PID=${OMNI_ADOPT_TUNNEL_PID:-}
+  HEARTBEAT_PID=${OMNI_ADOPT_HEARTBEAT_PID:-}
+  SMOKE_PID=""
+  require_adopted_pid COMP_PID "comprehension"
+  require_adopted_pid TTS_PID "TTS wrapper"
+  require_adopted_pid ADAPTER_PID "adapter"
+  require_adopted_pid PORTAL_PID "portal"
+  require_adopted_pid TUNNEL_PID "Cloudflare tunnel"
+  require_adopted_pid HEARTBEAT_PID "GPU heartbeat"
+  [[ -s "$GPU_LEASE_FILE" ]] || die "cannot adopt without the scoped GPU lease token"
+  LEASE_TOKEN=$(sed -n '1p' "$GPU_LEASE_FILE")
+  docker gpu status | jq -e --arg token "$LEASE_TOKEN" '
+    .leases[]? | select(.token == $token and .owner == "robit-omni-phone-portal" and .state == "active")
+  ' >/dev/null || die "cannot adopt an inactive or foreign GPU lease"
+
+  printf '%s\n' "$$" >"$SUPERVISOR_PID_FILE"
+  trap cleanup EXIT
+  trap 'cleanup; exit 0' INT TERM
+  log "adopted live CUDA workers, adapter, refreshed portal, and existing Cloudflare tunnel"
+
+  while true; do
+    local pid
+    for pid in "$COMP_PID" "$TTS_PID" "$ADAPTER_PID" "$PORTAL_PID" "$TUNNEL_PID"; do
+      kill -0 "$pid" 2>/dev/null \
+        || die "adopted deployment child pid $pid exited; inspect $LOG_DIR"
+    done
+    sleep 5
+  done
+}
+
 case ${1:---daemon} in
   --daemon)
     start_daemon
     ;;
   --foreground)
     run_foreground
+    ;;
+  --adopt)
+    run_adopted_foreground
     ;;
   --stop)
     stop_daemon
@@ -543,6 +594,6 @@ case ${1:---daemon} in
     show_status
     ;;
   *)
-    die "usage: $0 [--daemon|--foreground|--status|--stop]"
+    die "usage: $0 [--daemon|--foreground|--adopt|--status|--stop]"
     ;;
 esac

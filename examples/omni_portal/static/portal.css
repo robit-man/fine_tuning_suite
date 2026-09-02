@@ -371,6 +371,7 @@ textarea::placeholder { color: var(--quiet); }
 .voice-mode-choice small { color: inherit; opacity: .68; }
 .voice-preset-options {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 7px;
   margin-top: 8px;
   padding: 8px;
@@ -390,6 +391,7 @@ textarea::placeholder { color: var(--quiet); }
   background: #080808;
   color: var(--text);
   cursor: pointer;
+  min-width: 0;
 }
 .voice-preset-option.selected { border-color: var(--accent); color: var(--accent); }
 .voice-preset-option small { color: var(--quiet); font: 9px var(--mono); text-transform: uppercase; }

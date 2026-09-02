@@ -204,12 +204,13 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "function reportDiagnostic" in javascript
     assert "function clearSessionDiagnostics" in javascript
     assert "const PCM_INITIAL_BUFFER_SECONDS = 0.08" in javascript
-    assert "const PCM_CROSSFADE_SECONDS = 0.008" in javascript
+    assert "const PCM_CROSSFADE_SECONDS = 0.003" in javascript
     assert "nextTime: context.currentTime + PCM_INITIAL_BUFFER_SECONDS" in javascript
     assert "controller.context.currentTime + PCM_RESCHEDULE_FLOOR_SECONDS" in javascript
     assert "controller.context.createGain()" in javascript
     assert "controller.nextTime - crossfade >= playbackFloor" in javascript
     assert "linearRampToValueAtTime" in javascript
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in css
     assert ".audio-observation-output" in css
     assert ".message.user.sound-only .message-content" in css
     assert "opacity: .5" in css

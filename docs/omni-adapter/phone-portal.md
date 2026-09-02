@@ -90,7 +90,7 @@ requests. The patched code2wav graph is sized to the actual frame count; it must
 never persist state after fixed-window rear padding. The raw PCM continuity gate
 must pass before evaluating browser smoothing. The browser schedules the first
 received PCM with an 80 ms playout
-lead, keeps a 3 ms late-arrival floor, and uses a guarded 8 ms crossfade for
+lead, keeps a 3 ms late-arrival floor, and uses a guarded 3 ms crossfade for
 sufficiently large contiguous buffers. The final response retains a complete
 replayable WAV assembled from the original PCM. `stage=tts` is a
 preparing state; `audio_start` is emitted only with the first actual PCM chunk,

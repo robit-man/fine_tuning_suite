@@ -11,7 +11,7 @@
   const MAX_VIDEO_RECORD_MS = 30_000;
   const PCM_INITIAL_BUFFER_SECONDS = 0.08;
   const PCM_RESCHEDULE_FLOOR_SECONDS = 0.003;
-  const PCM_CROSSFADE_SECONDS = 0.008;
+  const PCM_CROSSFADE_SECONDS = 0.003;
   const PCM_CROSSFADE_MIN_BUFFER_SECONDS = 0.08;
   const LIVE_CALL_SYSTEM_PROMPT = (
     "You are participating in a live two-way spoken conversation. Answer the "

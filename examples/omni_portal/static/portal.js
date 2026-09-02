@@ -1392,6 +1392,7 @@
 
   function toolUseEnabled() {
     return state.toolExecutionAvailable
+      && Boolean(elements.tools)
       && elements.tools.getAttribute("aria-pressed") === "true";
   }
 
@@ -1413,15 +1414,17 @@
         (data.tool_execution || {}).streaming
         && (data.tool_execution || {}).client_opt_in,
       );
-      elements.tools.disabled = !state.toolExecutionAvailable;
-      if (!state.toolExecutionAvailable) {
-        elements.tools.setAttribute("aria-pressed", "false");
-        elements.tools.setAttribute("aria-label", "Tools unavailable");
-        elements.tools.title = "Tools unavailable";
-      } else {
-        const enabled = elements.tools.getAttribute("aria-pressed") === "true";
-        elements.tools.setAttribute("aria-label", `${enabled ? "Disable" : "Enable"} tools`);
-        elements.tools.title = `Tools ${enabled ? "on" : "off"}`;
+      if (elements.tools) {
+        elements.tools.disabled = !state.toolExecutionAvailable;
+        if (!state.toolExecutionAvailable) {
+          elements.tools.setAttribute("aria-pressed", "false");
+          elements.tools.setAttribute("aria-label", "Tools unavailable");
+          elements.tools.title = "Tools unavailable";
+        } else {
+          const enabled = elements.tools.getAttribute("aria-pressed") === "true";
+          elements.tools.setAttribute("aria-label", `${enabled ? "Disable" : "Enable"} tools`);
+          elements.tools.title = `Tools ${enabled ? "on" : "off"}`;
+        }
       }
       if (!state.voice.initialized && data.voice_profile) {
         const profile = data.voice_profile;
@@ -2830,14 +2833,16 @@
     elements.think.title = `Reasoning ${enabled ? "on" : "off"}`;
     setComposerStatus(enabled ? "Reasoning on" : "Reasoning off");
   });
-  elements.tools.addEventListener("click", () => {
-    if (!state.toolExecutionAvailable) return;
-    const enabled = elements.tools.getAttribute("aria-pressed") !== "true";
-    elements.tools.setAttribute("aria-pressed", String(enabled));
-    elements.tools.setAttribute("aria-label", `${enabled ? "Disable" : "Enable"} tools`);
-    elements.tools.title = `Tools ${enabled ? "on" : "off"}`;
-    setComposerStatus(enabled ? "Tools on" : "Tools off");
-  });
+  if (elements.tools) {
+    elements.tools.addEventListener("click", () => {
+      if (!state.toolExecutionAvailable) return;
+      const enabled = elements.tools.getAttribute("aria-pressed") !== "true";
+      elements.tools.setAttribute("aria-pressed", String(enabled));
+      elements.tools.setAttribute("aria-label", `${enabled ? "Disable" : "Enable"} tools`);
+      elements.tools.title = `Tools ${enabled ? "on" : "off"}`;
+      setComposerStatus(enabled ? "Tools on" : "Tools off");
+    });
+  }
   elements.callButton.addEventListener("click", () => {
     const action = state.call ? stopCall() : startCall();
     action.catch(showError);

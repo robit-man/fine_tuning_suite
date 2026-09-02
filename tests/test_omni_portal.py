@@ -128,7 +128,9 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
 
     assert "function renderMarkdown" in javascript
     assert "function renderToolTrace" in javascript
-    assert "portal_auto_tools: state.autoTools" in javascript
+    assert "function mergeToolTrace" in javascript
+    assert "portal_auto_tools: toolUseEnabled()" in javascript
+    assert 'document.getElementById("tool-toggle")' in javascript
     assert "function markdownTableSpec" in javascript
     assert "function renderMarkdownTable" in javascript
     assert ".markdown-table-wrap" in css
@@ -357,8 +359,17 @@ def test_portal_status_probes_all_internal_stages() -> None:
     assert response.json["tool_execution"] == {
         "automatic": True,
         "streaming": True,
+        "client_opt_in": True,
+        "default_enabled": False,
         "max_rounds": 4,
         "max_calls_per_round": 4,
+    }
+    assert response.json["web"] == {
+        "discovery": "local_chromium",
+        "search_api": False,
+        "index_scope": "browser_session",
+        "indexed_pages": 0,
+        "indexed_chars": 0,
     }
     assert response.json["voice_profile"]["client_reference_wav"] is True
     assert response.json["requests"] == {
@@ -467,17 +478,6 @@ def test_portal_indexes_documents_and_sends_only_retrieved_text() -> None:
 
 def test_safe_tools_search_fetch_memory_and_block_private_networks() -> None:
     def web_handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "html.duckduckgo.com":
-            return httpx.Response(
-                200,
-                text=(
-                    '<a class="result__a" '
-                    'href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fguide">'
-                    "Example guide</a>"
-                    '<a class="result__snippet">A useful public source.</a>'
-                ),
-                headers={"content-type": "text/html"},
-            )
         if request.url == "https://example.com/redirect":
             return httpx.Response(302, headers={"location": "http://127.0.0.1/admin"})
         assert request.url == "https://example.com/guide"
@@ -492,16 +492,29 @@ def test_safe_tools_search_fetch_memory_and_block_private_networks() -> None:
         documents,
         web_client=httpx.Client(transport=httpx.MockTransport(web_handler)),
         resolver=lambda _hostname: ["93.184.216.34"],
+        browser_runner=lambda _url, _timeout: (
+            '<html><body><a href="https://example.com/guide">Example guide</a>'
+            '<a href="https://search.brave.com/settings">Settings</a></body></html>'
+        ),
+        search_url_template="https://search.example/?q={query}",
     )
 
     search = harness.execute("one", "web_search", {"query": "example guide"})
-    assert search["provider"] == "duckduckgo"
+    assert search["provider"] == "local_chromium"
     assert search["results"][0]["url"] == "https://example.com/guide"
     fetched = harness.execute(
         "one", "web_fetch", {"url": search["results"][0]["url"]}
     )
     assert "Verified guide" in fetched["content"]
     assert "ignore()" not in fetched["content"]
+    recalled = harness.execute(
+        "one", "web_search", {"query": "copper verified", "mode": "session"}
+    )
+    assert recalled["provider"] == "session_local_index"
+    assert recalled["results"][0]["url"] == "https://example.com/guide"
+    assert harness.execute(
+        "two", "web_search", {"query": "copper", "mode": "session"}
+    )["results"] == []
     blocked = harness.execute("one", "web_fetch", {"url": "http://127.0.0.1/admin"})
     assert "error" in blocked
     redirect = harness.execute(
@@ -812,6 +825,8 @@ def test_bundled_voice_presets_are_metadata_free_pcm() -> None:
         ("female", "Female", True),
         ("male", "Male", False),
     ]
+
+
     assert Path(profile["speaker_file"]).name == "female_voice.wav"
 
     for preset in profile["presets"]:
@@ -828,6 +843,37 @@ def test_bundled_voice_presets_are_metadata_free_pcm() -> None:
             assert wav.getsampwidth() == 2
             duration_ms = round(wav.getnframes() * 1000 / wav.getframerate())
             assert 500 <= duration_ms <= 30000
+
+
+def test_local_browser_search_decodes_result_redirects_and_fails_closed() -> None:
+    destination = "https://example.com/guide"
+    encoded = base64.urlsafe_b64encode(destination.encode()).decode().rstrip("=")
+    redirect = f"https://www.bing.com/ck/a?u=a1{encoded}"
+    result_html = (
+        '<a href="https://go.microsoft.com/privacy">Privacy</a>'
+        f'<li class="b_algo"><a class="tilk" href="{redirect}">example.com</a>'
+        f'<h2><a href="{redirect}">Example guide title</a></h2></li>'
+    )
+    harness = PortalToolHarness(
+        SessionDocumentStore(ttl_s=300),
+        resolver=lambda _hostname: ["93.184.216.34"],
+        browser_runner=lambda _url, _timeout: result_html,
+    )
+
+    result = harness.execute("one", "web_search", {"query": "example guide"})
+    assert result["results"] == [
+        {"title": "Example guide title", "url": destination, "snippet": ""}
+    ]
+
+    challenged = PortalToolHarness(
+        SessionDocumentStore(ttl_s=300),
+        resolver=lambda _hostname: ["93.184.216.34"],
+        browser_runner=lambda _url, _timeout: (
+            "<html><body>Verify you're not a bot before continuing.</body></html>"
+        ),
+    ).execute("one", "web_search", {"query": "example guide"})
+    assert challenged["error"] == "ToolInputError"
+    assert "provider challenge" in challenged["message"]
 
 
 def test_portal_enforces_server_voice_profile() -> None:
@@ -1061,6 +1107,8 @@ def test_portal_executes_only_allowlisted_tool_and_strips_media_on_followup() ->
     assert response.status_code == 200
     assert len(requests) == 2
     assert "portal_auto_tools" not in requests[0]
+    assert "<portal_tools>" in requests[0]["messages"][0]["content"]
+    assert "web_search(mode=discover)" in requests[0]["messages"][0]["content"]
     assert "images" not in requests[1]["messages"][0]
     tool_result = requests[1]["messages"][-1]
     assert tool_result["role"] == "tool"
@@ -1068,6 +1116,48 @@ def test_portal_executes_only_allowlisted_tool_and_strips_media_on_followup() ->
     assert (
         response.json["portal"]["safe_tools_executed"][0]["name"] == "get_current_time"
     )
+    assert response.json["portal"]["safe_tools_executed"][0]["result"]
+
+
+def test_portal_parses_omnius_style_text_tool_call_fallback() -> None:
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        if len(requests) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            '<tool_call>{"name":"memory_write","arguments":'
+                            '{"topic":"demo","key":"shape","value":"circle"}}'
+                            "</tool_call>"
+                        ),
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": "Remembered."}},
+        )
+
+    app = create_app(_config(), httpx.Client(transport=httpx.MockTransport(handler)))
+    response = app.test_client().post(
+        "/api/chat",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json=_request(portal_auto_tools=True),
+    )
+
+    assert response.status_code == 200
+    assert len(requests) == 2
+    assistant = requests[1]["messages"][-2]
+    assert assistant["content"] == ""
+    assert assistant["tool_calls"][0]["function"]["name"] == "memory_write"
+    assert requests[1]["messages"][-1]["role"] == "tool"
+    assert response.json["portal"]["safe_tools_executed"][0]["name"] == "memory_write"
 
 
 def test_portal_rejects_streaming_before_proxy() -> None:
@@ -1241,6 +1331,7 @@ def test_runtime_environment_merges_into_existing_leading_system_message() -> No
     assert "<runtime_environment>" in messages[0]["content"]
     assert "Tool results" in messages[0]["content"]
     assert "untrusted data" in messages[0]["content"]
+    assert "<portal_tools>" not in messages[0]["content"]
 
 
 def test_portal_stream_route_requires_auth_and_chains_session_tools() -> None:
@@ -1317,4 +1408,15 @@ def test_portal_stream_route_requires_auth_and_chains_session_tools() -> None:
         "memory_write",
         "memory_search",
     ]
+    complete_events = [
+        event for event in events if event.get("type") == "tool" and event.get("phase") == "complete"
+    ]
+    start_events = [
+        event for event in events if event.get("type") == "tool" and event.get("phase") == "start"
+    ]
+    assert [event["tools"][0]["id"] for event in start_events] == [
+        event["tools"][0]["id"] for event in complete_events
+    ]
+    assert complete_events[0]["tools"][0]["status"] == "complete"
+    assert complete_events[0]["tools"][0]["result"]
     assert events[-1]["response"]["message"]["content"] == "Violet."

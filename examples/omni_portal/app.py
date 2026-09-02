@@ -15,6 +15,7 @@ import hmac
 import json
 import math
 import os
+import re
 import secrets
 import sys
 import threading
@@ -42,7 +43,12 @@ if __package__ in {None, ""}:
 
 from examples.omni_portal.documents import DocumentError, SessionDocumentStore
 from examples.omni_portal.environment import runtime_environment_system_message
-from examples.omni_portal.tools import SAFE_TOOLS, PortalToolHarness, tool_result_json
+from examples.omni_portal.tools import (
+    SAFE_TOOLS,
+    PortalToolHarness,
+    tool_result_json,
+    tool_use_instructions,
+)
 from training_suite.models.audio import AudioContractError, decode_wav_payload
 
 ADAPTER_SCHEMA = "robit.ollama.omni-adapter.v1"
@@ -716,6 +722,67 @@ def _tool_arguments(call: Mapping[str, Any]) -> Mapping[str, Any]:
     return {}
 
 
+_TEXT_TOOL_CALL_PATTERN = re.compile(
+    r"<tool_call>\s*([\s\S]*?)\s*</tool_call>",
+    re.IGNORECASE,
+)
+
+
+def _text_tool_call(payload: str, index: int) -> dict[str, Any] | None:
+    try:
+        decoded = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(decoded, Mapping):
+        return None
+    function = decoded.get("function")
+    if isinstance(function, Mapping):
+        name = function.get("name")
+        arguments = function.get("arguments", {})
+    else:
+        name = decoded.get("name") or decoded.get("tool") or function
+        arguments = (
+            decoded.get("arguments")
+            or decoded.get("args")
+            or decoded.get("parameters")
+            or {}
+        )
+    if not isinstance(name, str) or not name.strip():
+        return None
+    if not isinstance(arguments, Mapping):
+        arguments = {"value": arguments}
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return {
+        "id": f"text-tool-{index}-{digest}",
+        "type": "function",
+        "function": {"name": name.strip(), "arguments": dict(arguments)},
+    }
+
+
+def _response_tool_calls(response: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    message = response.get("message")
+    if not isinstance(message, Mapping):
+        return []
+    structured = message.get("tool_calls")
+    if isinstance(structured, list) and structured:
+        return [call for call in structured if isinstance(call, Mapping)]
+    content = message.get("content")
+    if not isinstance(content, str) or "<tool_call" not in content.lower():
+        return []
+    matches = list(_TEXT_TOOL_CALL_PATTERN.finditer(content))
+    parsed = [
+        call
+        for index, match in enumerate(matches)
+        if (call := _text_tool_call(match.group(1), index)) is not None
+    ]
+    if not matches or len(parsed) != len(matches):
+        raise PortalError("model emitted a malformed textual tool call")
+    if isinstance(message, dict):
+        message["content"] = _TEXT_TOOL_CALL_PATTERN.sub("", content).strip()
+        message["tool_calls"] = parsed
+    return parsed
+
+
 def _without_media(messages: list[Any]) -> list[Any]:
     cleaned = copy.deepcopy(messages)
     for message in cleaned:
@@ -737,8 +804,8 @@ def _tool_followup(
     message = response.get("message")
     if not isinstance(message, Mapping):
         return None, []
-    calls = message.get("tool_calls")
-    if not isinstance(calls, list) or not calls:
+    calls = _response_tool_calls(response)
+    if not calls:
         return None, []
 
     followup = copy.deepcopy(dict(payload))
@@ -784,14 +851,26 @@ def _tool_followup(
         display_arguments = {
             key: str(value)[:240]
             for key, value in arguments.items()
-            if key in {"query", "url", "topic", "key", "num_results", "max_results"}
+            if key
+            in {
+                "query",
+                "url",
+                "topic",
+                "key",
+                "mode",
+                "num_results",
+                "max_results",
+                "max_length",
+            }
         }
         executed.append(
             {
+                "id": str(call.get("id") or fingerprint[:12]),
                 "name": name or "unknown",
                 "arguments": display_arguments,
                 "ok": "error" not in result,
                 "result": content,
+                "status": "complete",
             }
         )
     followup["messages"] = messages
@@ -799,16 +878,55 @@ def _tool_followup(
 
 
 def _tool_trace(executed: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return content-free execution evidence suitable for the browser UI."""
+    """Return bounded call/result evidence suitable for the session UI."""
 
     return [
         {
-            "name": str(item.get("name") or "unknown"),
+            "id": str(item.get("id") or "")[:80],
+            "name": str(item.get("name") or "unknown")[:80],
             "arguments": dict(item.get("arguments") or {}),
             "ok": item.get("ok") is True,
+            "status": str(item.get("status") or "complete"),
+            "result": str(item.get("result") or "")[:1_600],
         }
         for item in executed
     ]
+
+
+def _tool_start_trace(calls: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    trace: list[dict[str, Any]] = []
+    for call in calls[:MAX_TOOL_CALLS_PER_ROUND]:
+        function = call.get("function")
+        name = str(function.get("name") or "unknown") if isinstance(function, Mapping) else "unknown"
+        arguments = _tool_arguments(call)
+        fingerprint = hashlib.sha256(
+            f"{name}\0{json.dumps(arguments, sort_keys=True, default=str)}".encode()
+        ).hexdigest()
+        trace.append(
+            {
+                "id": str(call.get("id") or fingerprint[:12])[:80],
+                "name": name,
+                "arguments": {
+                    key: str(value)[:240]
+                    for key, value in arguments.items()
+                    if key
+                    in {
+                        "query",
+                        "url",
+                        "topic",
+                        "key",
+                        "mode",
+                        "num_results",
+                        "max_results",
+                        "max_length",
+                    }
+                },
+                "ok": False,
+                "status": "running",
+                "result": "",
+            }
+        )
+    return trace
 
 
 def _probe(client: httpx.Client, url: str) -> dict[str, Any]:
@@ -823,6 +941,7 @@ def create_app(
     config: PortalConfig | None = None,
     client: httpx.Client | None = None,
     web_client: httpx.Client | None = None,
+    web_browser_runner: Any | None = None,
 ) -> Flask:
     root = Path(__file__).resolve().parent
     app = Flask(
@@ -846,6 +965,7 @@ def create_app(
         documents,
         ttl_s=runtime.session_log_ttl_s,
         web_client=web_client,
+        browser_runner=web_browser_runner,
     )
     app.config["MAX_CONTENT_LENGTH"] = runtime.max_body_bytes
 
@@ -902,12 +1022,14 @@ def create_app(
             raise PortalRequestError("portal think must be a boolean")
         payload["think"] = think
 
-    def apply_runtime_environment(payload: dict[str, Any]) -> None:
+    def apply_runtime_environment(payload: dict[str, Any], *, tools_enabled: bool) -> None:
         messages = payload.get("messages")
         if not isinstance(messages, list) or not messages:
             raise PortalRequestError("messages must be a non-empty array")
         environment = runtime_environment_system_message()
         environment["content"] += f"\n\n{TOOL_RESULT_POLICY}"
+        if tools_enabled:
+            environment["content"] += f"\n\n{tool_use_instructions()}"
         if isinstance(messages[0], dict) and messages[0].get("role") == "system":
             existing = str(messages[0].get("content") or "").strip()
             messages[0]["content"] = (
@@ -1029,6 +1151,8 @@ def create_app(
                 "tool_execution": {
                     "automatic": True,
                     "streaming": True,
+                    "client_opt_in": True,
+                    "default_enabled": False,
                     "max_rounds": MAX_TOOL_ROUNDS,
                     "max_calls_per_round": MAX_TOOL_CALLS_PER_ROUND,
                 },
@@ -1040,7 +1164,13 @@ def create_app(
                 "memory": {
                     "scope": "browser_session",
                     "ttl_seconds": runtime.session_log_ttl_s,
-                    **tool_harness.stats(session_id),
+                    **tool_harness.memory_stats(session_id),
+                },
+                "web": {
+                    "discovery": "local_chromium",
+                    "search_api": False,
+                    "index_scope": "browser_session",
+                    **tool_harness.web_stats(session_id),
                 },
                 "voice_profile": {
                     "name": str(runtime.voice_profile.get("name") or "default"),
@@ -1152,7 +1282,7 @@ def create_app(
             diagnostic_fields = _request_diagnostic_fields(payload)
             apply_reasoning_mode(payload)
             apply_voice_profile(payload)
-            apply_runtime_environment(payload)
+            apply_runtime_environment(payload, tools_enabled=auto_tools)
             accepted_documents = apply_document_context(payload, session_id)
             if auto_tools:
                 payload["tools"] = copy.deepcopy(SAFE_TOOLS)
@@ -1190,8 +1320,7 @@ def create_app(
                     return response, upstream.status_code
                 if not auto_tools:
                     break
-                message = data.get("message")
-                calls = message.get("tool_calls") if isinstance(message, Mapping) else None
+                calls = _response_tool_calls(data)
                 if calls and _round >= MAX_TOOL_ROUNDS:
                     raise PortalError("safe tool loop exceeded its round limit")
                 followup, round_tools = _tool_followup(
@@ -1255,7 +1384,7 @@ def create_app(
         try:
             apply_reasoning_mode(payload)
             apply_voice_profile(payload)
-            apply_runtime_environment(payload)
+            apply_runtime_environment(payload, tools_enabled=auto_tools)
             accepted_documents = apply_document_context(payload, session_id)
             if auto_tools:
                 payload["tools"] = copy.deepcopy(SAFE_TOOLS)
@@ -1393,12 +1522,7 @@ def create_app(
                         followup = None
                         round_tools: list[dict[str, Any]] = []
                     else:
-                        message = final_response.get("message")
-                        calls = (
-                            message.get("tool_calls")
-                            if isinstance(message, Mapping)
-                            else None
-                        )
+                        calls = _response_tool_calls(final_response)
                         if calls and round_index >= MAX_TOOL_ROUNDS:
                             yield event_bytes(
                                 {"type": "error", "error": "safe tool loop exceeded its round limit"}
@@ -1410,14 +1534,7 @@ def create_app(
                                     "type": "tool",
                                     "phase": "start",
                                     "round": round_index + 1,
-                                    "tools": [
-                                        str(
-                                            call["function"].get("name") or "unknown"
-                                        )
-                                        for call in calls[:MAX_TOOL_CALLS_PER_ROUND]
-                                        if isinstance(call, Mapping)
-                                        and isinstance(call.get("function"), Mapping)
-                                    ],
+                                    "tools": _tool_start_trace(calls),
                                 }
                             )
                         followup, round_tools = _tool_followup(

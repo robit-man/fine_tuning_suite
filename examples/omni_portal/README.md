@@ -92,6 +92,7 @@ conversation—not as proof that an older scene remains visible.
 | Camera + phone icons | current visual frame + repeated speech turns → spoken replies |
 | Speaker icon enabled | final text → streamed Qwen3-TTS PCM → replayable 24 kHz WAV |
 | Brain icon enabled | Ollama `think:true` → collapsible streamed reasoning |
+| Wrench icon enabled | explicit allowlisted tool calls → live collapsible tool trace → final answer |
 | Phone icon enabled | repeated/barge-in audio → comprehension → streamed Qwen3.8 text → TTS |
 | Fresh web information | structured `web_search` → `web_fetch` → sourced Qwen3.8 answer |
 | Temporary recall | session-only `memory_write` / `memory_read` / `memory_search` |
@@ -199,21 +200,28 @@ by the GGUF.
 
 ## Structured tool demonstration
 
-Chat and live-call turns include the portal's authoritative eight-tool schema
-array and request automatic execution. Qwen3.8 emits standard Ollama
+Chat and live-call turns keep tools disabled until the user taps the wrench
+beside the brain button. Opted-in turns include the portal's authoritative
+eight-tool schema array and request automatic execution. Qwen3.8 emits standard Ollama
 `message.tool_calls`; the portal executes only `get_current_time`,
 `get_portal_capabilities`, `web_search`, `web_fetch`, `document_search`,
 `memory_write`, `memory_read`, and `memory_search`, appends normal tool-role
 messages, and repeats until a final answer or the four-round ceiling. The
-assistant message shows a compact collapsible **Tools** trace. Spoken output is
-deferred until no unresolved calls remain.
+assistant message shows a compact collapsible **Tools** trace with live running,
+completed/failed state, compact arguments, and bounded result evidence. Spoken
+output is deferred until no unresolved calls remain. Native structured calls
+are preferred; strict Omnius-style `<tool_call>` JSON is accepted as a renderer
+compatibility fallback and removed from visible text.
 
-Web discovery uses keyless DuckDuckGo and a separate bounded page-fetch step,
-adapted from the adjacent Omnius tool split. Fetch permits only public HTTP(S),
+Web discovery uses an ephemeral locally launched Chromium/Chrome process and a
+normal public search-results page—there is no external search API client, key,
+or SDK. A separate bounded fetch step permits only public HTTP(S),
 revalidates redirects and DNS destinations, blocks local/private/metadata
 addresses, limits bodies to 2 MiB and extracted content to 12,000 characters,
 and treats every result as untrusted evidence. It does not execute JavaScript
-or support authentication, forms, downloads, or browser automation.
+from fetched pages or support authentication, forms, downloads, or arbitrary
+browser automation. Discovery/fetched text is indexed per browser session, so
+`web_search(mode=session)` can recall it without another network request.
 
 Memory is in-process and isolated by the opaque browser session. It is limited
 to 64 small entries/32,768 characters, clears with Trash, and expires after five
@@ -332,6 +340,11 @@ The command:
 7. starts a Cloudflare Quick Tunnel and prints an HTTPS URL containing the
    access token in its URL fragment.
 
+The core portal does not require a browser executable on the host. The optional
+`web_search(mode=discover)` tool does: install Chromium or Chrome, or set
+`OMNI_WEB_BROWSER` to its executable. If no local browser is available, that
+tool returns a bounded error while the other seven tools continue to work.
+
 The URL has this form:
 
 ```text
@@ -389,6 +402,8 @@ language requests continue through broker-owned GPU lanes.
 | `OMNI_PORTAL_MAX_INFLIGHT_REQUESTS` | `4` | Active plus queued portal requests before a bounded 503 response |
 | `OMNI_PORTAL_SESSION_LOG_DIR` | runtime `session-logs` | Content-redacted, per-session timing journals |
 | `OMNI_PORTAL_SESSION_LOG_TTL_S` | `300` | Inactive-session diagnostic retention; five minutes by default |
+| `OMNI_WEB_BROWSER` | auto-detected Chromium/Chrome | Local executable used only for public search-page discovery |
+| `OMNI_WEB_SEARCH_URL_TEMPLATE` | Bing Web Search page | Public browser URL containing the literal `{query}` placeholder; no search API endpoint |
 
 Ports `8901`, `8892`, `8910`, and `8920` are loopback-only. The Cloudflare
 metrics endpoint defaults to loopback port `49312`.

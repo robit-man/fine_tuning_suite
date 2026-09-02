@@ -64,7 +64,7 @@ hidden-state splicing.
 | Text completion | Qwen3.8 standard model layer | Yes |
 | Thinking | Qwen3.8 renderer/parser | Yes |
 | Structured tools | Qwen3.8 renderer/parser | Yes |
-| Portal web/document/session-memory tools | Allowlisted portal tool loop | Yes |
+| Portal web/document/session-memory tools | Explicit opt-in allowlisted portal loop with local-browser discovery | Yes |
 | Image understanding | standard Qwen3.8 projector | Yes |
 | Audio understanding / ASR | Qwen3-Omni sidecar views through adapter | No |
 | Video understanding | Qwen3-Omni sidecar views through adapter | No |

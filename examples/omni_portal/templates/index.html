@@ -11,7 +11,7 @@
   <title>Omni Chat</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/assets/favicon.svg">
-  <link rel="stylesheet" href="/assets/portal.css?v=20260902-generation-metrics">
+  <link rel="stylesheet" href="/assets/portal.css?v=20260902-local-tools">
 </head>
 <body data-model="{{ model }}" data-max-upload-mib="{{ max_upload_mib }}" data-session-scope="{{ session_scope }}">
   <main class="app-shell">
@@ -82,6 +82,10 @@
 
             <button class="icon-button think-button" id="think-toggle" type="button" aria-label="Enable reasoning" aria-pressed="false" title="Reasoning off">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 4.3A3.4 3.4 0 0 0 4.8 8a3.5 3.5 0 0 0 .7 6.7A3.5 3.5 0 0 0 10 19m4.5-14.7A3.4 3.4 0 0 1 19.2 8a3.5 3.5 0 0 1-.7 6.7A3.5 3.5 0 0 1 14 19M10 5v14m4-14v14M7 10h3m4 0h3M7 15h3m4 0h3"/></svg>
+            </button>
+
+            <button class="icon-button tool-button" id="tool-toggle" type="button" aria-label="Enable tools" aria-pressed="false" title="Tools off" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5 5L4 17l3 3 5.7-5.7a4 4 0 0 0 5-5l-2.4 2.4-3-3 2.4-2.4Z"/></svg>
             </button>
 
             <button class="icon-button send-button" id="send-button" type="button" aria-label="Send message" title="Send">
@@ -190,6 +194,6 @@
   <script src="/assets/call_vad.js" defer></script>
   <script src="/assets/call_playback.js" defer></script>
   <script src="/assets/session_cache.js" defer></script>
-  <script src="/assets/portal.js?v=20260902-safe-tools" defer></script>
+  <script src="/assets/portal.js?v=20260902-local-tools" defer></script>
 </body>
 </html>

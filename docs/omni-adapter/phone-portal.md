@@ -83,14 +83,17 @@ stopping capture. Portable adapter v1 remains `stream:false`;
 `/api/chat/stream` is an authenticated portal extension with stage, text,
 thinking, tool-round, PCM, and one authoritative final adapter event.
 
-Chat and call turns advertise the portal's server-pinned structured tool array.
-The model can chain keyless `web_search` into bounded `web_fetch`, query the
-current session's attached-document index, or use temporary session-only
-memory. Tool results return through standard assistant `tool_calls` and
-`role="tool"` messages; the browser shows a compact **Tools** disclosure and
-speech waits for the final answer. Public-web destinations are DNS/redirect
-validated, local and metadata networks are blocked, and all retrieved content
-is untrusted evidence. See [Portal tools and tool chaining](tools.md).
+The wrench button beside reasoning explicitly enables the portal's server-pinned
+structured tool array; it is off by default. The model can chain local-browser
+`web_search(mode=discover)` into bounded `web_fetch`, search the session-local
+web index, query attached documents, or use temporary session-only memory.
+Tool results return through standard assistant `tool_calls` and `role="tool"`
+messages; running/completed calls and bounded results appear in a collapsible
+**Tools** disclosure, and speech waits for the final answer. Web discovery uses
+a locally installed Chromium/Chrome process and public results page, not a
+hosted search API. Public destinations are DNS/redirect validated, local and
+metadata networks are blocked, and all retrieved content is untrusted evidence.
+See [Portal tools and tool chaining](tools.md).
 
 Qwen3-TTS uses two codec frames per state-carrying decoder window by default,
 approximately 160 ms for the packaged 12 Hz model. Its persistent CUDA worker

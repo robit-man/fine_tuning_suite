@@ -206,11 +206,12 @@ Text-only chat skips comprehension. Speech is not generated while the response
 contains unresolved `tool_calls`; the client executes the tools, appends tool
 results, and submits the next turn before TTS.
 
-The authenticated reference portal can perform that client role when
-`portal_auto_tools=true`. It pins its own eight-tool schema array, executes no
-more than four bounded rounds, emits tool-progress events on the portal NDJSON
-extension, and returns a content-free execution trace under `response.portal`.
-This flag and trace are portal extensions, not fields in portable adapter v1.
+The authenticated reference portal can perform that client role when the user
+enables its wrench toggle (`portal_auto_tools=true`). It pins its own eight-tool
+schema array, executes no more than four bounded rounds, emits running/completed
+tool events on the portal NDJSON extension, and returns bounded arguments and
+result evidence under `response.portal`. The toggle defaults off. This flag and
+trace are portal extensions, not fields in portable adapter v1.
 
 ### `transcribe`
 

@@ -191,6 +191,7 @@
     voiceMaxFrames: document.getElementById("voice-max-frames"),
     speak: document.getElementById("speak-toggle"),
     think: document.getElementById("think-toggle"),
+    tools: document.getElementById("tool-toggle"),
     send: document.getElementById("send-button"),
     composer: document.querySelector(".composer"),
     composerStatus: document.getElementById("composer-status"),
@@ -207,7 +208,7 @@
     history: [],
     messages: [],
     safeTools: [],
-    autoTools: false,
+    toolExecutionAvailable: false,
     recording: null,
     holdingMic: false,
     micHoldStartedAt: 0,
@@ -814,6 +815,7 @@
   function normalizedToolTrace(value) {
     if (!Array.isArray(value)) return [];
     return value.slice(0, 20).map(item => ({
+      id: String((item || {}).id || "").slice(0, 80),
       name: String((item || {}).name || "unknown").slice(0, 80),
       arguments: (item && typeof item.arguments === "object" && item.arguments)
         ? Object.fromEntries(Object.entries(item.arguments).slice(0, 6).map(
@@ -821,7 +823,29 @@
         ))
         : {},
       ok: Boolean((item || {}).ok),
+      status: String((item || {}).status || "complete") === "running" ? "running" : "complete",
+      result: String((item || {}).result || "").slice(0, 1600),
     }));
+  }
+
+  function mergeToolTrace(current, event) {
+    const trace = normalizedToolTrace(current);
+    const incoming = normalizedToolTrace(event && event.tools);
+    if (!incoming.length) return trace;
+    for (const item of incoming) {
+      let pendingIndex = -1;
+      for (let index = trace.length - 1; index >= 0; index -= 1) {
+        const candidate = trace[index];
+        if (candidate.status === "running"
+          && ((item.id && candidate.id === item.id) || (!item.id && candidate.name === item.name))) {
+          pendingIndex = index;
+          break;
+        }
+      }
+      if (pendingIndex >= 0 && item.status !== "running") trace[pendingIndex] = item;
+      else trace.push(item);
+    }
+    return trace.slice(-20);
   }
 
   function renderToolTrace(record) {
@@ -831,17 +855,30 @@
     const trace = record.toolTrace || [];
     box.hidden = trace.length === 0;
     content.replaceChildren();
-    box.querySelector("summary").textContent = `Tools · ${trace.length}`;
+    const completed = trace.filter(item => item.status !== "running").length;
+    box.querySelector("summary").textContent = completed === trace.length
+      ? `Tools · ${trace.length}`
+      : `Tools · ${completed}/${trace.length}`;
     for (const item of trace) {
       const row = document.createElement("div");
-      row.className = `tool-entry${item.ok ? "" : " failed"}`;
+      row.className = `tool-entry ${item.status === "running" ? "running" : (item.ok ? "" : "failed")}`.trim();
       const name = document.createElement("strong");
       name.textContent = item.name;
-      const detail = document.createElement("span");
-      detail.textContent = Object.entries(item.arguments)
+      const stateNode = document.createElement("span");
+      stateNode.className = "tool-state";
+      stateNode.textContent = item.status === "running" ? "Running" : (item.ok ? "Complete" : "Failed");
+      const argumentsNode = document.createElement("div");
+      argumentsNode.className = "tool-arguments";
+      argumentsNode.textContent = Object.entries(item.arguments)
         .map(([key, value]) => `${key}: ${value}`)
-        .join(" · ") || (item.ok ? "completed" : "failed");
-      row.append(name, detail);
+        .join(" · ") || "No arguments";
+      row.append(name, stateNode, argumentsNode);
+      if (item.result) {
+        const resultNode = document.createElement("div");
+        resultNode.className = "tool-result";
+        resultNode.textContent = item.result;
+        row.appendChild(resultNode);
+      }
       content.appendChild(row);
     }
   }
@@ -1353,6 +1390,11 @@
     return elements.think.getAttribute("aria-pressed") === "true";
   }
 
+  function toolUseEnabled() {
+    return state.toolExecutionAvailable
+      && elements.tools.getAttribute("aria-pressed") === "true";
+  }
+
   async function refreshStatus() {
     if (!state.token) {
       elements.headerStatus.className = "connection offline";
@@ -1367,7 +1409,20 @@
       elements.statusText.textContent = data.ok ? "Online" : "Unavailable";
       updateActivity(data.requests);
       state.safeTools = Array.isArray(data.safe_tools) ? data.safe_tools : [];
-      state.autoTools = Boolean((data.tool_execution || {}).streaming);
+      state.toolExecutionAvailable = Boolean(
+        (data.tool_execution || {}).streaming
+        && (data.tool_execution || {}).client_opt_in,
+      );
+      elements.tools.disabled = !state.toolExecutionAvailable;
+      if (!state.toolExecutionAvailable) {
+        elements.tools.setAttribute("aria-pressed", "false");
+        elements.tools.setAttribute("aria-label", "Tools unavailable");
+        elements.tools.title = "Tools unavailable";
+      } else {
+        const enabled = elements.tools.getAttribute("aria-pressed") === "true";
+        elements.tools.setAttribute("aria-label", `${enabled ? "Disable" : "Enable"} tools`);
+        elements.tools.title = `Tools ${enabled ? "on" : "off"}`;
+      }
       if (!state.voice.initialized && data.voice_profile) {
         const profile = data.voice_profile;
         state.voice.serverReference = Boolean(profile.speaker_reference);
@@ -2144,6 +2199,7 @@
     let streamedAudio = false;
     let inputTranscript = "";
     let inputAudioObservation = "";
+    let activeToolTrace = [];
     const callFallback = frame ? "Video call message" : "Voice message";
     const applyCallAudioEvidence = (transcriptValue, audioObservationValue) => {
       const transcript = String(transcriptValue || "").trim();
@@ -2167,8 +2223,8 @@
           speech_mode: "always",
           portal_voice: voicePayload(),
           think: showThinking,
-          ...(state.autoTools ? { tools: state.safeTools } : {}),
-          portal_auto_tools: state.autoTools,
+          ...(toolUseEnabled() ? { tools: state.safeTools } : {}),
+          portal_auto_tools: toolUseEnabled(),
         },
         {
           signal: turn.controller.signal,
@@ -2193,9 +2249,12 @@
             } else if (event.type === "stage" && event.stage === "tts") {
               setComposerStatus("Call · preparing voice…");
             } else if (event.type === "tool") {
+              activeToolTrace = mergeToolTrace(activeToolTrace, event);
               const names = (event.tools || []).map(item => (
                 typeof item === "string" ? item : String((item || {}).name || "tool")
               ));
+              revealMessage(assistant);
+              updateMessage(assistant, { toolTrace: activeToolTrace, streaming: true });
               setComposerStatus(`Call · ${event.phase === "start" ? "using" : "used"} ${names.join(", ")}…`);
             } else if (event.type === "audio_start") {
               if (!callPlayback.canStart(call, turn)) turn.discardReply = true;
@@ -2238,7 +2297,7 @@
       updateMessage(assistant, {
         content: reply.content || "Spoken response",
         thinking: showThinking ? (reply.thinking || streamedThinking) : "",
-        toolTrace: (data.portal || {}).safe_tools_executed || [],
+        toolTrace: (data.portal || {}).safe_tools_executed || activeToolTrace,
         generationMetrics: generationMetricsFromResponse(data),
         audio: turn.discardReply ? null : reply.audio,
         streaming: false,
@@ -2484,8 +2543,8 @@
         portal_voice: voicePayload(),
         think: wantsThinking,
         stream: false,
-        ...(state.autoTools ? { tools: state.safeTools } : {}),
-        portal_auto_tools: state.autoTools,
+        ...(toolUseEnabled() ? { tools: state.safeTools } : {}),
+        portal_auto_tools: toolUseEnabled(),
       },
     };
   }
@@ -2536,6 +2595,7 @@
     let streamedAudio = false;
     let inputTranscript = "";
     let inputAudioObservation = "";
+    let activeToolTrace = [];
     const applyInputAudioEvidence = (transcriptValue, audioObservationValue) => {
       const transcript = String(transcriptValue || "").trim();
       const audioObservation = String(audioObservationValue || "").trim();
@@ -2589,9 +2649,12 @@
             };
             setComposerStatus(labels[event.stage] || "Working…");
           } else if (event.type === "tool") {
+            activeToolTrace = mergeToolTrace(activeToolTrace, event);
             const names = (event.tools || []).map(item => (
               typeof item === "string" ? item : String((item || {}).name || "tool")
             ));
+            revealMessage(assistant);
+            updateMessage(assistant, { toolTrace: activeToolTrace, streaming: true });
             setComposerStatus(`${event.phase === "start" ? "Using" : "Used"} ${names.join(", ")}…`);
           } else if (event.type === "audio_start") {
             pcmController = beginPcmPlayback();
@@ -2622,7 +2685,7 @@
       updateMessage(assistant, {
         content: reply.content || (reply.audio ? "Spoken response" : "No response returned."),
         thinking: built.wantsThinking ? (reply.thinking || streamedThinking) : "",
-        toolTrace: (data.portal || {}).safe_tools_executed || [],
+        toolTrace: (data.portal || {}).safe_tools_executed || activeToolTrace,
         generationMetrics: generationMetricsFromResponse(data),
         audio: reply.audio,
         streaming: false,
@@ -2766,6 +2829,14 @@
     elements.think.setAttribute("aria-label", `${enabled ? "Disable" : "Enable"} reasoning`);
     elements.think.title = `Reasoning ${enabled ? "on" : "off"}`;
     setComposerStatus(enabled ? "Reasoning on" : "Reasoning off");
+  });
+  elements.tools.addEventListener("click", () => {
+    if (!state.toolExecutionAvailable) return;
+    const enabled = elements.tools.getAttribute("aria-pressed") !== "true";
+    elements.tools.setAttribute("aria-pressed", String(enabled));
+    elements.tools.setAttribute("aria-label", `${enabled ? "Disable" : "Enable"} tools`);
+    elements.tools.title = `Tools ${enabled ? "on" : "off"}`;
+    setComposerStatus(enabled ? "Tools on" : "Tools off");
   });
   elements.callButton.addEventListener("click", () => {
     const action = state.call ? stopCall() : startCall();

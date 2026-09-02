@@ -219,10 +219,12 @@ and needs a new artifact schema and release gate.
 - Tagged reasoning sanitation is a fail-closed output guard only; it is not the
   mechanism used to disable reasoning.
 - `tools` and tool history are passed unchanged.
-- The optional portal pins eight demonstration schemas and can execute up to
-  four structured rounds for public web search/fetch, attached-document search,
-  time/capabilities, and session-only memory. This is a portal extension; direct
-  adapter clients remain responsible for their own tools.
+- The optional portal exposes an off-by-default wrench toggle. Opted-in turns
+  pin eight demonstration schemas and can execute up to four structured rounds
+  for local-browser web discovery/bounded public-page fetch, attached-document
+  search, time/capabilities, and session-only web/memory recall. This is a
+  portal extension; direct adapter clients remain responsible for their own
+  tools.
 - Speech is skipped while unresolved `tool_calls` exist; the adapter reports
   `tts_skipped_reason=unresolved_tool_calls`.
 - After the client returns tool results, final assistant text can be spoken.

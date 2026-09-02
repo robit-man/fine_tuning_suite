@@ -110,8 +110,10 @@ residency and explicit ready frame, and calls `ready`. Matching voice profiles
 reuse the loaded graph while preserving the same `/synthesize` contract.
 
 The interactive wrapper default is `OMNI_TTS_STREAM_FRAMES=2`, approximately
-160 ms of codec audio per state-carrying decode window. The phone schedules the
-first PCM buffer with a 3 ms floor. In a post-isolation reference probe, a warm
+160 ms of codec audio per state-carrying decode window. The phone keeps an 80 ms
+initial playout lead, uses a 3 ms late-arrival scheduling floor, and applies a
+guarded 4 ms crossfade between sufficiently large contiguous buffers. In a
+post-isolation reference probe, a warm
 one-frame request reached first PCM in 774.1 ms and a warm two-frame request in
 814.1 ms. The roughly 40 ms cost halves the number of decoder boundaries; a
 voice-profile switch caused a one-time approximately 2.38 second first-PCM

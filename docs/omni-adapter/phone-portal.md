@@ -83,9 +83,10 @@ thinking, PCM, and one authoritative final adapter event.
 Qwen3-TTS uses two codec frames per state-carrying decoder window by default,
 approximately 160 ms for the packaged 12 Hz model. Its persistent CUDA worker
 loads the model/projector/speaker once and resets generation state between
-requests. The browser schedules the first received PCM with a 3 ms floor and
-queues later chunks on the Web Audio timeline. The final response retains a
-complete replayable WAV even when live PCM playback succeeded. `stage=tts` is a
+requests. The browser schedules the first received PCM with an 80 ms playout
+lead, keeps a 3 ms late-arrival floor, and uses a guarded 4 ms crossfade for
+sufficiently large contiguous buffers. The final response retains a complete
+replayable WAV assembled from the original PCM. `stage=tts` is a
 preparing state; `audio_start` is emitted only with the first actual PCM chunk,
 so “streaming” never describes a request that is still in model prefill.
 The 512-frame ceiling applies to each synthesis block. Longer replies are split

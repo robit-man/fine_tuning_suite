@@ -115,9 +115,11 @@ The patched Qwen3-TTS worker is warmed once and remains CUDA-resident across
 default-profile requests. Prompts travel over a bounded framed stdin/stdout
 protocol, so repeated turns avoid reloading the backbone and projector. Live
 decoding defaults to two codec frames (about 160 ms) per PCM window, and the
-browser schedules the first received window with a 3 ms floor. A changed voice
-profile safely replaces the resident worker; inline uploaded speaker audio uses
-the isolated single-shot fallback and then rewarms the default profile.
+browser starts with an 80 ms playout lead. A guarded 4 ms crossfade smooths
+large contiguous buffer boundaries; a late buffer instead receives a short
+fade-in. A changed voice profile safely replaces the resident worker; inline
+uploaded speaker audio uses the isolated single-shot fallback and then rewarms
+the default profile.
 
 The 512-frame voice setting is a per-generation ceiling (roughly 42.7 seconds
 at 12 Hz). Replies that would exceed it are split at natural sentence/word

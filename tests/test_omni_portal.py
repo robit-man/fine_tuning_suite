@@ -178,8 +178,13 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "function refreshActivity" in javascript
     assert "function reportDiagnostic" in javascript
     assert "function clearSessionDiagnostics" in javascript
-    assert 'nextTime: context.currentTime + 0.005' in javascript
-    assert "controller.context.currentTime + 0.003" in javascript
+    assert "const PCM_INITIAL_BUFFER_SECONDS = 0.08" in javascript
+    assert "const PCM_CROSSFADE_SECONDS = 0.004" in javascript
+    assert "nextTime: context.currentTime + PCM_INITIAL_BUFFER_SECONDS" in javascript
+    assert "controller.context.currentTime + PCM_RESCHEDULE_FLOOR_SECONDS" in javascript
+    assert "controller.context.createGain()" in javascript
+    assert "controller.nextTime - crossfade >= playbackFloor" in javascript
+    assert "linearRampToValueAtTime" in javascript
     assert 'const documents = state.attachments.filter(item => item.kind === "document")' in javascript
     assert "message.documents" in javascript
     assert 'item.mime === "image/gif"' in javascript

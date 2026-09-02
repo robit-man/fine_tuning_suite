@@ -8,6 +8,10 @@
   const MAX_VOICE_REFERENCE_MS = 10_000;
   const MAX_VOICE_REFERENCE_BYTES = 10 * 1024 * 1024;
   const MAX_VIDEO_RECORD_MS = 30_000;
+  const PCM_INITIAL_BUFFER_SECONDS = 0.08;
+  const PCM_RESCHEDULE_FLOOR_SECONDS = 0.003;
+  const PCM_CROSSFADE_SECONDS = 0.004;
+  const PCM_CROSSFADE_MIN_BUFFER_SECONDS = 0.08;
   const LIVE_CALL_SYSTEM_PROMPT = (
     "You are participating in a live two-way spoken conversation. Answer the "
     + "user's intent directly in a natural, concise spoken turn. Do not echo, "
@@ -807,7 +811,9 @@
     const controller = {
       epoch: state.playbackEpoch,
       context,
-      nextTime: context.currentTime + 0.005,
+      nextTime: context.currentTime + PCM_INITIAL_BUFFER_SECONDS,
+      lastGain: null,
+      lastDuration: 0,
       sources: new Set(),
       ended: false,
       cancelled: false,
@@ -837,16 +843,45 @@
     const buffer = controller.context.createBuffer(1, samples.length, 24000);
     buffer.copyToChannel(samples, 0);
     const source = controller.context.createBufferSource();
+    const gain = controller.context.createGain();
     source.buffer = buffer;
-    source.connect(controller.context.destination);
+    source.connect(gain);
+    gain.connect(controller.context.destination);
     controller.sources.add(source);
     source.addEventListener("ended", () => {
       controller.sources.delete(source);
       maybeFinishPcmPlayback(controller);
     }, { once: true });
-    const startAt = Math.max(controller.nextTime, controller.context.currentTime + 0.003);
+    const playbackFloor = (
+      controller.context.currentTime + PCM_RESCHEDULE_FLOOR_SECONDS
+    );
+    const crossfade = Math.min(
+      PCM_CROSSFADE_SECONDS,
+      buffer.duration / 4,
+      controller.lastDuration / 4,
+    );
+    const canCrossfade = (
+      controller.lastGain
+      && controller.lastDuration >= PCM_CROSSFADE_MIN_BUFFER_SECONDS
+      && buffer.duration >= PCM_CROSSFADE_MIN_BUFFER_SECONDS
+      && controller.nextTime - crossfade >= playbackFloor
+    );
+    const overlap = canCrossfade ? crossfade : 0;
+    const startAt = Math.max(controller.nextTime - overlap, playbackFloor);
+    if (overlap > 0) {
+      controller.lastGain.gain.setValueAtTime(1, startAt);
+      controller.lastGain.gain.linearRampToValueAtTime(0, startAt + overlap);
+      gain.gain.setValueAtTime(0, startAt);
+      gain.gain.linearRampToValueAtTime(1, startAt + overlap);
+    } else {
+      const fadeIn = Math.min(PCM_CROSSFADE_SECONDS, buffer.duration / 4);
+      gain.gain.setValueAtTime(0, startAt);
+      gain.gain.linearRampToValueAtTime(1, startAt + fadeIn);
+    }
     source.start(startAt);
     controller.nextTime = startAt + buffer.duration;
+    controller.lastGain = gain;
+    controller.lastDuration = buffer.duration;
   }
 
   function endPcmPlayback(controller) {

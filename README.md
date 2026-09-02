@@ -424,11 +424,12 @@ camera preview, bounded camera-call frames, safe Markdown with responsive GFM
 pipe tables, viewport-bounded
 token-pinned chat scrolling, native Ollama reasoning control, deterministic
 Qwen3-TTS profiles, allowlisted Female/Male presets, request-local WAV voice
-cloning, streamed PCM playback, and
-continuously submitted barge-in voice-call turns. An explicit wrench toggle
-beside reasoning adds eight server-pinned Ollama tool schemas for locally
+cloning, streamed PCM playback, and bounded single-flight barge-in voice-call
+turn consolidation. An explicit wrench toggle beside reasoning adds 19
+server-pinned Ollama tool schemas for locally
 browser-driven public web discovery/fetch,
-attached-document search, time/capabilities, and temporary session recall. The
+attached-document search, on-demand host snapshots, time/capabilities, and
+temporary session recall. The
 portal completes bounded multi-round tool chains before optional TTS and shows
 a live collapsible execution trace with each assistant reply. Tools default off;
 the harness uses no hosted search API or key. The low-latency worker stays
@@ -445,8 +446,9 @@ audio/image/video bytes—not a prior media embedding—are evaluated. Camera
 re-recording replaces the prior unsent camera clip, submitted video appears as
 a looping thumbnail, and each new media turn excludes all earlier media bytes
 while retaining prior text dialogue as explicitly non-current context. Call
-prompting answers intent rather than parroting the transcript. A privacy-bounded
-CPU/RAM/GPU/network/date-time snapshot is refreshed into trusted context every
+prompting answers intent rather than parroting the transcript. With tools
+enabled, an explicit privacy-bounded `get_system_snapshot` call can sample
+portal-host CPU/RAM/GPU/network/date-time data; it is not dumped into every
 turn. The broker-compliant CUDA-only supervisor publishes a
 temporary Cloudflare HTTPS tunnel. See the [phone portal runbook](docs/omni-adapter/phone-portal.md)
 for endpoints, lifecycle, isolation, diagnostics, and the complete verification

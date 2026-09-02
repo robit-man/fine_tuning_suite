@@ -71,15 +71,16 @@ explicit `omni.task="transcribe"` outside the composer when a
 transcription-only response is required.
 The speaker icon switches between text-only and text-plus-TTS replies. The
 waveform button opens Qwen3-TTS voice cloning and sampling controls. The phone
-icon starts automatic voice turns. Local VAD calibrates ambient noise for 650
-ms, requires 120 ms of sustained activity above a sensitive adaptive threshold, and
-closes after 750 ms of silence. Quiet, clicks, and elevated steady noise do not
+icon starts automatic voice turns. Local VAD calibrates ambient noise for 900
+ms, requires 200 ms of sustained activity and 420 ms of confirmed activity, and
+closes after 700 ms of silence. Quiet, clicks, and elevated steady noise do not
 call remote ASR. The green waveform is translucent while inactive and opaque
-only during confirmed activity. The microphone remains active while previous
-turns are queued or understanding; each later confirmed segment is submitted
-immediately instead of overwriting a single pending clip. During playback,
-sustained speech uses a stricter threshold and cancels the current audio without
-stopping capture. Portable adapter v1 remains `stream:false`;
+only during confirmed activity. The microphone remains active while inference
+or playback runs, but call cognition is single-flight: consecutive segments are
+consolidated into one bounded pending turn, stale unanswered inference is
+cancelled and folded back into that turn, and at most the newest 45 seconds are
+retained. During playback, sustained speech uses a stricter confirmation and
+cancels current audio without stopping capture. Portable adapter v1 remains `stream:false`;
 `/api/chat/stream` is an authenticated portal extension with stage, text,
 thinking, tool-round, PCM, and one authoritative final adapter event.
 
@@ -164,10 +165,12 @@ five-minute lease; page leave starts expiry, and trash deletes browser cache,
 document index, and diagnostics immediately. Restored media is display-only and
 never enters a new request automatically.
 
-Each request prepends a fresh trusted runtime snapshot with date/time,
-OS/architecture, CPU/load, RAM, bounded interface counters, and NVIDIA
-utilization. Hostnames, addresses, routes, sockets, processes, credentials, and
-session content are excluded.
+Each request receives a compact stable behavioral policy, not an eager runtime
+snapshot. With tools enabled, `get_system_snapshot` explicitly samples current
+portal-host date/time, OS/architecture, CPU/load, RAM, bounded interface
+counters, and NVIDIA utilization. Hostnames, addresses, routes, sockets,
+processes, credentials, and session content are excluded, and the result never
+describes the user's phone.
 
 Reasoning defaults off. The portal always sends a boolean Ollama `think` field:
 `false` until the brain control is explicitly enabled, then `true`. Native
@@ -234,6 +237,7 @@ speaker-embedding cloning and separate VoiceDesign/CustomVoice checkpoints.
 | Speaker + microphone | transcription followed by valid spoken audio |
 | Call control | silence-delimited audio turn followed by automatic playback |
 | VAD sensitivity and rejection | silence/click/steady-noise fixtures create zero requests; quiet and normal sustained speech create one per segment |
+| Call pressure control | rapid segments consolidate into one bounded pending turn; active inference count never exceeds one per browser call |
 | Voice clone | recorded/uploaded WAV changes speaker timbre and remains replayable |
 | Image | non-empty visual description |
 | Video with audio | ordered visual description plus spoken content |

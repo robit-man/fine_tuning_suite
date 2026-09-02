@@ -54,23 +54,25 @@ this provides bounded live visual conversation without presenting an unbounded
 video stream to the model context.
 
 The phone icon at the upper right starts hands-free voice mode. Browser-side
-voice activity detection first calibrates ambient noise for 650 ms, requires
-120 ms of sustained activity above a more sensitive adaptive threshold, and closes an
-utterance after 750 ms of silence. It submits a 16 kHz WAV only after that
-confirmed utterance; quiet, transient clicks, and elevated steady room noise do
-not call remote ASR. The waveform border, line, and label remain translucent
+voice activity detection first calibrates ambient noise for 900 ms, requires
+200 ms of sustained activity above an adaptive threshold, requires at least
+420 ms of confirmed activity, and closes an utterance after 700 ms of silence.
+It submits a 16 kHz WAV only after that confirmed utterance; silence, transient
+clicks, and elevated steady room noise do not call remote ASR. Playback-time
+barge-in uses a stricter 480 ms confirmation to reject speaker echo. The
+waveform border, line, and label remain translucent
 while inactive and become opaque only while VAD is active. Confirmed speech is
 sent through Qwen3-Omni and Qwen3.8, response text is relayed as Ollama produces
 it, and Qwen3-TTS speech is streamed back.
-The microphone remains active during inference and playback. Every confirmed
-speech segment is submitted immediately as its own request-local turn, even
-while earlier turns are queued or understanding; a single pending slot cannot
-overwrite continued speech. Sustained speech during playback stops the current
-audio while capture continues. Echo cancellation and a higher playback-time
-interruption threshold reduce self-triggering. The live waveform and status
-line show the number of processing turns while explicitly inviting the user to
-keep speaking. Tap the phone icon again to stop capture, abort every outstanding
-turn, and stop playback.
+The microphone remains active during inference and playback, but the browser
+permits only one cognitive request at a time. Consecutive confirmed segments
+are joined with short silence boundaries into one bounded latest-turn buffer.
+If the user continues before an unanswered inference completes, that stale
+request is aborted, its input is preserved, and the accumulated speech is sent
+once after a short settle interval. The buffer retains at most the newest 45
+seconds, so speech cannot create an unbounded HTTP/GPU queue. Sustained speech
+during playback stops the current audio while capture continues. Tap the phone
+icon again to clear pending audio, abort the active turn, and stop playback.
 
 Call turns include a dedicated conversational contract: answer the speaker's
 intent directly, do not echo/transcribe/paraphrase unless explicitly asked,
@@ -166,11 +168,13 @@ lease; leaving marks the cache for expiry after five minutes, and the next
 access removes expired data. The trash control deletes that browser cache
 immediately together with the server-side document index and diagnostics.
 
-Every turn also receives a fresh trusted runtime snapshot containing local and
-UTC date/time, OS/architecture, CPU/load, RAM, bounded network-interface
-counters, and NVIDIA VRAM/utilization/temperature/power. It deliberately omits
-hostnames, IP/MAC addresses, routes, sockets, process data, credentials, and
-session content, and instructs the model not to volunteer irrelevant telemetry.
+Ordinary turns receive a compact stable behavioral policy rather than a
+telemetry dump. With tools explicitly enabled, `get_system_snapshot` samples a
+fresh portal-host view containing local/UTC date/time, OS/architecture,
+CPU/load, RAM, bounded network-interface counters, and NVIDIA
+VRAM/utilization/temperature/power. It omits hostnames, IP/MAC addresses,
+routes, sockets, process data, credentials, and session content, and must never
+be presented as information about the user's phone.
 
 Video is sampled at 24 frames by the phone and clamped to at most 32 frames and
 2 fps by the adapter. The comprehension GGUF declares a 65,536-token context,

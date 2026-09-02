@@ -42,7 +42,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from examples.omni_portal.documents import DocumentError, SessionDocumentStore
-from examples.omni_portal.environment import runtime_environment_system_message
+from examples.omni_portal.environment import portal_behavior_system_message
 from examples.omni_portal.tools import (
     SAFE_TOOLS,
     PortalToolHarness,
@@ -1118,11 +1118,11 @@ def create_app(
             raise PortalRequestError("portal think must be a boolean")
         payload["think"] = think
 
-    def apply_runtime_environment(payload: dict[str, Any], *, tools_enabled: bool) -> None:
+    def apply_system_policy(payload: dict[str, Any], *, tools_enabled: bool) -> None:
         messages = payload.get("messages")
         if not isinstance(messages, list) or not messages:
             raise PortalRequestError("messages must be a non-empty array")
-        environment = runtime_environment_system_message()
+        environment = portal_behavior_system_message()
         environment["content"] += f"\n\n{TOOL_RESULT_POLICY}"
         if tools_enabled:
             environment["content"] += f"\n\n{tool_use_instructions()}"
@@ -1307,7 +1307,9 @@ def create_app(
                     "evidence_field": "adapter.audio_observation",
                 },
                 "runtime_environment": {
-                    "refreshed_each_turn": True,
+                    "delivery": "tool_only",
+                    "tool": "get_system_snapshot",
+                    "refreshed_each_call": True,
                     "includes": [
                         "date/time",
                         "CPU/load",
@@ -1385,7 +1387,7 @@ def create_app(
             diagnostic_media_ids = _request_media_digests(payload)
             apply_reasoning_mode(payload)
             apply_voice_profile(payload)
-            apply_runtime_environment(payload, tools_enabled=auto_tools)
+            apply_system_policy(payload, tools_enabled=auto_tools)
             observed_media = tool_harness.observe_request(session_id, payload) if auto_tools else []
             accepted_documents = apply_document_context(payload, session_id)
             if auto_tools:
@@ -1515,7 +1517,7 @@ def create_app(
         try:
             apply_reasoning_mode(payload)
             apply_voice_profile(payload)
-            apply_runtime_environment(payload, tools_enabled=auto_tools)
+            apply_system_policy(payload, tools_enabled=auto_tools)
             observed_media = tool_harness.observe_request(session_id, payload) if auto_tools else []
             accepted_documents = apply_document_context(payload, session_id)
             if auto_tools:

@@ -20,7 +20,6 @@ from examples.omni_portal.app import (
     load_voice_profile,
 )
 from examples.omni_portal.documents import SessionDocumentStore, extract_document
-from examples.omni_portal.environment import runtime_environment_snapshot
 from examples.omni_portal.tools import SAFE_TOOLS, PortalToolHarness
 
 TOKEN = "portal-test-token-with-more-than-24-characters"
@@ -88,6 +87,9 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
     assert b"image/gif" in response.data
     assert b"multiple" in response.data
     assert response.data.index(b"/assets/call_vad.js") < response.data.index(
+        b"/assets/call_queue.js"
+    )
+    assert response.data.index(b"/assets/call_queue.js") < response.data.index(
         b"/assets/call_playback.js"
     )
     assert response.data.index(b"/assets/call_playback.js") < response.data.index(
@@ -141,6 +143,12 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert ".markdown-table .align-right" in css
     assert "function startCall" in javascript
     assert "function submitCallUtterance" in javascript
+    assert "function enqueueCallUtterance" in javascript
+    assert "function flushPendingCallUtterances" in javascript
+    assert "function abortActiveCallTurns" in javascript
+    assert "CALL_PENDING_MAX_SECONDS = 45" in javascript
+    assert "preserveUnanswered: true" in javascript
+    assert "|| call.inflight" in javascript
     assert "function supersedeCallAudio" in javascript
     assert "callPlayback.canStart(call, turn)" in javascript
     assert "supersedeCallAudio(call, call.nextSequence)" in javascript
@@ -301,6 +309,24 @@ def test_mock_call_vad_harness_rejects_noise_and_accepts_confirmed_events() -> N
     }
 
 
+def test_mock_call_queue_consolidates_segments_and_bounds_pending_audio() -> None:
+    completed = subprocess.run(
+        ["node", "examples/omni_portal/call_queue_harness.mjs"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = json.loads(completed.stdout)
+    assert result == {
+        "status": "passed",
+        "consolidated_segments": 3,
+        "consolidated_samples": 1100,
+        "bounded_samples": 10,
+        "single_flight_contract": "one active inference plus one bounded pending turn",
+    }
+
+
 def test_mock_call_playback_harness_rejects_stale_audio() -> None:
     completed = subprocess.run(
         ["node", "examples/omni_portal/playback_harness.mjs"],
@@ -360,6 +386,25 @@ def test_portal_status_probes_all_internal_stages() -> None:
     }
     assert response.json["memory"]["scope"] == "browser_session"
     assert response.json["memory"]["entries"] == 0
+    assert response.json["runtime_environment"] == {
+        "delivery": "tool_only",
+        "tool": "get_system_snapshot",
+        "refreshed_each_call": True,
+        "includes": [
+            "date/time",
+            "CPU/load",
+            "RAM",
+            "NVIDIA GPUs",
+            "network counters",
+        ],
+        "excludes": [
+            "hostnames",
+            "addresses",
+            "processes",
+            "credentials",
+            "session content",
+        ],
+    }
     assert response.json["tool_execution"] == {
         "automatic": True,
         "streaming": True,
@@ -1592,8 +1637,9 @@ def test_mock_live_call_stream_defaults_native_reasoning_off() -> None:
     assert seen[0]["messages"][1:] == body["messages"]
     environment = seen[0]["messages"][0]
     assert environment["role"] == "system"
-    assert "<runtime_environment>" in environment["content"]
-    assert "IP/MAC addresses" in environment["content"]
+    assert "<runtime_environment>" not in environment["content"]
+    assert "conversational multimodal assistant" in environment["content"]
+    assert "current tool result" in environment["content"]
 
 
 def test_runtime_environment_snapshot_is_bounded_and_omits_sensitive_network_data(
@@ -1610,7 +1656,9 @@ def test_runtime_environment_snapshot_is_bounded_and_omits_sensitive_network_dat
         lambda *args, **kwargs: completed,
     )
 
-    snapshot = runtime_environment_snapshot()
+    snapshot = PortalToolHarness(SessionDocumentStore(ttl_s=300)).execute(
+        "one", "get_system_snapshot", {}
+    )
 
     assert snapshot["captured_at"]
     assert snapshot["utc_time"]
@@ -1632,7 +1680,7 @@ def test_runtime_environment_snapshot_is_bounded_and_omits_sensitive_network_dat
     assert '"mac"' not in serialized.lower()
 
 
-def test_runtime_environment_merges_into_existing_leading_system_message() -> None:
+def test_compact_system_policy_merges_without_eager_host_snapshot() -> None:
     seen: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1657,7 +1705,8 @@ def test_runtime_environment_merges_into_existing_leading_system_message() -> No
     messages = seen[0]["messages"]
     assert [item["role"] for item in messages] == ["system", "user"]
     assert messages[0]["content"].startswith("Answer naturally.")
-    assert "<runtime_environment>" in messages[0]["content"]
+    assert "<runtime_environment>" not in messages[0]["content"]
+    assert "conversational multimodal assistant" in messages[0]["content"]
     assert "Tool results" in messages[0]["content"]
     assert "untrusted data" in messages[0]["content"]
     assert "<portal_tools>" not in messages[0]["content"]

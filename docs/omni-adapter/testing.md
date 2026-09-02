@@ -143,6 +143,7 @@ result. Do not commit large or restricted media.
 - adapter media fields sent to an ordinary model without a sidecar;
 - sequential distinct clips with llama.cpp prompt caching accidentally enabled;
 - quiet/click/steady-noise VAD fixtures causing remote ASR requests;
+- rapid call segments creating parallel inference requests instead of one bounded consolidated pending turn;
 - two concurrent browser sessions receiving one another's marker or journal;
 - trash followed by a late aborted-request event recreating diagnostic data.
 - cache restoration re-submitting display-only media to inference;

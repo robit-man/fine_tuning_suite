@@ -220,9 +220,10 @@ and needs a new artifact schema and release gate.
   mechanism used to disable reasoning.
 - `tools` and tool history are passed unchanged.
 - The optional portal exposes an off-by-default wrench toggle. Opted-in turns
-  pin eight demonstration schemas and can execute up to four structured rounds
+  pin 19 demonstration schemas and can execute up to 50 structured rounds/calls
   for local-browser web discovery/bounded public-page fetch, attached-document
-  search, time/capabilities, and session-only web/memory recall. This is a
+  search, time/capabilities, explicit host snapshots, and session-only
+  web/memory recall. This is a
   portal extension; direct adapter clients remain responsible for their own
   tools.
 - Speech is skipped while unresolved `tool_calls` exist; the adapter reports
@@ -250,6 +251,14 @@ ticket. Conversation history remains in the individual browser page and is
 never reconstructed from a server session. A Secure, HttpOnly, SameSite cookie
 is used only for aggregate activity accounting and an isolated diagnostic
 journal; it is not model context.
+
+Within one live browser call, the client admits only one cognitive request.
+Back-to-back VAD segments are merged with short silence boundaries in a single
+pending buffer capped at the newest 45 seconds. If speech continues before an
+unanswered request produces a response, the client aborts that stale request,
+requeues its audio once, and submits the combined turn after a short settle
+window. This keeps capture responsive without allowing one user to consume all
+four global admissions.
 
 Do not infer GPU placement from a static free-VRAM scan. On broker-managed
 hosts, every CUDA service follows `/usr/local/share/ollama-unify/AGENTS.md`.

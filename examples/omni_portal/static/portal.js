@@ -9,6 +9,9 @@
   const MAX_VOICE_REFERENCE_MS = 10_000;
   const MAX_VOICE_REFERENCE_BYTES = 10 * 1024 * 1024;
   const MAX_VIDEO_RECORD_MS = 30_000;
+  const CALL_UTTERANCE_SETTLE_MS = 220;
+  const CALL_PENDING_MAX_SECONDS = 45;
+  const CALL_SEGMENT_GAP_MS = 120;
   const PCM_INITIAL_BUFFER_SECONDS = 0.08;
   const PCM_RESCHEDULE_FLOOR_SECONDS = 0.003;
   const PCM_CROSSFADE_SECONDS = 0.003;
@@ -36,15 +39,15 @@
   );
   function fallbackCallVad() {
     const DEFAULTS = Object.freeze({
-      calibrationMs: 650,
-      startThreshold: 0.012,
-      releaseThreshold: 0.007,
-      noiseMultiplier: 2.2,
-      releaseMultiplier: 1.45,
-      startConfirmMs: 120,
-      silenceMs: 750,
-      minActiveMs: 220,
-      preRollFrames: 6,
+      calibrationMs: 900,
+      startThreshold: 0.015,
+      releaseThreshold: 0.009,
+      noiseMultiplier: 3.0,
+      releaseMultiplier: 1.7,
+      startConfirmMs: 200,
+      silenceMs: 700,
+      minActiveMs: 420,
+      preRollFrames: 8,
       initialNoiseFloor: 0.003,
     });
     const resetState = (vad, now = 0, { calibrate = false } = {}) => {
@@ -133,16 +136,18 @@
     return { DEFAULTS, createState, processFrame, resetState };
   }
   const callVad = window.OmniCallVad || fallbackCallVad();
+  const callQueue = window.OmniCallQueue;
+  if (!callQueue) throw new Error("Call queue consolidation helper failed to load");
   const callPlayback = window.OmniCallPlayback;
   if (!callPlayback) throw new Error("Call playback ownership helper failed to load");
   const BARGE_VAD_OPTIONS = {
     calibrationMs: 0,
-    startThreshold: 0.05,
-    releaseThreshold: 0.025,
-    noiseMultiplier: 3.5,
-    releaseMultiplier: 1.8,
-    startConfirmMs: 360,
-    minActiveMs: 400,
+    startThreshold: 0.055,
+    releaseThreshold: 0.03,
+    noiseMultiplier: 4.0,
+    releaseMultiplier: 2.0,
+    startConfirmMs: 480,
+    minActiveMs: 560,
   };
   const LIMITS = {
     audio: 30 * 1024 * 1024,
@@ -2196,9 +2201,13 @@
 
   function callListeningStatus(call) {
     const label = state.camera ? "Video call live" : "Call live";
-    return call.inflight
-      ? `${label} · ${call.inflight} processing · keep speaking`
-      : `${label} · listening`;
+    const pending = callQueue.stats(call.pendingAudio).segmentCount;
+    if (call.inflight && pending) {
+      return `${label} · replacing reply · ${pending} speech segment${pending === 1 ? "" : "s"} ready`;
+    }
+    if (call.inflight) return `${label} · processing · keep speaking`;
+    if (pending) return `${label} · consolidating ${pending} speech segment${pending === 1 ? "" : "s"}`;
+    return `${label} · listening`;
   }
 
   function supersedeCallAudio(call, sequence) {
@@ -2208,6 +2217,84 @@
     }
     if (result.playbackInterrupted) stopCurrentPlayback();
     return result.turns.length;
+  }
+
+  function abortActiveCallTurns(call, { preserveUnanswered = false } = {}) {
+    let aborted = 0;
+    for (const turn of call.turns) {
+      if (
+        preserveUnanswered
+        && !turn.responseStarted
+        && !turn.historyQueued
+        && !turn.inputRequeued
+        && call.playbackTurn !== turn
+      ) {
+        callQueue.enqueue(call.pendingAudio, turn.inputChunks, turn.activeDurationMs);
+        turn.inputRequeued = true;
+      }
+      turn.discardReply = true;
+      if (turn.assistant) turn.assistant.node.classList.add("interrupted");
+      if (!turn.controller.signal.aborted) {
+        turn.controller.abort();
+        aborted += 1;
+      }
+    }
+    if (aborted || call.playbackTurn) stopCurrentPlayback();
+    return aborted;
+  }
+
+  function clearPendingCallFlush(call) {
+    if (call.pendingFlushTimer !== null) clearTimeout(call.pendingFlushTimer);
+    call.pendingFlushTimer = null;
+  }
+
+  function schedulePendingCallFlush(call, delayMs = CALL_UTTERANCE_SETTLE_MS) {
+    clearPendingCallFlush(call);
+    if (state.call !== call || !callQueue.hasPending(call.pendingAudio)) return;
+    call.pendingFlushTimer = window.setTimeout(() => {
+      call.pendingFlushTimer = null;
+      if (state.call !== call || !callQueue.hasPending(call.pendingAudio)) return;
+      if (call.vadActive || call.captureVad) {
+        schedulePendingCallFlush(call);
+        return;
+      }
+      if (call.inflight) return;
+      void flushPendingCallUtterances(call);
+    }, Math.max(0, delayMs));
+  }
+
+  function enqueueCallUtterance(call, chunks, activeDurationMs) {
+    if (state.call !== call) return;
+    const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
+    const capturedDurationMs = sampleCount / call.context.sampleRate * 1000;
+    const confirmedDurationMs = Number.isFinite(activeDurationMs)
+      ? activeDurationMs
+      : capturedDurationMs;
+    if (confirmedDurationMs < call.vad.config.minActiveMs) return;
+
+    callQueue.enqueue(call.pendingAudio, chunks, confirmedDurationMs);
+    if (call.inflight) abortActiveCallTurns(call, { preserveUnanswered: true });
+    setComposerStatus(callListeningStatus(call));
+    schedulePendingCallFlush(call);
+  }
+
+  function flushPendingCallUtterances(call) {
+    if (
+      state.call !== call
+      || call.inflight
+      || call.vadActive
+      || call.captureVad
+      || !callQueue.hasPending(call.pendingAudio)
+    ) return;
+    clearPendingCallFlush(call);
+    const pending = callQueue.take(call.pendingAudio);
+    void submitCallUtterance(
+      call,
+      pending.chunks,
+      pending.activeDurationMs,
+      pending.segmentCount,
+      pending.truncated,
+    );
   }
 
   function flushCallHistory(call) {
@@ -2232,18 +2319,32 @@
       flushCallHistory(call);
     }
     if (state.call !== call) return;
+    if (callQueue.hasPending(call.pendingAudio)) {
+      schedulePendingCallFlush(call, 0);
+      return;
+    }
     if (!call.vadActive && !call.playbackTurn) {
       setComposerStatus(callListeningStatus(call));
     }
   }
 
-  async function submitCallUtterance(call, chunks, activeDurationMs) {
+  async function submitCallUtterance(
+    call,
+    chunks,
+    activeDurationMs,
+    segmentCount = 1,
+    truncated = false,
+  ) {
     const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
     const capturedDurationMs = sampleCount / call.context.sampleRate * 1000;
     const confirmedDurationMs = Number.isFinite(activeDurationMs)
       ? activeDurationMs
       : capturedDurationMs;
-    if (confirmedDurationMs < callVad.DEFAULTS.minActiveMs || state.call !== call) {
+    if (
+      confirmedDurationMs < call.vad.config.minActiveMs
+      || state.call !== call
+      || call.inflight
+    ) {
       return;
     }
 
@@ -2253,6 +2354,10 @@
       discardReply: false,
       historyQueued: false,
       assistant: null,
+      inputChunks: chunks,
+      activeDurationMs: confirmedDurationMs,
+      inputRequeued: false,
+      responseStarted: false,
     };
     supersedeCallAudio(call, turn.sequence);
     call.nextSequence += 1;
@@ -2279,16 +2384,23 @@
       role: "user",
       content: frame
         ? (
-          "The attached audio is the user's latest spoken turn and the attached "
+          `The attached audio combines ${segmentCount} consecutive segment${segmentCount === 1 ? "" : "s"} `
+          + "from the user's latest spoken turn and the attached "
           + "image is the current camera frame. Continue the conversation by "
-          + "answering the user's spoken intent, using the frame only when relevant."
+          + "answering the user's combined spoken intent, using later words to resolve "
+          + "self-corrections and the frame only when relevant."
         )
         : (
-          "The attached audio is the user's latest spoken turn. Continue the live "
-          + "conversation by answering that turn directly."
+          `The attached audio combines ${segmentCount} consecutive segment${segmentCount === 1 ? "" : "s"} `
+          + "from the user's latest spoken turn. Continue the live conversation by "
+          + "answering the combined intent directly and use later words to resolve "
+          + "self-corrections."
         ),
       audios: [envelope],
     };
+    if (truncated) {
+      message.content += " The bounded live-call buffer retained the newest audio window.";
+    }
     if (frame) message.images = [frame];
     const callMessages = [
       { role: "system", content: LIVE_CALL_SYSTEM_PROMPT },
@@ -2344,6 +2456,7 @@
                 ? String((event.message || {}).thinking || "")
                 : "";
               streamedContent += contentDelta;
+              if (contentDelta || thinkingDelta) turn.responseStarted = true;
               if (showThinking) {
                 streamedThinking += thinkingDelta;
               }
@@ -2354,8 +2467,10 @@
                 streaming: true,
               });
             } else if (event.type === "stage" && event.stage === "tts") {
+              turn.responseStarted = true;
               setComposerStatus("Call · preparing voice…");
             } else if (event.type === "tool") {
+              turn.responseStarted = true;
               activeToolTrace = mergeToolTrace(activeToolTrace, event);
               const names = (event.tools || []).map(item => (
                 typeof item === "string" ? item : String((item || {}).name || "tool")
@@ -2364,6 +2479,7 @@
               updateMessage(assistant, { toolTrace: activeToolTrace, streaming: true });
               setComposerStatus(`Call · ${event.phase === "start" ? "using" : "used"} ${names.join(", ")}…`);
             } else if (event.type === "audio_start") {
+              turn.responseStarted = true;
               if (!callPlayback.canStart(call, turn)) turn.discardReply = true;
               if (!turn.discardReply) {
                 if (call.playbackTurn && call.playbackTurn !== turn) {
@@ -2486,6 +2602,12 @@
       completedHistory: new Map(),
       turns: new Set(),
       controllers: new Set(),
+      pendingAudio: callQueue.createState({
+        sampleRate: context.sampleRate,
+        maxSeconds: CALL_PENDING_MAX_SECONDS,
+        gapMs: CALL_SEGMENT_GAP_MS,
+      }),
+      pendingFlushTimer: null,
       playbackTurn: null,
       animationFrame: null,
     };
@@ -2504,9 +2626,14 @@
         call.captureVad = detector;
       }
       if (detection.event === "start") {
+        clearPendingCallFlush(call);
         setVadActive(call, true);
-        if (supersedeCallAudio(call, call.nextSequence)) {
-          setComposerStatus("Call · interruption heard…");
+        const superseded = supersedeCallAudio(call, call.nextSequence);
+        const aborted = call.inflight
+          ? abortActiveCallTurns(call, { preserveUnanswered: true })
+          : 0;
+        if (superseded || aborted) {
+          setComposerStatus("Call · interruption heard · consolidating speech…");
         } else {
           setComposerStatus(call.inflight
             ? `Call · listening · ${call.inflight} processing`
@@ -2521,7 +2648,7 @@
       if (detection.event !== "utterance") return;
       call.captureVad = null;
       setVadActive(call, false);
-      void submitCallUtterance(
+      enqueueCallUtterance(
         call,
         detection.utterance.chunks,
         detection.utterance.activeDurationMs,
@@ -2552,6 +2679,8 @@
     const call = state.call;
     if (!call) return;
     state.call = null;
+    clearPendingCallFlush(call);
+    callQueue.clear(call.pendingAudio);
     for (const controller of call.controllers) controller.abort();
     call.controllers.clear();
     cancelAnimationFrame(call.animationFrame);

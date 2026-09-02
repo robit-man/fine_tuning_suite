@@ -19,6 +19,7 @@ owns the schemas and implementations.
 | Tool | Purpose | State or network scope |
 |---|---|---|
 | `get_current_time` | Current portal-host date, time, timezone, and UTC offset | Read-only host metadata |
+| `get_system_snapshot` | Fresh bounded platform, CPU/load, RAM, NVIDIA GPU, network-counter, date, and time snapshot | Read-only portal-host metadata; no hostnames, addresses, processes, credentials, or session content |
 | `get_portal_capabilities` | Report model, media, document, and safe-tool capabilities | Read-only runtime metadata |
 | `web_search` | Discover public result links in a locally launched Chromium/Chrome process, or search this session's local page index | Public search page for `discover`; no network for `session` |
 | `web_fetch` | Fetch and extract bounded text from one source URL | Public HTTP(S) only |
@@ -45,6 +46,12 @@ automatic execution is requested. A client cannot redefine a safe tool's
 implementation by changing its schema. The trusted tool-use contract is also
 injected only for opted-in turns; tools-off turns receive neither that contract
 nor schemas.
+
+Host awareness is deliberately tool-only. Ordinary turns receive a short,
+stable behavioral system policy and no hardware/utilization blob. When a user
+asks about the portal host, or a task materially depends on current resources,
+the model can call `get_system_snapshot`; each call samples fresh bounded data.
+The result describes the server running the portal, never the user's phone.
 
 ## Tool round lifecycle
 

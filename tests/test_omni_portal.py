@@ -21,6 +21,7 @@ from examples.omni_portal.app import (
 )
 from examples.omni_portal.documents import SessionDocumentStore, extract_document
 from examples.omni_portal.environment import runtime_environment_snapshot
+from examples.omni_portal.tools import SAFE_TOOLS, PortalToolHarness
 
 TOKEN = "portal-test-token-with-more-than-24-characters"
 
@@ -81,6 +82,7 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
     assert b'id="voice-reference-input"' in response.data
     assert b'id="active-user-count"' in response.data
     assert b'class="audio-observation-output"' in response.data
+    assert b'class="tool-output"' in response.data
     assert b"Sounds heard" in response.data
     assert b"application/pdf" in response.data
     assert b"image/gif" in response.data
@@ -125,6 +127,8 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     css = Path("examples/omni_portal/static/portal.css").read_text()
 
     assert "function renderMarkdown" in javascript
+    assert "function renderToolTrace" in javascript
+    assert "portal_auto_tools: state.autoTools" in javascript
     assert "function markdownTableSpec" in javascript
     assert "function renderMarkdownTable" in javascript
     assert ".markdown-table-wrap" in css
@@ -345,6 +349,17 @@ def test_portal_status_probes_all_internal_stages() -> None:
     assert response.json["documents"]["retrieval"] == (
         "session-isolated hashed lexical embeddings"
     )
+    assert {item["function"]["name"] for item in response.json["safe_tools"]} == {
+        item["function"]["name"] for item in SAFE_TOOLS
+    }
+    assert response.json["memory"]["scope"] == "browser_session"
+    assert response.json["memory"]["entries"] == 0
+    assert response.json["tool_execution"] == {
+        "automatic": True,
+        "streaming": True,
+        "max_rounds": 4,
+        "max_calls_per_round": 4,
+    }
     assert response.json["voice_profile"]["client_reference_wav"] is True
     assert response.json["requests"] == {
         "users": 0,
@@ -448,6 +463,88 @@ def test_portal_indexes_documents_and_sends_only_retrieved_text() -> None:
     assert "notes.md" in upstream_message["content"]
     assert "copper switch" in upstream_message["content"]
     assert response.json["portal"]["documents_indexed"][0]["name"] == "notes.md"
+
+
+def test_safe_tools_search_fetch_memory_and_block_private_networks() -> None:
+    def web_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "html.duckduckgo.com":
+            return httpx.Response(
+                200,
+                text=(
+                    '<a class="result__a" '
+                    'href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fguide">'
+                    "Example guide</a>"
+                    '<a class="result__snippet">A useful public source.</a>'
+                ),
+                headers={"content-type": "text/html"},
+            )
+        if request.url == "https://example.com/redirect":
+            return httpx.Response(302, headers={"location": "http://127.0.0.1/admin"})
+        assert request.url == "https://example.com/guide"
+        return httpx.Response(
+            200,
+            text="<html><script>ignore()</script><h1>Verified guide</h1><p>Copper fact.</p></html>",
+            headers={"content-type": "text/html"},
+        )
+
+    documents = SessionDocumentStore(ttl_s=300)
+    harness = PortalToolHarness(
+        documents,
+        web_client=httpx.Client(transport=httpx.MockTransport(web_handler)),
+        resolver=lambda _hostname: ["93.184.216.34"],
+    )
+
+    search = harness.execute("one", "web_search", {"query": "example guide"})
+    assert search["provider"] == "duckduckgo"
+    assert search["results"][0]["url"] == "https://example.com/guide"
+    fetched = harness.execute(
+        "one", "web_fetch", {"url": search["results"][0]["url"]}
+    )
+    assert "Verified guide" in fetched["content"]
+    assert "ignore()" not in fetched["content"]
+    blocked = harness.execute("one", "web_fetch", {"url": "http://127.0.0.1/admin"})
+    assert "error" in blocked
+    redirect = harness.execute(
+        "one", "web_fetch", {"url": "https://example.com/redirect"}
+    )
+    assert "error" in redirect
+
+    harness.execute(
+        "one",
+        "memory_write",
+        {"topic": "research", "key": "copper", "value": "Copper fact."},
+    )
+    assert harness.execute("one", "memory_search", {"query": "copper"})["results"]
+    harness.execute(
+        "one",
+        "memory_write",
+        {"topic": "demo", "key": "launch_color", "value": "ultraviolet"},
+    )
+    assert harness.execute("one", "memory_search", {"query": "launch color"})[
+        "results"
+    ][0]["value"] == "ultraviolet"
+    assert harness.execute("two", "memory_search", {"query": "copper"})["results"] == []
+    harness.clear("one")
+    assert harness.execute("one", "memory_search", {"query": "copper"})["results"] == []
+
+
+def test_document_search_tool_is_session_isolated() -> None:
+    documents = SessionDocumentStore(ttl_s=300)
+    harness = PortalToolHarness(documents)
+    envelope = {
+        "name": "script.py",
+        "mime_type": "text/x-python",
+        "encoding": "base64",
+        "data": base64.b64encode(b"def launch_orchid(): return 'amber'").decode(),
+    }
+    documents.prepare("one", [envelope], "launch orchid")
+
+    own = harness.execute("one", "document_search", {"query": "orchid"})
+    other = harness.execute("two", "document_search", {"query": "orchid"})
+
+    assert own["results"][0]["document"] == "script.py"
+    assert "launch_orchid" in own["results"][0]["content"]
+    assert other["results"] == []
 
 
 def test_portal_queues_concurrent_sessions_without_context_bleed() -> None:
@@ -1019,7 +1116,11 @@ def test_portal_stream_route_pins_profile_and_relays_ndjson() -> None:
     )
 
     assert response.status_code == 200
-    assert response.data == wire
+    events = [json.loads(line) for line in response.data.splitlines()]
+    assert events[0] == {"type": "delta", "message": {"content": "Hi"}}
+    assert events[-1]["type"] == "final"
+    assert events[-1]["response"]["message"]["content"] == "Hi"
+    assert events[-1]["response"]["portal"]["safe_tools_executed"] == []
     assert seen[0][0] == "/api/chat/stream"
     assert seen[0][1]["stream"] is True
     assert seen[0][1]["think"] is True
@@ -1065,7 +1166,9 @@ def test_mock_live_call_stream_defaults_native_reasoning_off() -> None:
     )
 
     assert response.status_code == 200
-    assert response.data == wire
+    events = [json.loads(line) for line in response.data.splitlines()]
+    assert events[0]["message"]["content"] == "Final answer."
+    assert events[-1]["response"]["message"]["content"] == "Final answer."
     assert seen[0]["think"] is False
     assert seen[0]["messages"][1:] == body["messages"]
     environment = seen[0]["messages"][0]
@@ -1136,15 +1239,60 @@ def test_runtime_environment_merges_into_existing_leading_system_message() -> No
     assert [item["role"] for item in messages] == ["system", "user"]
     assert messages[0]["content"].startswith("Answer naturally.")
     assert "<runtime_environment>" in messages[0]["content"]
+    assert "Tool results" in messages[0]["content"]
+    assert "untrusted data" in messages[0]["content"]
 
 
-def test_portal_stream_route_requires_auth_and_disables_auto_tools() -> None:
-    calls = 0
+def test_portal_stream_route_requires_auth_and_chains_session_tools() -> None:
+    requests = []
 
-    def handler(_request: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        return httpx.Response(200)
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        if len(requests) == 1:
+            response = {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "memory_write",
+                                "arguments": {
+                                    "topic": "demo",
+                                    "key": "color",
+                                    "value": "violet",
+                                },
+                            },
+                        }
+                    ],
+                }
+            }
+        elif len(requests) == 2:
+            response = {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "memory_search",
+                                "arguments": {"query": "color"},
+                            },
+                        }
+                    ],
+                }
+            }
+        else:
+            response = {"message": {"role": "assistant", "content": "Violet."}}
+        wire = json.dumps({"type": "final", "response": response}) + "\n"
+        return httpx.Response(
+            200,
+            content=wire,
+            headers={"content-type": "application/x-ndjson"},
+        )
 
     app = create_app(_config(), httpx.Client(transport=httpx.MockTransport(handler)))
     client = app.test_client()
@@ -1152,10 +1300,21 @@ def test_portal_stream_route_requires_auth_and_disables_auto_tools() -> None:
     assert (
         client.post("/api/chat/stream", json=_request(stream=True)).status_code == 401
     )
-    rejected = client.post(
+    response = client.post(
         "/api/chat/stream",
         headers={"Authorization": f"Bearer {TOKEN}"},
         json=_request(stream=True, portal_auto_tools=True),
     )
-    assert rejected.status_code == 400
-    assert calls == 0
+    assert response.status_code == 200
+    events = [json.loads(line) for line in response.data.splitlines()]
+    assert len(requests) == 3
+    assert {item["function"]["name"] for item in requests[0]["tools"]} == {
+        item["function"]["name"] for item in SAFE_TOOLS
+    }
+    assert requests[1]["messages"][-1]["tool_name"] == "memory_write"
+    assert requests[2]["messages"][-1]["tool_name"] == "memory_search"
+    assert [item["name"] for item in events[-1]["response"]["portal"]["safe_tools_executed"]] == [
+        "memory_write",
+        "memory_search",
+    ]
+    assert events[-1]["response"]["message"]["content"] == "Violet."

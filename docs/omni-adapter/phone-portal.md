@@ -81,7 +81,16 @@ immediately instead of overwriting a single pending clip. During playback,
 sustained speech uses a stricter threshold and cancels the current audio without
 stopping capture. Portable adapter v1 remains `stream:false`;
 `/api/chat/stream` is an authenticated portal extension with stage, text,
-thinking, PCM, and one authoritative final adapter event.
+thinking, tool-round, PCM, and one authoritative final adapter event.
+
+Chat and call turns advertise the portal's server-pinned structured tool array.
+The model can chain keyless `web_search` into bounded `web_fetch`, query the
+current session's attached-document index, or use temporary session-only
+memory. Tool results return through standard assistant `tool_calls` and
+`role="tool"` messages; the browser shows a compact **Tools** disclosure and
+speech waits for the final answer. Public-web destinations are DNS/redirect
+validated, local and metadata networks are blocked, and all retrieved content
+is untrusted evidence. See [Portal tools and tool chaining](tools.md).
 
 Qwen3-TTS uses two codec frames per state-carrying decoder window by default,
 approximately 160 ms for the packaged 12 Hz model. Its persistent CUDA worker

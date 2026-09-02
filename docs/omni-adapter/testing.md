@@ -30,7 +30,11 @@ six-view GGUF packing/materialization, and custom Ollama layer
 attach/resolve/cache preparation. Portal tests additionally cover native
 reasoning-off routing, adaptive call VAD, smooth message handling, concurrent
 session and document-index isolation, bounded PDF/text ingestion,
-content-redacted diagnostic expiry/deletion, and streamed PCM relay.
+content-redacted diagnostic expiry/deletion, streamed PCM relay, public-web
+egress rejection, session-memory isolation, and structured multi-round tool
+execution. The tool gate includes search→fetch and
+memory-write→memory-search→final chains while ensuring unresolved calls never
+reach TTS.
 The browser-cache harness covers restore, five-minute logical expiry, media
 preview retention, and explicit clear. Environment tests assert bounded output
 and the omission of IP/MAC data. The persistent-TTS harness proves that two

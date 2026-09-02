@@ -252,7 +252,8 @@ button { color: inherit; }
 @keyframes stream-caret { 50% { opacity: 0; } }
 
 .thinking-output,
-.audio-observation-output {
+.audio-observation-output,
+.tool-output {
   margin-top: 9px;
   padding-top: 8px;
   border-top: 1px solid var(--line);
@@ -260,11 +261,18 @@ button { color: inherit; }
   font-size: 12px;
 }
 .thinking-output[hidden],
-.audio-observation-output[hidden] { display: none; }
+.audio-observation-output[hidden],
+.tool-output[hidden] { display: none; }
 .thinking-output summary,
-.audio-observation-output summary { cursor: pointer; color: var(--quiet); font: 700 9px var(--mono); letter-spacing: .05em; text-transform: uppercase; }
+.audio-observation-output summary,
+.tool-output summary { cursor: pointer; color: var(--quiet); font: 700 9px var(--mono); letter-spacing: .05em; text-transform: uppercase; }
 .thinking-content,
-.audio-observation-content { margin-top: 7px; }
+.audio-observation-content,
+.tool-content { margin-top: 7px; }
+.tool-entry { display: flex; gap: 7px; align-items: baseline; margin-top: 4px; }
+.tool-entry strong { color: var(--text); font: 700 10px var(--mono); }
+.tool-entry span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-entry.failed strong { color: var(--danger); }
 .message.user.sound-only .message-content { opacity: .5; font-style: italic; }
 
 .audio-output { margin-top: 10px; }

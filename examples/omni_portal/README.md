@@ -93,6 +93,8 @@ conversation—not as proof that an older scene remains visible.
 | Speaker icon enabled | final text → streamed Qwen3-TTS PCM → replayable 24 kHz WAV |
 | Brain icon enabled | Ollama `think:true` → collapsible streamed reasoning |
 | Phone icon enabled | repeated/barge-in audio → comprehension → streamed Qwen3.8 text → TTS |
+| Fresh web information | structured `web_search` → `web_fetch` → sourced Qwen3.8 answer |
+| Temporary recall | session-only `memory_write` / `memory_read` / `memory_search` |
 
 Microphone capture is encoded in the browser as a complete 16 kHz mono PCM16
 WAV. `/api/chat/stream` is a portal extension that relays NDJSON stage events,
@@ -194,6 +196,31 @@ by the opaque Secure browser-session cookie, clear with the trash button, and
 expire five minutes after activity stops. This is retrieval over extracted text,
 not a claim that PDF pixels or arbitrary office formats are natively understood
 by the GGUF.
+
+## Structured tool demonstration
+
+Chat and live-call turns include the portal's authoritative eight-tool schema
+array and request automatic execution. Qwen3.8 emits standard Ollama
+`message.tool_calls`; the portal executes only `get_current_time`,
+`get_portal_capabilities`, `web_search`, `web_fetch`, `document_search`,
+`memory_write`, `memory_read`, and `memory_search`, appends normal tool-role
+messages, and repeats until a final answer or the four-round ceiling. The
+assistant message shows a compact collapsible **Tools** trace. Spoken output is
+deferred until no unresolved calls remain.
+
+Web discovery uses keyless DuckDuckGo and a separate bounded page-fetch step,
+adapted from the adjacent Omnius tool split. Fetch permits only public HTTP(S),
+revalidates redirects and DNS destinations, blocks local/private/metadata
+addresses, limits bodies to 2 MiB and extracted content to 12,000 characters,
+and treats every result as untrusted evidence. It does not execute JavaScript
+or support authentication, forms, downloads, or browser automation.
+
+Memory is in-process and isolated by the opaque browser session. It is limited
+to 64 small entries/32,768 characters, clears with Trash, and expires after five
+idle minutes. `document_search` queries only documents already attached in the
+same session; scripts are text for analysis and are never executed. See
+[Portal tools and tool chaining](../../docs/omni-adapter/tools.md) for schemas,
+examples, security boundaries, and validation gates.
 
 Every comprehension request explicitly sets llama.cpp `cache_prompt:false`.
 Prompt-slot reuse is safe for ordinary token prefixes but the pinned

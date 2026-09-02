@@ -317,6 +317,73 @@ class SessionDocumentStore:
         with self._lock:
             self._sessions.pop(self._key(session_id), None)
 
+    @staticmethod
+    def _select(
+        index: _SessionIndex,
+        query: str,
+        *,
+        max_results: int,
+        max_chars: int,
+    ) -> list[DocumentChunk]:
+        query_vector, query_norm = _embedding(query)
+        if query_norm:
+            ranked = sorted(
+                index.chunks,
+                key=lambda chunk: _score(query_vector, query_norm, chunk),
+                reverse=True,
+            )
+        else:
+            ranked = list(index.chunks)
+        selected: list[DocumentChunk] = []
+        used = 0
+        for chunk in ranked:
+            cost = len(chunk.text) + len(chunk.name) + 80
+            if selected and used + cost > max_chars:
+                continue
+            selected.append(chunk)
+            used += cost
+            if len(selected) >= max_results or used >= max_chars:
+                break
+        return selected
+
+    def search(
+        self,
+        session_id: str,
+        query: Any,
+        *,
+        max_results: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Return bounded excerpts from documents already indexed for a session."""
+
+        normalized_query = str(query or "").strip()
+        if not normalized_query:
+            raise DocumentError("document search query is required")
+        if len(normalized_query) > 500:
+            raise DocumentError("document search query exceeds 500 characters")
+        limit = max(1, min(8, int(max_results)))
+        now = time.monotonic()
+        with self._lock:
+            self._expire_locked(now)
+            index = self._sessions.get(self._key(session_id))
+            if index is None:
+                return []
+            index.last_seen = now
+            selected = self._select(
+                index,
+                normalized_query,
+                max_results=limit,
+                max_chars=MAX_CONTEXT_CHARS,
+            )
+        return [
+            {
+                "document": chunk.name,
+                "document_id": chunk.document_id,
+                "chunk": chunk.ordinal,
+                "content": chunk.text,
+            }
+            for chunk in selected
+        ]
+
     def prepare(
         self,
         session_id: str,
@@ -369,25 +436,12 @@ class SessionDocumentStore:
                         "extracted_chars": len(text),
                     }
                 )
-            query_vector, query_norm = _embedding(query)
-            if query_norm:
-                ranked = sorted(
-                    index.chunks,
-                    key=lambda chunk: _score(query_vector, query_norm, chunk),
-                    reverse=True,
-                )
-            else:
-                ranked = list(index.chunks)
-            selected: list[DocumentChunk] = []
-            used = 0
-            for chunk in ranked:
-                cost = len(chunk.text) + len(chunk.name) + 80
-                if selected and used + cost > MAX_CONTEXT_CHARS:
-                    continue
-                selected.append(chunk)
-                used += cost
-                if len(selected) >= 8 or used >= MAX_CONTEXT_CHARS:
-                    break
+            selected = self._select(
+                index,
+                query,
+                max_results=8,
+                max_chars=MAX_CONTEXT_CHARS,
+            )
         if not selected:
             return "", accepted
         body = "\n\n".join(

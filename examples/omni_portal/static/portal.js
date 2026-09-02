@@ -206,6 +206,8 @@
     attachments: [],
     history: [],
     messages: [],
+    safeTools: [],
+    autoTools: false,
     recording: null,
     holdingMic: false,
     micHoldStartedAt: 0,
@@ -316,6 +318,7 @@
           content: String(record.content || ""),
           thinking: String(record.thinking || ""),
           audioObservation: String(record.audioObservation || ""),
+          toolTrace: Array.isArray(record.toolTrace) ? record.toolTrace.map(item => ({ ...item })) : [],
           soundOnly: Boolean(record.soundOnly),
           generationMetrics: record.generationMetrics ? { ...record.generationMetrics } : null,
           audio: record.audio && record.audio.data ? { ...record.audio } : null,
@@ -401,6 +404,7 @@
           content: String(item.content || ""),
           thinking: String(item.thinking || ""),
           audioObservation: String(item.audioObservation || ""),
+          toolTrace: Array.isArray(item.toolTrace) ? item.toolTrace : [],
           soundOnly: Boolean(item.soundOnly),
           generationMetrics: item.generationMetrics || null,
           audio: item.audio && item.audio.data ? item.audio : null,
@@ -807,10 +811,46 @@
       : `Generated ${metrics.createdAt}`;
   }
 
+  function normalizedToolTrace(value) {
+    if (!Array.isArray(value)) return [];
+    return value.slice(0, 20).map(item => ({
+      name: String((item || {}).name || "unknown").slice(0, 80),
+      arguments: (item && typeof item.arguments === "object" && item.arguments)
+        ? Object.fromEntries(Object.entries(item.arguments).slice(0, 6).map(
+          ([key, argument]) => [String(key).slice(0, 80), String(argument).slice(0, 240)],
+        ))
+        : {},
+      ok: Boolean((item || {}).ok),
+    }));
+  }
+
+  function renderToolTrace(record) {
+    const box = record.node.querySelector(".tool-output");
+    const content = record.node.querySelector(".tool-content");
+    if (!box || !content) return;
+    const trace = record.toolTrace || [];
+    box.hidden = trace.length === 0;
+    content.replaceChildren();
+    box.querySelector("summary").textContent = `Tools · ${trace.length}`;
+    for (const item of trace) {
+      const row = document.createElement("div");
+      row.className = `tool-entry${item.ok ? "" : " failed"}`;
+      const name = document.createElement("strong");
+      name.textContent = item.name;
+      const detail = document.createElement("span");
+      detail.textContent = Object.entries(item.arguments)
+        .map(([key, value]) => `${key}: ${value}`)
+        .join(" · ") || (item.ok ? "completed" : "failed");
+      row.append(name, detail);
+      content.appendChild(row);
+    }
+  }
+
   function updateMessage(record, {
     content,
     thinking,
     audioObservation,
+    toolTrace,
     soundOnly,
     generationMetrics,
     audio,
@@ -838,6 +878,10 @@
       audioObservationBox.hidden = !audioObservation;
       if (audioObservation) renderMarkdown(audioObservationNode, audioObservation);
       else audioObservationNode.replaceChildren();
+    }
+    if (toolTrace !== undefined) {
+      record.toolTrace = normalizedToolTrace(toolTrace);
+      renderToolTrace(record);
     }
     if (soundOnly !== undefined) {
       record.soundOnly = Boolean(soundOnly);
@@ -971,6 +1015,7 @@
     content,
     thinking,
     audioObservation,
+    toolTrace,
     soundOnly = false,
     generationMetrics,
     audio,
@@ -991,6 +1036,7 @@
       content: "",
       thinking: "",
       audioObservation: "",
+      toolTrace: [],
       soundOnly: false,
       generationMetrics: null,
       audio: null,
@@ -1007,6 +1053,7 @@
       content,
       thinking,
       audioObservation,
+      toolTrace,
       soundOnly,
       generationMetrics,
       audio,
@@ -1319,6 +1366,8 @@
       elements.headerStatus.className = `connection ${data.ok ? "online" : "offline"}`;
       elements.statusText.textContent = data.ok ? "Online" : "Unavailable";
       updateActivity(data.requests);
+      state.safeTools = Array.isArray(data.safe_tools) ? data.safe_tools : [];
+      state.autoTools = Boolean((data.tool_execution || {}).streaming);
       if (!state.voice.initialized && data.voice_profile) {
         const profile = data.voice_profile;
         state.voice.serverReference = Boolean(profile.speaker_reference);
@@ -2118,7 +2167,8 @@
           speech_mode: "always",
           portal_voice: voicePayload(),
           think: showThinking,
-          portal_auto_tools: false,
+          ...(state.autoTools ? { tools: state.safeTools } : {}),
+          portal_auto_tools: state.autoTools,
         },
         {
           signal: turn.controller.signal,
@@ -2142,6 +2192,11 @@
               });
             } else if (event.type === "stage" && event.stage === "tts") {
               setComposerStatus("Call · preparing voice…");
+            } else if (event.type === "tool") {
+              const names = (event.tools || []).map(item => (
+                typeof item === "string" ? item : String((item || {}).name || "tool")
+              ));
+              setComposerStatus(`Call · ${event.phase === "start" ? "using" : "used"} ${names.join(", ")}…`);
             } else if (event.type === "audio_start") {
               if (!callPlayback.canStart(call, turn)) turn.discardReply = true;
               if (!turn.discardReply) {
@@ -2183,6 +2238,7 @@
       updateMessage(assistant, {
         content: reply.content || "Spoken response",
         thinking: showThinking ? (reply.thinking || streamedThinking) : "",
+        toolTrace: (data.portal || {}).safe_tools_executed || [],
         generationMetrics: generationMetricsFromResponse(data),
         audio: turn.discardReply ? null : reply.audio,
         streaming: false,
@@ -2428,7 +2484,8 @@
         portal_voice: voicePayload(),
         think: wantsThinking,
         stream: false,
-        portal_auto_tools: false,
+        ...(state.autoTools ? { tools: state.safeTools } : {}),
+        portal_auto_tools: state.autoTools,
       },
     };
   }
@@ -2531,6 +2588,11 @@
               tts: "Preparing spoken reply…",
             };
             setComposerStatus(labels[event.stage] || "Working…");
+          } else if (event.type === "tool") {
+            const names = (event.tools || []).map(item => (
+              typeof item === "string" ? item : String((item || {}).name || "tool")
+            ));
+            setComposerStatus(`${event.phase === "start" ? "Using" : "Used"} ${names.join(", ")}…`);
           } else if (event.type === "audio_start") {
             pcmController = beginPcmPlayback();
             streamedAudio = Boolean(pcmController);
@@ -2560,6 +2622,7 @@
       updateMessage(assistant, {
         content: reply.content || (reply.audio ? "Spoken response" : "No response returned."),
         thinking: built.wantsThinking ? (reply.thinking || streamedThinking) : "",
+        toolTrace: (data.portal || {}).safe_tools_executed || [],
         generationMetrics: generationMetricsFromResponse(data),
         audio: reply.audio,
         streaming: false,

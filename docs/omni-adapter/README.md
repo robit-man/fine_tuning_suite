@@ -64,6 +64,7 @@ hidden-state splicing.
 | Text completion | Qwen3.8 standard model layer | Yes |
 | Thinking | Qwen3.8 renderer/parser | Yes |
 | Structured tools | Qwen3.8 renderer/parser | Yes |
+| Portal web/document/session-memory tools | Allowlisted portal tool loop | Yes |
 | Image understanding | standard Qwen3.8 projector | Yes |
 | Audio understanding / ASR | Qwen3-Omni sidecar views through adapter | No |
 | Video understanding | Qwen3-Omni sidecar views through adapter | No |
@@ -154,6 +155,7 @@ session can reconstruct it from the tag's sidecar layer.
 - [Model-page template](model-page-template.md)
 - [Runnable examples](../../examples/omni_adapter/README.md)
 - [Authenticated phone portal](phone-portal.md)
+- [Portal tools and tool chaining](tools.md)
 - [Phone portal source and one-command bootstrap](../../examples/omni_portal/README.md)
 - [Request schema](schema/request-v1.schema.json) and
   [response schema](schema/response-v1.schema.json)

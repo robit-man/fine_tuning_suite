@@ -188,6 +188,8 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "function scrollConversationToBottom" in javascript
     assert "function handleConversationScroll" in javascript
     assert "function resumeConversationAutoFollow" in javascript
+    assert "state.conversationScrollGesture && movedUp" in javascript
+    assert "smooth: false, force: true" in javascript
     assert 'elements.scrollLatest.addEventListener("click"' in javascript
     assert ".scroll-latest-button[hidden]" in css
     assert 'behavior: "smooth"' in javascript

@@ -13,7 +13,7 @@
   const PCM_RESCHEDULE_FLOOR_SECONDS = 0.003;
   const PCM_CROSSFADE_SECONDS = 0.003;
   const PCM_CROSSFADE_MIN_BUFFER_SECONDS = 0.08;
-  const CONVERSATION_BOTTOM_THRESHOLD_PX = 32;
+  const CONVERSATION_BOTTOM_THRESHOLD_PX = 64;
   const LIVE_CALL_SYSTEM_PROMPT = (
     "You are participating in a live two-way spoken conversation. Answer the "
     + "user's intent directly in a natural, concise spoken turn. Do not echo, "
@@ -223,6 +223,8 @@
     scrollFrame: null,
     autoFollowConversation: true,
     lastConversationScrollTop: 0,
+    conversationScrollGesture: false,
+    conversationScrollGestureTimer: null,
     cacheScope: `${location.origin}:${MODEL}:${document.body.dataset.sessionScope || ""}`,
     cacheReady: false,
     cacheSuppress: false,
@@ -453,14 +455,39 @@
   function handleConversationScroll() {
     const currentTop = elements.conversation.scrollTop;
     const movedUp = currentTop < state.lastConversationScrollTop - 1;
-    if (movedUp && !conversationIsAtBottom()) state.autoFollowConversation = false;
-    if (conversationIsAtBottom()) state.autoFollowConversation = true;
+    const atBottom = conversationIsAtBottom();
+    if (atBottom) state.autoFollowConversation = true;
+    else if (state.conversationScrollGesture && movedUp) state.autoFollowConversation = false;
     state.lastConversationScrollTop = currentTop;
     updateScrollLatestButton();
   }
 
+  function beginConversationScrollGesture() {
+    if (state.conversationScrollGestureTimer !== null) {
+      clearTimeout(state.conversationScrollGestureTimer);
+      state.conversationScrollGestureTimer = null;
+    }
+    state.conversationScrollGesture = true;
+  }
+
+  function endConversationScrollGesture() {
+    if (state.conversationScrollGestureTimer !== null) {
+      clearTimeout(state.conversationScrollGestureTimer);
+    }
+    state.conversationScrollGestureTimer = setTimeout(() => {
+      state.conversationScrollGesture = false;
+      state.conversationScrollGestureTimer = null;
+    }, 500);
+  }
+
   function scrollConversationToBottom({ smooth = true, force = false } = {}) {
-    if (force) state.autoFollowConversation = true;
+    if (force) {
+      state.autoFollowConversation = true;
+      state.conversationScrollGesture = false;
+    }
+    if (!state.autoFollowConversation && conversationIsAtBottom()) {
+      state.autoFollowConversation = true;
+    }
     if (!state.autoFollowConversation) {
       updateScrollLatestButton();
       return;
@@ -490,7 +517,7 @@
 
   function resumeConversationAutoFollow() {
     state.autoFollowConversation = true;
-    scrollConversationToBottom({ smooth: true, force: true });
+    scrollConversationToBottom({ smooth: false, force: true });
   }
 
   const layoutResizeObserver = typeof window.ResizeObserver === "function"
@@ -2624,6 +2651,11 @@
     resizePrompt();
     scheduleBrowserSessionSave(700);
   });
+  elements.conversation.addEventListener("pointerdown", beginConversationScrollGesture, { passive: true });
+  elements.conversation.addEventListener("pointerup", endConversationScrollGesture, { passive: true });
+  elements.conversation.addEventListener("pointercancel", endConversationScrollGesture, { passive: true });
+  elements.conversation.addEventListener("wheel", beginConversationScrollGesture, { passive: true });
+  elements.conversation.addEventListener("wheel", endConversationScrollGesture, { passive: true });
   elements.conversation.addEventListener("scroll", handleConversationScroll, { passive: true });
   elements.scrollLatest.addEventListener("click", resumeConversationAutoFollow);
 

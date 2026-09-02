@@ -103,10 +103,16 @@
         </button>
       </header>
 
-      <label class="voice-toggle">
-        <span><strong>Voice clone</strong><small>Use a clean 3–10 second single-speaker WAV.</small></span>
-        <input id="voice-clone-enabled" type="checkbox">
-      </label>
+      <div class="voice-mode-row" id="voice-mode-row">
+        <button class="voice-mode-choice voice-clone-choice" id="voice-clone-toggle" type="button" aria-pressed="true">
+          <strong>Voice Clone</strong><small>Enabled</small>
+        </button>
+        <button class="voice-mode-choice voice-preset-choice" id="voice-preset-toggle" type="button" aria-expanded="false">
+          <strong>Select Preset</strong><small id="voice-preset-current">Female · Default</small>
+        </button>
+        <input id="voice-clone-enabled" type="checkbox" hidden checked>
+      </div>
+      <div class="voice-preset-options" id="voice-preset-options" hidden></div>
 
       <div class="voice-reference" id="voice-reference-controls">
         <div class="voice-reference-actions">

@@ -6,6 +6,7 @@ SOURCE_DIR=${1:-$SCRIPT_DIR/vendor/llama.cpp}
 PINNED_COMMIT=458681e1d5d4a29a1463c4732e03226cf384b997
 PATCH_FILE=$SCRIPT_DIR/patches/llama.cpp-qwen3tts-pcm-stream.patch
 PERSISTENT_PATCH_FILE=$SCRIPT_DIR/patches/llama.cpp-qwen3tts-persistent.patch
+STREAM_STATE_PATCH_FILE=$SCRIPT_DIR/patches/llama.cpp-qwen3tts-stream-state.patch
 BUILD_DIR=${LLAMA_CPP_BUILD_DIR:-$SOURCE_DIR/build}
 BUILD_JOBS=${LLAMA_CPP_BUILD_JOBS:-$(nproc)}
 
@@ -43,6 +44,16 @@ elif git -C "$SOURCE_DIR" apply --check "$PERSISTENT_PATCH_FILE"; then
   printf 'Applied Qwen3-TTS persistent worker patch\n'
 else
   printf 'Qwen3-TTS persistent worker patch does not apply cleanly\n' >&2
+  exit 1
+fi
+
+if git -C "$SOURCE_DIR" apply --reverse --check "$STREAM_STATE_PATCH_FILE" >/dev/null 2>&1; then
+  printf 'Qwen3-TTS streaming decoder state patch is already applied\n'
+elif git -C "$SOURCE_DIR" apply --check "$STREAM_STATE_PATCH_FILE"; then
+  git -C "$SOURCE_DIR" apply "$STREAM_STATE_PATCH_FILE"
+  printf 'Applied Qwen3-TTS streaming decoder state patch\n'
+else
+  printf 'Qwen3-TTS streaming decoder state patch does not apply cleanly\n' >&2
   exit 1
 fi
 

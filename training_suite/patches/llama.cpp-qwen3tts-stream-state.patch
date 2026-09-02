@@ -1,0 +1,132 @@
+--- a/tools/mtmd/clip.cpp
++++ b/tools/mtmd/clip.cpp
+@@ -1117,7 +1117,15 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const
+                 const auto  gen_process = params ? params->gen_process : CLIP_GEN_PROCESS_GEN_CODE;
+                 const int   top_k = params ? params->top_k : 50;
+                 const float top_p = params ? params->top_p : 1.0f;
+-                builder = std::make_unique<clip_graph_qwen3tts_gen>(ctx, img, gen_process, top_k, top_p);
++                const int64_t n_codes = ctx->model.gen_code_head_w->ne[2] + 1;
++                int n_frames = 1;
++                if (gen_process == CLIP_GEN_PROCESS_GEN_WAV) {
++                    GGML_ASSERT(params != nullptr && params->codes != nullptr);
++                    GGML_ASSERT(params->codes->size() % (size_t) n_codes == 0);
++                    n_frames = (int) (params->codes->size() / (size_t) n_codes);
++                    GGML_ASSERT(n_frames > 0 && n_frames <= ctx->model.hparams.wav_tfm_swa);
++                }
++                builder = std::make_unique<clip_graph_qwen3tts_gen>(ctx, img, gen_process, n_frames, top_k, top_p);
+             } break;
+         case PROJECTOR_TYPE_YOUTUVL:
+             {
+@@ -5172,7 +5180,8 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+                 if (params->gen_process == CLIP_GEN_PROCESS_GEN_WAV) {
+                     GGML_ASSERT(params->codes != nullptr);
+ 
+-                    // frame-major input to group-major, rear-padded with code 0 up to one window
++                    // frame-major input to group-major. The graph is sized to these real
++                    // frames so the persisted decoder state stops at the same boundary.
+                     const int64_t n_codes  = model.gen_code_head_w->ne[2] + 1;
+                     const int64_t n_frames_w = hparams.wav_tfm_swa;
+                     const int64_t n_frames   = (int64_t) params->codes->size() / n_codes;
+@@ -5193,10 +5202,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+                         }
+                     }
+ 
+-                    std::vector<int32_t> codes(n_frames_w * n_codes, 0);
++                    std::vector<int32_t> codes(n_frames * n_codes);
+                     for (int64_t f = 0; f < n_frames; f++) {
+                         for (int64_t g = 0; g < n_codes; g++) {
+-                            codes[g * n_frames_w + f] = (*params->codes)[f * n_codes + g];
++                            codes[g * n_frames + f] = (*params->codes)[f * n_codes + g];
+                         }
+                     }
+                     set_input_i32("inp_codes", codes);
+@@ -5721,14 +5730,8 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+         out_audio.resize(ggml_nelements(audio));
+         ggml_backend_tensor_get(audio, out_audio.data(), 0, ggml_nbytes(audio));
+ 
+-        // drop the tail audio that comes from the code-0 rear padding
+-        const int64_t n_codes    = params->codes ? model.gen_code_head_w->ne[2] + 1 : 0;
+-        const int64_t n_frames_w = hparams.wav_tfm_swa;
+-        const int64_t n_frames   = params->codes ? (int64_t) params->codes->size() / n_codes : n_frames_w;
+-        if (n_frames < n_frames_w) {
+-            const size_t hop = out_audio.size() / n_frames_w;
+-            out_audio.resize((size_t) n_frames * hop);
+-        }
++        // GEN_WAV is graph-sized to the real codec-frame count, so no padded
++        // audio tail exists and state_out describes this exact output boundary.
+     }
+     if (params->state_out != nullptr) {
+         auto & state_out = *params->state_out;
+--- a/tools/mtmd/models/models.h
++++ b/tools/mtmd/models/models.h
+@@ -238,13 +238,22 @@ struct clip_graph_qwen3tts_spkenc : clip_graph {
+ };
+ 
+ struct clip_graph_qwen3tts_gen : clip_graph {
+-    clip_graph_qwen3tts_gen(clip_ctx * ctx, const clip_image_f32 & img, clip_gen_process_type gen_process, int top_k, float top_p)
+-        : clip_graph(ctx, img), gen_process(gen_process), top_k(top_k), top_p(top_p) {}
++    clip_graph_qwen3tts_gen(
++            clip_ctx * ctx,
++            const clip_image_f32 & img,
++            clip_gen_process_type gen_process,
++            int n_frames,
++            int top_k,
++            float top_p)
++        : clip_graph(ctx, img), gen_process(gen_process), n_frames(n_frames), top_k(top_k), top_p(top_p) {}
+     ggml_cgraph * build() override;
+ 
+     // which sub-graph build() constructs, fixed at graph-build time
+     clip_gen_process_type gen_process;
+ 
++    // exact number of codec frames in a GEN_WAV call; never includes rear padding
++    int n_frames;
++
+     // sampling params, fixed at graph-build time (GEN_CODE only)
+     int   top_k;
+     float top_p;
+@@ -318,7 +327,7 @@ struct clip_graph_qwen3tts_gen : clip_graph {
+         ggml_tensor * convnext_block(ggml_tensor * x, const clip_code2wav::upsample_block & blk, const std::string & state_prefix) const;
+         ggml_tensor * dac_res_unit(ggml_tensor * x, const clip_code2wav::dac_res & res, int dilation, const std::string & state_name) const;
+ 
+-        // inp_codes [1, n_codes] I32 -> this frame's audio samples [n_samples] F32, clamped to [-1, 1]
++        // inp_codes [n_frames, n_codes] I32 -> PCM samples [n_samples] F32, clamped to [-1, 1]
+         ggml_tensor * decode(ggml_tensor * inp_codes) const;
+     };
+ };
+--- a/tools/mtmd/models/qwen3tts-gen.cpp
++++ b/tools/mtmd/models/qwen3tts-gen.cpp
+@@ -419,7 +419,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::tfm_layer_forward(ggml_tensor *
+     const int     n_head_kv = hparams.wav_tfm_n_head_kv;
+     const int64_t d_head    = layer.q_w->ne[1] / n_head;
+     const float   kq_scale  = 1.0f / sqrtf((float) d_head);
+-    const int64_t W         = hparams.wav_tfm_swa; // == N, frames per batch
++    const int64_t W         = hparams.wav_tfm_swa; // maximum sliding-attention window
+     const int64_t N         = cur->ne[1];
+     const int64_t prefix    = W - 1;
+     const int64_t total_kv  = prefix + N;
+@@ -616,7 +616,7 @@ std::vector<c2w_state_slot> list_c2w_state_slots(const clip_hparams & hparams, const clip_model & model) {
+ 
+     slots.push_back({"tfm_pos", 1, 1});
+ 
+-    // prefix is (W-1) frames, the batch itself gives the other N=W frames (see tfm_layer_forward)
++    // prefix is (W-1) frames; the current batch contributes its actual N frames
+     const int64_t d_head = c2w.tfm_layers[0].q_w->ne[1] / hparams.wav_tfm_n_head;
+     const int64_t kv_ch  = d_head * hparams.wav_tfm_n_head_kv;
+     const int64_t prefix = hparams.wav_tfm_swa - 1;
+@@ -656,6 +656,7 @@ std::vector<c2w_state_slot> list_c2w_state_slots(const clip_hparams & hparams, const clip_model & model) {
+ // ggml_build_forward_select() then picks the one that actually runs
+ ggml_cgraph * clip_graph_qwen3tts_gen::build() {
+     GGML_ASSERT(n_batch == 1); // this module only ever processes one frame at a time
++    GGML_ASSERT(n_frames > 0 && n_frames <= hparams.wav_tfm_swa);
+ 
+     int idx;
+     switch (gen_process) {
+@@ -732,8 +733,6 @@ ggml_cgraph * clip_graph_qwen3tts_gen::build() {
+     cb(out_embd, "gen_audio_out", -1);
+ 
+     // ---- CLIP_GEN_PROCESS_GEN_WAV: 16 RVQ codes -> raw PCM ----
+-    const int n_frames = hparams.wav_tfm_swa; // frames per batch, == the attention window
+-
+     ggml_tensor * inp_codes = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_frames, n_codes);
+     ggml_set_name(inp_codes, "inp_codes");
+     ggml_set_input(inp_codes);

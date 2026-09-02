@@ -15,6 +15,23 @@
       "type": "string",
       "description": "Server-local WAV/MP3 reference; relative paths resolve from the profile file."
     },
+    "presets": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "speaker_file", "default"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"},
+          "label": {"type": "string", "minLength": 1, "maxLength": 80},
+          "speaker_file": {"type": "string", "minLength": 1},
+          "default": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      },
+      "description": "Server-allowlisted clone references; runtime validation requires exactly one default."
+    },
     "temperature": {"type": "number", "minimum": 0, "maximum": 2},
     "top_k": {"type": "integer", "minimum": 0, "maximum": 1000},
     "top_p": {"type": "number", "minimum": 0, "maximum": 1},

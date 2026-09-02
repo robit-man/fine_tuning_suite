@@ -101,6 +101,8 @@ result. Do not commit large or restricted media.
 - matching-profile repeated requests retain the same resident worker PID;
 - distinct A, B, A prompts transcribe back in A, B, A order with no one-turn lag;
 - the default stream window is two codec frames and disables proxy buffering;
+- `verify_pcm_stream.py` passes on raw server PCM, with no deterministic prefix
+  or high median discontinuity at decoder-window boundaries;
 - empty/excessive text and unsupported options have defined errors;
 - selected languages/voices are only advertised after their own tests.
 

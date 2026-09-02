@@ -2,7 +2,21 @@
   "schema": "robit.omni.voice-profile.v1",
   "name": "default",
   "language": "en",
-  "speaker_file": "voices/default_voice.wav",
+  "speaker_file": "voices/female_voice.wav",
+  "presets": [
+    {
+      "id": "female",
+      "label": "Female",
+      "speaker_file": "voices/female_voice.wav",
+      "default": true
+    },
+    {
+      "id": "male",
+      "label": "Male",
+      "speaker_file": "voices/default_voice.wav",
+      "default": false
+    }
+  ],
   "temperature": 0.7,
   "top_k": 40,
   "top_p": 0.9,

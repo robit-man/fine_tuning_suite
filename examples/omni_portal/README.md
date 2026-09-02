@@ -189,7 +189,9 @@ red answers. Do not remove this setting as a performance optimization.
 The TTS weights are Qwen3-TTS 12 Hz 1.7B Base, not LuxTTS. Tap the waveform
 button in the portal header to open the request-local voice panel. It provides:
 
-- a voice-clone toggle;
+- a button-style voice-clone toggle with no visible checkbox;
+- an allowlisted preset selector with Female as the default and Male as the
+  secondary reference;
 - phone recording or WAV upload for a clean 3–10 second reference;
 - in-browser reference playback and removal;
 - language, temperature, top-p, top-k, seed, and maximum-frame controls.
@@ -200,11 +202,14 @@ worker writes it into a per-generation temporary directory for `llama-tts`.
 The file is deleted as soon as that generation finishes. The browser cannot
 select a server path. Only clone a voice you own or have permission to use.
 
-The repository ships [`voices/default_voice.wav`](voices/default_voice.wav) as
-the active default reference. It is a 13.009-second, 16 kHz mono PCM16 WAV
-rewritten without INFO, encoder, or other metadata chunks. The default profile
-uses that file until the voice panel records or uploads a request-local
-override.
+The repository ships two metadata-free, 16 kHz mono PCM16 references.
+[`voices/female_voice.wav`](voices/female_voice.wav) is the active Female
+default, converted from the repository owner's `entering_phase_nine.ogg`.
+[`voices/default_voice.wav`](voices/default_voice.wav) is the 13.009-second Male
+secondary preset retained from the prior deployment. Preset IDs are resolved
+only against the server profile allowlist; the browser never supplies a server
+path. Recording or uploading a request-local WAV temporarily overrides the
+selected preset.
 
 Edit
 [`voice-profile.json`](voice-profile.json) before startup to pin the server-side
@@ -217,6 +222,9 @@ call mode:
   "name": "studio-voice",
   "language": "en",
   "speaker_file": "voices/studio-reference.wav",
+  "presets": [
+    {"id": "studio", "label": "Studio", "speaker_file": "voices/studio-reference.wav", "default": true}
+  ],
   "temperature": 0.7,
   "top_k": 40,
   "top_p": 0.9,
@@ -228,7 +236,8 @@ call mode:
 The portable contract is
 [`voice-profile-v1.schema.json`](../../docs/omni-adapter/schema/voice-profile-v1.schema.json).
 
-`speaker_file` may be an absolute path or a path relative to the profile.
+`speaker_file` and each preset `speaker_file` may be an absolute path or a path
+relative to the profile. A preset profile requires exactly one default.
 Qwen3-TTS accepts WAV or MP3 server references; the browser path deliberately
 accepts WAV only. Use a clean, single-speaker clip without music or
 reverberation. A fixed non-negative `seed` makes repeated turns reproducible.

@@ -342,20 +342,57 @@ textarea::placeholder { color: var(--quiet); }
 .voice-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .voice-header h2 { margin: 0; font-size: 18px; }
 .voice-header p { margin: 3px 0 0; color: var(--quiet); font: 9px var(--mono); text-transform: uppercase; }
-.voice-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+.voice-mode-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
   margin-top: 18px;
-  padding: 13px;
+}
+.voice-mode-row.preset-open .voice-clone-choice { display: none; }
+.voice-mode-row.preset-open .voice-preset-choice { grid-column: 1 / -1; }
+.voice-mode-choice {
+  display: grid;
+  gap: 3px;
+  min-height: 62px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #050505;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+.voice-mode-choice.active,
+.voice-mode-choice[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #090909;
+}
+.voice-mode-choice small { color: inherit; opacity: .68; }
+.voice-preset-options {
+  display: grid;
+  gap: 7px;
+  margin-top: 8px;
+  padding: 8px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--panel);
 }
-.voice-toggle span { display: grid; gap: 2px; }
-.voice-toggle small { color: var(--quiet); }
-.voice-toggle input { width: 20px; height: 20px; accent-color: var(--accent); }
+.voice-preset-options[hidden] { display: none; }
+.voice-preset-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #080808;
+  color: var(--text);
+  cursor: pointer;
+}
+.voice-preset-option.selected { border-color: var(--accent); color: var(--accent); }
+.voice-preset-option small { color: var(--quiet); font: 9px var(--mono); text-transform: uppercase; }
 .voice-reference { margin-top: 10px; padding: 13px; border: 1px solid var(--line); border-radius: 12px; }
 .voice-reference.disabled { opacity: .45; pointer-events: none; }
 .voice-reference-actions { display: flex; flex-wrap: wrap; gap: 7px; }

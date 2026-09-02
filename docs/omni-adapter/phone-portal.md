@@ -86,7 +86,10 @@ thinking, PCM, and one authoritative final adapter event.
 Qwen3-TTS uses two codec frames per state-carrying decoder window by default,
 approximately 160 ms for the packaged 12 Hz model. Its persistent CUDA worker
 loads the model/projector/speaker once and resets generation state between
-requests. The browser schedules the first received PCM with an 80 ms playout
+requests. The patched code2wav graph is sized to the actual frame count; it must
+never persist state after fixed-window rear padding. The raw PCM continuity gate
+must pass before evaluating browser smoothing. The browser schedules the first
+received PCM with an 80 ms playout
 lead, keeps a 3 ms late-arrival floor, and uses a guarded 8 ms crossfade for
 sufficiently large contiguous buffers. The final response retains a complete
 replayable WAV assembled from the original PCM. `stage=tts` is a

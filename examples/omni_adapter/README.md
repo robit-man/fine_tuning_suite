@@ -123,7 +123,12 @@ code2wav decoder window before generation ends:
 
 The tracked bootstrap checks out the verified llama.cpp commit, applies
 `training_suite/patches/llama.cpp-qwen3tts-pcm-stream.patch` idempotently, and
-then applies `training_suite/patches/llama.cpp-qwen3tts-persistent.patch`. It
+then applies `training_suite/patches/llama.cpp-qwen3tts-persistent.patch` and
+`training_suite/patches/llama.cpp-qwen3tts-stream-state.patch`. The state patch
+sizes every code2wav graph to the real codec-frame count. Without it, a short
+streaming window is rear-padded to 72 frames and the retained decoder state is
+advanced through that padding, which injects a repeatable false voice prefix at
+the start of every PCM window. It
 builds CUDA-enabled `llama-server` and `llama-tts`. Set
 `LLAMA_CPP_BUILD_JOBS` or `LLAMA_CPP_BUILD_DIR` when needed; an existing source
 checkout must already be at the pinned commit.
@@ -145,6 +150,19 @@ at the cost of more decoder invocations. A shorter utterance flushes once at
 end of speech. These are real state-carrying code2wav calls, not chunks cut
 from a finished WAV. HTTP byte-chunk boundaries are not semantic decoder
 boundaries, so clients must buffer incomplete 16-bit samples.
+
+After starting the TTS wrapper, run the raw-source continuity gate before
+browser testing:
+
+```bash
+python examples/omni_adapter/verify_pcm_stream.py \
+  --url http://127.0.0.1:8892/synthesize/stream \
+  --speaker-file examples/omni_portal/voices/default_voice.wav
+```
+
+The probe evaluates unmodified server PCM at codec-window boundaries. It fails
+on either a high median discontinuity or a deterministic shared prefix, so
+browser buffering or crossfade cannot conceal a decoder-state regression.
 
 This route is experimental. If generation fails after response headers, the
 PCM stream terminates early; the final WAV is still checked server-side when

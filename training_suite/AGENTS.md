@@ -192,6 +192,12 @@ Audio output is base64 RIFF/WAVE, 24 kHz mono PCM16. Preserve component digests,
 runtime revisions, the bundle manifest, and test reports; apply the normal
 end-of-session weight cleanup after successful publication and verification.
 
+For low-latency Qwen3-TTS, retain decoder state at the last real codec frame,
+never after rear padding to the 72-frame attention window. Run
+`examples/omni_adapter/verify_pcm_stream.py` against raw `/synthesize/stream`
+PCM after rebuilding; browser buffering and crossfade are not valid substitutes
+for this source-level continuity gate.
+
 The executable adapter example reads `OMNI_COMPREHENSION_URL`,
 `OMNI_COMPREHENSION_MODEL`, `OMNI_LANGUAGE_URL`, and `OMNI_TTS_URL`. The
 comprehension service uses llama.cpp `input_audio`, `image_url`, and

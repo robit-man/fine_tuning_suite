@@ -122,6 +122,12 @@ benchmark. Deployment pays model loading during worker warmup; subsequent
 matching-profile requests begin generation without that reload. Changing the
 voice profile intentionally replaces the resident worker.
 
+The patched code2wav graph consumes and persists exactly the real codec-frame
+count rather than advancing retained state through rear padding to 72 frames.
+Run `python examples/omni_adapter/verify_pcm_stream.py` against raw
+`/synthesize/stream` PCM after every llama.cpp rebuild. Browser crossfade is not
+a substitute for this source-level continuity gate.
+
 The persistent process keeps model, projector, and speaker weights resident,
 but constructs a fresh audio-generation helper for every prompt. Reusing that
 helper carries decoded output into the next request and can make spoken audio

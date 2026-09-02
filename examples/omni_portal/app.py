@@ -59,6 +59,7 @@ VOICE_SPEECH_FIELDS = {
 }
 VOICE_CLIENT_FIELDS = {
     "clone_enabled",
+    "preset",
     "speaker_audio",
     "language",
     "temperature",
@@ -129,7 +130,7 @@ def load_voice_profile(path: Path) -> dict[str, Any]:
         raise TypeError("voice profile must be a JSON object")
     if profile.get("schema") != VOICE_PROFILE_SCHEMA:
         raise RuntimeError(f"voice profile schema must be {VOICE_PROFILE_SCHEMA}")
-    unknown = set(profile) - VOICE_SPEECH_FIELDS - {"schema", "name"}
+    unknown = set(profile) - VOICE_SPEECH_FIELDS - {"schema", "name", "presets"}
     if unknown:
         raise RuntimeError(f"unknown voice profile fields: {sorted(unknown)}")
     language = str(profile.get("language") or "en").strip()
@@ -137,19 +138,76 @@ def load_voice_profile(path: Path) -> dict[str, Any]:
         supported = ", ".join(sorted(QWEN3_TTS_LANGUAGES))
         raise RuntimeError(f"voice profile language must be one of: {supported}")
     profile["language"] = language
-    speaker = str(profile.get("speaker_file") or "").strip()
-    if speaker:
-        speaker_path = Path(speaker).expanduser()
+
+    def resolve_speaker(value: Any, field: str) -> str:
+        speaker_value = str(value or "").strip()
+        if not speaker_value:
+            raise RuntimeError(f"voice profile {field} must not be empty")
+        speaker_path = Path(speaker_value).expanduser()
         if not speaker_path.is_absolute():
             speaker_path = path.parent / speaker_path
         speaker_path = speaker_path.resolve()
         if not speaker_path.is_file():
-            raise RuntimeError(f"voice profile speaker file does not exist: {speaker_path}")
+            raise RuntimeError(f"voice profile {field} does not exist: {speaker_path}")
         if speaker_path.suffix.lower() not in {".wav", ".mp3"}:
-            raise RuntimeError("voice profile speaker file must be WAV or MP3")
-        profile["speaker_file"] = str(speaker_path)
+            raise RuntimeError(f"voice profile {field} must be WAV or MP3")
+        return str(speaker_path)
+
+    speaker = str(profile.get("speaker_file") or "").strip()
+    if speaker:
+        profile["speaker_file"] = resolve_speaker(speaker, "speaker_file")
     else:
         profile.pop("speaker_file", None)
+
+    raw_presets = profile.get("presets", [])
+    if not isinstance(raw_presets, list):
+        raise TypeError("voice profile presets must be an array")
+    presets: list[dict[str, Any]] = []
+    preset_ids: set[str] = set()
+    for index, raw_preset in enumerate(raw_presets):
+        if not isinstance(raw_preset, Mapping):
+            raise TypeError(f"voice profile preset {index} must be an object")
+        unknown_preset = set(raw_preset) - {"id", "label", "speaker_file", "default"}
+        if unknown_preset:
+            raise RuntimeError(f"unknown voice preset fields: {sorted(unknown_preset)}")
+        preset_id = str(raw_preset.get("id") or "").strip()
+        if (
+            not preset_id
+            or len(preset_id) > 64
+            or not all(
+                character.isalnum() or character in {"-", "_"}
+                for character in preset_id
+            )
+        ):
+            raise RuntimeError("voice preset id must be 1–64 safe characters")
+        if preset_id in preset_ids:
+            raise RuntimeError(f"duplicate voice preset id: {preset_id}")
+        preset_ids.add(preset_id)
+        label = str(raw_preset.get("label") or "").strip()
+        if not label or len(label) > 80:
+            raise RuntimeError("voice preset label must be 1–80 characters")
+        is_default = raw_preset.get("default", False)
+        if not isinstance(is_default, bool):
+            raise TypeError("voice preset default must be a boolean")
+        presets.append(
+            {
+                "id": preset_id,
+                "label": label,
+                "speaker_file": resolve_speaker(
+                    raw_preset.get("speaker_file"),
+                    f"preset {preset_id} speaker_file",
+                ),
+                "default": is_default,
+            }
+        )
+    if presets:
+        defaults = [preset for preset in presets if preset["default"]]
+        if len(defaults) != 1:
+            raise RuntimeError("voice profile presets require exactly one default")
+        profile["presets"] = presets
+        profile["speaker_file"] = defaults[0]["speaker_file"]
+    else:
+        profile.pop("presets", None)
     numeric_ranges = {
         "temperature": (0.0, 2.0),
         "top_k": (0, 1000),
@@ -171,7 +229,9 @@ def load_voice_profile(path: Path) -> dict[str, Any]:
     ):
         raise RuntimeError("voice profile seed must be an integer")
     if not -1 <= int(profile.get("seed", 42)) <= 2_147_483_647:
-        raise RuntimeError("voice profile seed must be -1 or a 32-bit non-negative integer")
+        raise RuntimeError(
+            "voice profile seed must be -1 or a 32-bit non-negative integer"
+        )
     return profile
 
 
@@ -507,9 +567,13 @@ def _diagnostic_fields(raw: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(value, str):
             continue
         value = value.strip()
-        if value and len(value) <= 64 and all(
-            character.isalnum() or character in {"-", "_", "."}
-            for character in value
+        if (
+            value
+            and len(value) <= 64
+            and all(
+                character.isalnum() or character in {"-", "_", "."}
+                for character in value
+            )
         ):
             result[key] = value
     return result
@@ -613,12 +677,33 @@ def _voice_override(raw: Any) -> dict[str, Any]:
         if decoded.duration_ms < 500:
             raise PortalRequestError("voice reference must be at least 0.5 seconds")
         if decoded.duration_ms > 30_000:
-            raise PortalRequestError("voice reference must be no longer than 30 seconds")
+            raise PortalRequestError(
+                "voice reference must be no longer than 30 seconds"
+            )
         result["speaker_audio"] = {
             "mime_type": "audio/wav",
             "encoding": "base64",
             "data": base64.b64encode(decoded.data).decode("ascii"),
         }
+    preset = raw.get("preset")
+    if preset is not None:
+        if not clone_enabled:
+            raise PortalRequestError("portal_voice.preset requires clone_enabled=true")
+        if reference is not None:
+            raise PortalRequestError(
+                "portal_voice.preset and speaker_audio are mutually exclusive"
+            )
+        preset_id = str(preset or "").strip()
+        if (
+            not preset_id
+            or len(preset_id) > 64
+            or not all(
+                character.isalnum() or character in {"-", "_"}
+                for character in preset_id
+            )
+        ):
+            raise PortalRequestError("portal_voice.preset is invalid")
+        result["preset"] = preset_id
     return result
 
 
@@ -789,6 +874,7 @@ def create_app(
         }
         clone_enabled = client_voice.pop("clone_enabled", None)
         speaker_audio = client_voice.pop("speaker_audio", None)
+        preset_id = client_voice.pop("preset", None)
         if clone_enabled is False:
             speech.pop("speaker_file", None)
         elif clone_enabled is True:
@@ -799,6 +885,15 @@ def create_app(
             if speaker_audio is not None:
                 speech.pop("speaker_file", None)
                 speech["speaker_audio"] = speaker_audio
+            elif preset_id is not None:
+                presets = {
+                    str(preset["id"]): preset
+                    for preset in runtime.voice_profile.get("presets", [])
+                }
+                selected = presets.get(preset_id)
+                if selected is None:
+                    raise PortalRequestError(f"unknown voice preset: {preset_id}")
+                speech["speaker_file"] = str(selected["speaker_file"])
         speech.update(client_voice)
         payload.pop("speech", None)
         if speech:
@@ -839,7 +934,9 @@ def create_app(
             raw_documents = raw_message.pop("documents", [])
             if raw_documents:
                 if raw_message.get("role") != "user":
-                    raise PortalRequestError("documents are accepted only on user messages")
+                    raise PortalRequestError(
+                        "documents are accepted only on user messages"
+                    )
                 if not isinstance(raw_documents, list):
                     raise PortalRequestError("message.documents must be an array")
                 uploads.extend(raw_documents)
@@ -942,17 +1039,21 @@ def create_app(
                     "speaker_reference": bool(
                         runtime.voice_profile.get("speaker_file")
                     ),
-                    "temperature": float(
-                        runtime.voice_profile.get("temperature", 0.7)
-                    ),
+                    "temperature": float(runtime.voice_profile.get("temperature", 0.7)),
                     "top_k": int(runtime.voice_profile.get("top_k", 40)),
                     "top_p": float(runtime.voice_profile.get("top_p", 0.9)),
                     "seed": int(runtime.voice_profile.get("seed", 42)),
-                    "max_frames": int(
-                        runtime.voice_profile.get("max_frames", 512)
-                    ),
+                    "max_frames": int(runtime.voice_profile.get("max_frames", 512)),
                     "clone_mode": "speaker_embedding",
                     "client_reference_wav": True,
+                    "presets": [
+                        {
+                            "id": str(preset["id"]),
+                            "label": str(preset["label"]),
+                            "default": bool(preset["default"]),
+                        }
+                        for preset in runtime.voice_profile.get("presets", [])
+                    ],
                 },
                 "streaming": {
                     "text": True,
@@ -967,8 +1068,20 @@ def create_app(
                 },
                 "runtime_environment": {
                     "refreshed_each_turn": True,
-                    "includes": ["date/time", "CPU/load", "RAM", "NVIDIA GPUs", "network counters"],
-                    "excludes": ["hostnames", "addresses", "processes", "credentials", "session content"],
+                    "includes": [
+                        "date/time",
+                        "CPU/load",
+                        "RAM",
+                        "NVIDIA GPUs",
+                        "network counters",
+                    ],
+                    "excludes": [
+                        "hostnames",
+                        "addresses",
+                        "processes",
+                        "credentials",
+                        "session content",
+                    ],
                 },
                 "requests": inference_queue.snapshot(),
             }
@@ -1198,9 +1311,7 @@ def create_app(
                             "first_upstream_byte",
                             {
                                 "request_id": request_id,
-                                "first_upstream_byte_ms": (
-                                    time.monotonic() - started
-                                )
+                                "first_upstream_byte_ms": (time.monotonic() - started)
                                 * 1000,
                             },
                             request_id=request_id,

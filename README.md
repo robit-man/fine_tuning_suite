@@ -422,7 +422,8 @@ adds hold-to-record WAV capture, adaptive VAD, environmental-audio analysis,
 image/video/GIF uploads, silent-video handling, PDF/DOCX/text retrieval, a live
 camera preview, bounded camera-call frames, safe Markdown, viewport-bounded
 token-pinned chat scrolling, native Ollama reasoning control, deterministic
-Qwen3-TTS profiles, request-local WAV voice cloning, streamed PCM playback, and
+Qwen3-TTS profiles, allowlisted Female/Male presets, request-local WAV voice
+cloning, streamed PCM playback, and
 continuously submitted barge-in voice-call turns. The low-latency worker stays
 resident and emits two-frame, roughly 160 ms PCM windows. Distinct browser
 sessions are queued through a bounded GPU lane with no shared conversation

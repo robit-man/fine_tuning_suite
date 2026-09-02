@@ -168,6 +168,11 @@
     voiceDone: document.getElementById("voice-done"),
     voiceReset: document.getElementById("voice-reset"),
     voiceCloneEnabled: document.getElementById("voice-clone-enabled"),
+    voiceCloneToggle: document.getElementById("voice-clone-toggle"),
+    voiceModeRow: document.getElementById("voice-mode-row"),
+    voicePresetToggle: document.getElementById("voice-preset-toggle"),
+    voicePresetCurrent: document.getElementById("voice-preset-current"),
+    voicePresetOptions: document.getElementById("voice-preset-options"),
     voiceReferenceControls: document.getElementById("voice-reference-controls"),
     voiceReferenceInput: document.getElementById("voice-reference-input"),
     voiceReferenceAudio: document.getElementById("voice-reference-audio"),
@@ -228,6 +233,9 @@
       serverReference: false,
       reference: null,
       referenceUrl: null,
+      presets: [],
+      selectedPreset: "",
+      presetMenuOpen: false,
       recording: null,
       recordTimer: null,
       defaults: {
@@ -1041,6 +1049,10 @@
       if (!state.voice.initialized && data.voice_profile) {
         const profile = data.voice_profile;
         state.voice.serverReference = Boolean(profile.speaker_reference);
+        state.voice.presets = Array.isArray(profile.presets) ? profile.presets : [];
+        state.voice.selectedPreset = String(
+          (state.voice.presets.find(preset => preset.default) || state.voice.presets[0] || {}).id || "",
+        );
         state.voice.defaults = {
           language: profile.language || "en",
           temperature: Number(profile.temperature ?? 0.7),
@@ -1049,6 +1061,7 @@
           seed: Number(profile.seed ?? 42),
           maxFrames: Number(profile.max_frames ?? 512),
         };
+        renderVoicePresets();
         applyVoiceDefaults();
         state.voice.initialized = true;
       }
@@ -1384,16 +1397,52 @@
 
   function syncVoiceUi() {
     const enabled = elements.voiceCloneEnabled.checked;
+    const selectedPreset = state.voice.presets.find(preset => preset.id === state.voice.selectedPreset);
+    elements.voiceCloneToggle.classList.toggle("active", enabled);
+    elements.voiceCloneToggle.setAttribute("aria-pressed", String(enabled));
+    elements.voiceCloneToggle.querySelector("small").textContent = enabled ? "Enabled" : "Disabled";
+    elements.voiceModeRow.classList.toggle("preset-open", state.voice.presetMenuOpen);
+    elements.voicePresetToggle.setAttribute("aria-expanded", String(state.voice.presetMenuOpen));
+    elements.voicePresetCurrent.textContent = selectedPreset
+      ? `${selectedPreset.label}${selectedPreset.default ? " · Default" : " · Secondary"}`
+      : "No preset";
+    elements.voicePresetOptions.hidden = !state.voice.presetMenuOpen;
+    elements.voicePresetOptions.querySelectorAll("[data-voice-preset]").forEach(button => {
+      button.classList.toggle("selected", button.dataset.voicePreset === state.voice.selectedPreset);
+    });
     elements.voiceReferenceControls.classList.toggle("disabled", !enabled);
     elements.voiceTemperatureValue.value = Number(elements.voiceTemperature.value).toFixed(2);
     elements.voiceTopPValue.value = Number(elements.voiceTopP.value).toFixed(2);
     if (state.voice.reference) {
       elements.voiceReferenceStatus.textContent = `${state.voice.reference.name} · ${humanBytes(state.voice.reference.bytes)}`;
+    } else if (state.voice.serverReference && selectedPreset) {
+      elements.voiceReferenceStatus.textContent = `Using ${selectedPreset.label} preset`;
     } else if (state.voice.serverReference) {
       elements.voiceReferenceStatus.textContent = "Using server profile reference";
     } else {
       elements.voiceReferenceStatus.textContent = "No reference selected";
     }
+  }
+
+  function renderVoicePresets() {
+    elements.voicePresetOptions.replaceChildren();
+    for (const preset of state.voice.presets) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "voice-preset-option";
+      button.dataset.voicePreset = preset.id;
+      const label = document.createElement("strong");
+      label.textContent = preset.label;
+      const detail = document.createElement("small");
+      detail.textContent = preset.default ? "Default" : "Secondary";
+      button.append(label, detail);
+      elements.voicePresetOptions.append(button);
+    }
+  }
+
+  function setVoicePresetMenu(open) {
+    state.voice.presetMenuOpen = Boolean(open);
+    syncVoiceUi();
   }
 
   function applyVoiceDefaults(profile = state.voice.defaults) {
@@ -1403,6 +1452,9 @@
     elements.voiceTopP.value = String(profile.topP ?? 0.9);
     elements.voiceSeed.value = String(profile.seed ?? 42);
     elements.voiceMaxFrames.value = String(profile.maxFrames ?? 512);
+    state.voice.selectedPreset = String(
+      (state.voice.presets.find(preset => preset.default) || state.voice.presets[0] || {}).id || "",
+    );
     elements.voiceCloneEnabled.checked = Boolean(state.voice.serverReference);
     syncVoiceUi();
   }
@@ -1514,6 +1566,8 @@
     };
     if (payload.clone_enabled && state.voice.reference) {
       payload.speaker_audio = state.voice.reference.envelope;
+    } else if (payload.clone_enabled && state.voice.selectedPreset) {
+      payload.preset = state.voice.selectedPreset;
     }
     return payload;
   }
@@ -2294,6 +2348,7 @@
 
   async function closeVoiceDialog() {
     if (state.voice.recording) await stopVoiceReferenceRecording();
+    setVoicePresetMenu(false);
     elements.voiceDialog.close();
     setComposerStatus(elements.voiceCloneEnabled.checked ? "Voice clone configured" : "Voice settings saved");
   }
@@ -2309,7 +2364,21 @@
     event.preventDefault();
     stopVoiceReferenceRecording().then(() => elements.voiceDialog.close()).catch(showError);
   });
-  elements.voiceCloneEnabled.addEventListener("change", syncVoiceUi);
+  elements.voiceCloneToggle.addEventListener("click", () => {
+    elements.voiceCloneEnabled.checked = !elements.voiceCloneEnabled.checked;
+    syncVoiceUi();
+  });
+  elements.voicePresetToggle.addEventListener("click", () => {
+    setVoicePresetMenu(!state.voice.presetMenuOpen);
+  });
+  elements.voicePresetOptions.addEventListener("click", event => {
+    const button = event.target.closest("[data-voice-preset]");
+    if (!button) return;
+    state.voice.selectedPreset = button.dataset.voicePreset;
+    clearVoiceReference();
+    elements.voiceCloneEnabled.checked = true;
+    setVoicePresetMenu(false);
+  });
   elements.voiceTemperature.addEventListener("input", syncVoiceUi);
   elements.voiceTopP.addEventListener("input", syncVoiceUi);
   elements.voiceReferenceInput.addEventListener("change", event => {

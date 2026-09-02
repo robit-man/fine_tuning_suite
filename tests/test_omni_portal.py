@@ -186,6 +186,10 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert '{ role: "system", content: LIVE_CALL_SYSTEM_PROMPT }' in javascript
     assert '{ role: "system", content: MEDIA_CONVERSATION_SYSTEM_PROMPT }' in javascript
     assert "function scrollConversationToBottom" in javascript
+    assert "function handleConversationScroll" in javascript
+    assert "function resumeConversationAutoFollow" in javascript
+    assert 'elements.scrollLatest.addEventListener("click"' in javascript
+    assert ".scroll-latest-button[hidden]" in css
     assert 'behavior: "smooth"' in javascript
     assert (
         "elements.conversation.scrollTop = elements.conversation.scrollHeight"
@@ -194,6 +198,11 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "new window.ResizeObserver" in javascript
     assert 'composer: document.querySelector(".composer")' in javascript
     assert "layoutResizeObserver.observe(node)" in javascript
+    assert "function copyAssistantMarkdown" in javascript
+    assert "navigator.clipboard.writeText(markdown)" in javascript
+    assert 'String(record.content || "")' in javascript
+    assert ".message-copy-button" in css
+    assert ".message-footer .audio-note" in css
     assert "scroll-behavior: smooth" not in css
     assert ".app-shell {\n  display: flex;\n  height: 100dvh;" in css
     assert "max-height: 100dvh;\n  overflow: hidden;" in css

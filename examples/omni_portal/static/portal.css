@@ -270,6 +270,41 @@ button { color: inherit; }
 .audio-output { margin-top: 10px; }
 .audio-output audio, .attachment audio { width: 100%; min-width: 220px; height: 38px; }
 .audio-note { margin: 5px 0 0; color: var(--quiet); font: 9px var(--mono); text-transform: uppercase; }
+.message-footer {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 7px;
+}
+.message-footer[hidden] { display: none; }
+.message-footer .audio-note { min-width: 0; flex: 1; margin: 0; }
+.message-copy-button {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--quiet);
+  cursor: pointer;
+}
+.message-copy-button:hover { background: rgba(255,255,255,.06); color: var(--text); }
+.message-copy-button.copied { color: var(--ok); }
+.message-copy-button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 
 .composer {
   position: sticky;
@@ -277,6 +312,37 @@ button { color: inherit; }
   z-index: 20;
   padding: 10px 14px max(12px, env(safe-area-inset-bottom));
   background: linear-gradient(transparent, var(--bg) 24px);
+}
+.scroll-latest-button {
+  position: absolute;
+  top: -39px;
+  left: 50%;
+  z-index: 30;
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transform: translateX(-50%);
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: rgba(17,17,17,.92);
+  box-shadow: 0 8px 24px rgba(0,0,0,.55);
+  color: var(--muted);
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+}
+.scroll-latest-button[hidden] { display: none; }
+.scroll-latest-button:hover { border-color: rgba(255,255,255,.34); color: var(--text); }
+.scroll-latest-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .composer-box {

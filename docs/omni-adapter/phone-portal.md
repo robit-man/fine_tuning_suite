@@ -127,6 +127,10 @@ clip's decoded embeddings.
 Assistant responses render a DOM-built safe Markdown subset. GFM pipe tables
 support header delimiters, escaped pipes, inline formatting, and alignment
 markers; wide tables scroll horizontally inside the message on narrow screens.
+Completed assistant messages include a bottom-right copy control that copies the
+original Markdown source. Scrolling upward pauses token auto-follow and reveals a
+floating down-arrow above the composer; activating it returns to the latest turn
+and resumes automatic following.
 The composer clears as soon as send accepts a request, its focus border remains
 neutral, and the locked mobile viewport prevents focus/pinch zoom. Page content
 is not selectable and does not expose iOS touch callouts; text entry fields

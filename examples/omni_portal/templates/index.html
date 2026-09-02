@@ -11,7 +11,7 @@
   <title>Omni Chat</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/assets/favicon.svg">
-  <link rel="stylesheet" href="/assets/portal.css?v=20260901-gfm-tables">
+  <link rel="stylesheet" href="/assets/portal.css?v=20260902-scroll-copy">
 </head>
 <body data-model="{{ model }}" data-max-upload-mib="{{ max_upload_mib }}" data-session-scope="{{ session_scope }}">
   <main class="app-shell">
@@ -48,6 +48,9 @@
       </div>
 
       <section class="composer" aria-label="Message composer">
+        <button class="scroll-latest-button" id="scroll-latest-button" type="button" aria-label="Jump to latest message and resume auto-scroll" title="Jump to latest" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
         <div class="attachments" id="attachments" hidden></div>
 
         <div class="waveform" id="waveform" hidden>
@@ -171,12 +174,17 @@
         <div class="audio-observation-content"></div>
       </details>
       <div class="audio-output" hidden></div>
+      <div class="message-footer" hidden>
+        <button class="message-copy-button" type="button" aria-label="Copy raw Markdown reply" title="Copy raw Markdown">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 8h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2Z"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2"/></svg>
+        </button>
+      </div>
     </article>
   </template>
 
   <script src="/assets/call_vad.js" defer></script>
   <script src="/assets/call_playback.js" defer></script>
   <script src="/assets/session_cache.js" defer></script>
-  <script src="/assets/portal.js?v=20260901-gfm-tables" defer></script>
+  <script src="/assets/portal.js?v=20260902-scroll-copy" defer></script>
 </body>
 </html>

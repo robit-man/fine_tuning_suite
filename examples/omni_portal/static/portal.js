@@ -13,6 +13,7 @@
   const PCM_RESCHEDULE_FLOOR_SECONDS = 0.003;
   const PCM_CROSSFADE_SECONDS = 0.003;
   const PCM_CROSSFADE_MIN_BUFFER_SECONDS = 0.08;
+  const CONVERSATION_BOTTOM_THRESHOLD_PX = 32;
   const LIVE_CALL_SYSTEM_PROMPT = (
     "You are participating in a live two-way spoken conversation. Answer the "
     + "user's intent directly in a natural, concise spoken turn. Do not echo, "
@@ -154,6 +155,7 @@
     activeUsers: document.getElementById("active-users"),
     activeUserCount: document.getElementById("active-user-count"),
     conversation: document.getElementById("conversation"),
+    scrollLatest: document.getElementById("scroll-latest-button"),
     template: document.getElementById("message-template"),
     prompt: document.getElementById("prompt"),
     attachments: document.getElementById("attachments"),
@@ -219,6 +221,8 @@
     requestSequence: 0,
     composerHintTimer: null,
     scrollFrame: null,
+    autoFollowConversation: true,
+    lastConversationScrollTop: 0,
     cacheScope: `${location.origin}:${MODEL}:${document.body.dataset.sessionScope || ""}`,
     cacheReady: false,
     cacheSuppress: false,
@@ -429,12 +433,44 @@
     }, durationMs);
   }
 
-  function scrollConversationToBottom({ smooth = true } = {}) {
+  function conversationIsAtBottom() {
+    return (
+      elements.conversation.scrollHeight
+      - elements.conversation.clientHeight
+      - elements.conversation.scrollTop
+    ) <= CONVERSATION_BOTTOM_THRESHOLD_PX;
+  }
+
+  function updateScrollLatestButton() {
+    const hasOverflow = (
+      elements.conversation.scrollHeight
+      > elements.conversation.clientHeight + CONVERSATION_BOTTOM_THRESHOLD_PX
+    );
+    if (conversationIsAtBottom()) state.autoFollowConversation = true;
+    elements.scrollLatest.hidden = state.autoFollowConversation || !hasOverflow;
+  }
+
+  function handleConversationScroll() {
+    const currentTop = elements.conversation.scrollTop;
+    const movedUp = currentTop < state.lastConversationScrollTop - 1;
+    if (movedUp && !conversationIsAtBottom()) state.autoFollowConversation = false;
+    if (conversationIsAtBottom()) state.autoFollowConversation = true;
+    state.lastConversationScrollTop = currentTop;
+    updateScrollLatestButton();
+  }
+
+  function scrollConversationToBottom({ smooth = true, force = false } = {}) {
+    if (force) state.autoFollowConversation = true;
+    if (!state.autoFollowConversation) {
+      updateScrollLatestButton();
+      return;
+    }
     if (state.scrollFrame !== null) cancelAnimationFrame(state.scrollFrame);
     if (!smooth) {
       // Streaming deltas must pin immediately. A CSS/smooth animation restarted
       // on every token can remain permanently behind the newest content.
       elements.conversation.scrollTop = elements.conversation.scrollHeight;
+      state.lastConversationScrollTop = elements.conversation.scrollTop;
     }
     state.scrollFrame = requestAnimationFrame(() => {
       state.scrollFrame = null;
@@ -446,12 +482,22 @@
       } else {
         // Run once more after Markdown, media, or audio controls finish layout.
         elements.conversation.scrollTop = elements.conversation.scrollHeight;
+        state.lastConversationScrollTop = elements.conversation.scrollTop;
       }
+      updateScrollLatestButton();
     });
   }
 
+  function resumeConversationAutoFollow() {
+    state.autoFollowConversation = true;
+    scrollConversationToBottom({ smooth: true, force: true });
+  }
+
   const layoutResizeObserver = typeof window.ResizeObserver === "function"
-    ? new window.ResizeObserver(() => scrollConversationToBottom({ smooth: false }))
+    ? new window.ResizeObserver(() => {
+      scrollConversationToBottom({ smooth: false });
+      updateScrollLatestButton();
+    })
     : null;
   if (layoutResizeObserver) {
     layoutResizeObserver.observe(elements.conversation);
@@ -716,6 +762,13 @@
       if (autoplayAudio) record.playback = playback;
     }
     record.streaming = Boolean(streaming);
+    const footer = record.node.querySelector(".message-footer");
+    footer.hidden = (
+      record.role !== "assistant"
+      || record.error
+      || record.streaming
+      || !record.content
+    );
     if (!streaming) scheduleBrowserSessionSave();
     scrollConversationToBottom({ smooth: !streaming });
     return record;
@@ -782,6 +835,45 @@
     node.appendChild(gallery);
   }
 
+  function fallbackCopyText(text) {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.readOnly = true;
+    textarea.setAttribute("aria-hidden", "true");
+    textarea.style.position = "fixed";
+    textarea.style.inset = "-1000px auto auto -1000px";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    if (!copied) throw new Error("browser rejected clipboard copy");
+  }
+
+  async function copyAssistantMarkdown(record, button) {
+    const markdown = String(record.content || "");
+    if (!markdown) return;
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        await navigator.clipboard.writeText(markdown);
+      } else {
+        fallbackCopyText(markdown);
+      }
+      button.classList.add("copied");
+      button.setAttribute("aria-label", "Copied raw Markdown");
+      button.title = "Copied";
+      setTimeout(() => {
+        if (!button.isConnected) return;
+        button.classList.remove("copied");
+        button.setAttribute("aria-label", "Copy raw Markdown reply");
+        button.title = "Copy raw Markdown";
+      }, 1200);
+    } catch (_error) {
+      transientComposerStatus("Could not copy reply");
+    }
+  }
+
   function addMessage({
     role,
     content,
@@ -812,6 +904,10 @@
       streaming,
       playback: Promise.resolve(),
     };
+    const copyButton = node.querySelector(".message-copy-button");
+    copyButton.addEventListener("click", () => {
+      copyAssistantMarkdown(record, copyButton);
+    });
     state.messages.push(record);
     updateMessage(record, {
       content,
@@ -939,7 +1035,8 @@
     const note = document.createElement("p");
     note.className = "audio-note";
     note.textContent = autoplay ? "Spoken reply ready" : "Streamed reply · replay with the player";
-    box.append(audio, note);
+    box.appendChild(audio);
+    node.querySelector(".message-footer").prepend(note);
     if (!autoplay) return Promise.resolve(false);
     const epoch = state.playbackEpoch;
     return playWithUnlockedContext(envelope, note, epoch)
@@ -2527,6 +2624,9 @@
     resizePrompt();
     scheduleBrowserSessionSave(700);
   });
+  elements.conversation.addEventListener("scroll", handleConversationScroll, { passive: true });
+  elements.scrollLatest.addEventListener("click", resumeConversationAutoFollow);
+
   elements.prompt.addEventListener("keydown", event => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -2553,6 +2653,8 @@
     state.cacheDeleted = true;
     clearBrowserSessionCache();
     state.cacheSuppress = false;
+    state.autoFollowConversation = true;
+    scrollConversationToBottom({ smooth: false, force: true });
     setComposerStatus("Conversation cleared");
   });
 

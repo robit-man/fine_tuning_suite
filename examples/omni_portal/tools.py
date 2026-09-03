@@ -1,4 +1,4 @@
-"""Bounded tool harness for the authenticated Omni demonstration portal.
+"""Allowlisted tool harness for the authenticated Omni demonstration portal.
 
 The schemas, chained execution model, local browser discovery, fetch cache,
 and lexical memory ranking are distilled from the adjacent Omnius runtime.
@@ -317,6 +317,49 @@ SAFE_TOOLS = [
             "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "blocked"]},
         },
         ["action"],
+    ),
+    _function_tool(
+        "subagent_delegate",
+        "Delegate one isolated text-only analysis, planning, research-synthesis, or review "
+        "subtask to a fresh helper context. The helper has no portal tools or media access, "
+        "so include only the evidence it needs in context and let the parent agent perform "
+        "all external actions. The call completes synchronously and stores its result only "
+        "in this browser session.",
+        {
+            "objective": {
+                "type": "string",
+                "description": "Concrete, independently answerable subtask.",
+            },
+            "role": {
+                "type": "string",
+                "enum": ["general", "researcher", "planner", "critic"],
+                "description": "Optional helper specialization; default general.",
+            },
+            "context": {
+                "type": "string",
+                "description": "Optional bounded evidence or constraints copied into the isolated helper context.",
+            },
+        },
+        ["objective"],
+    ),
+    _function_tool(
+        "subagent_list",
+        "List completed sub-agent delegations belonging to this browser session. "
+        "Returns compact metadata, not other users' tasks.",
+        {},
+    ),
+    _function_tool(
+        "subagent_result",
+        "Retrieve one stored sub-agent result by task id from this browser session.",
+        {"task_id": {"type": "string", "description": "Delegation task id."}},
+        ["task_id"],
+    ),
+    _function_tool(
+        "subagent_forget",
+        "Delete one stored sub-agent delegation from this browser session. "
+        "Delegations are synchronous, so there is no orphan background process to cancel.",
+        {"task_id": {"type": "string", "description": "Delegation task id."}},
+        ["task_id"],
     ),
 ]
 
@@ -1841,6 +1884,153 @@ class SessionWorkspaceStore:
             }
 
 
+@dataclass(frozen=True)
+class _SubagentRecord:
+    task_id: str
+    objective: str
+    role: str
+    created_at: str
+    result: dict[str, Any]
+
+
+@dataclass
+class _SubagentSession:
+    last_seen: float
+    tasks: dict[str, _SubagentRecord] = field(default_factory=dict)
+
+
+class SessionSubagentStore:
+    """Run and retain isolated one-shot helper completions for one browser session."""
+
+    def __init__(
+        self,
+        *,
+        ttl_s: float,
+        runner: Callable[[str, str, str], Mapping[str, Any]] | None,
+    ) -> None:
+        self.ttl_s = max(1.0, float(ttl_s))
+        self.runner = runner
+        self._lock = threading.RLock()
+        self._sessions: dict[str, _SubagentSession] = {}
+
+    def _cleanup_locked(self, now: float) -> None:
+        expired = [
+            key
+            for key, value in self._sessions.items()
+            if now - value.last_seen >= self.ttl_s
+        ]
+        for key in expired:
+            self._sessions.pop(key, None)
+
+    def _session_locked(self, session_id: str, now: float) -> _SubagentSession:
+        self._cleanup_locked(now)
+        key = _session_key(session_id)
+        session = self._sessions.get(key)
+        if session is None:
+            session = _SubagentSession(last_seen=now)
+            self._sessions[key] = session
+        session.last_seen = now
+        return session
+
+    @staticmethod
+    def _export(record: _SubagentRecord, *, include_result: bool) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "task_id": record.task_id,
+            "status": "completed",
+            "role": record.role,
+            "objective": record.objective,
+            "created_at": record.created_at,
+            "scope": "browser_session",
+        }
+        if include_result:
+            value["result"] = copy_mapping(record.result)
+        return value
+
+    def delegate(self, session_id: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        if self.runner is None:
+            raise ToolInputError("sub-agent runner is unavailable in this deployment")
+        objective = _bounded_text(arguments.get("objective"), "objective", 12_000)
+        role = str(arguments.get("role") or "general").strip().lower()
+        if role not in {"general", "researcher", "planner", "critic"}:
+            raise ToolInputError("sub-agent role is invalid")
+        context = str(arguments.get("context") or "").strip()
+        if len(context) > 24_000:
+            raise ToolInputError("sub-agent context exceeds 24000 characters")
+
+        raw_result = self.runner(objective, role, context)
+        if not isinstance(raw_result, Mapping):
+            raise ToolInputError("sub-agent runner returned an invalid result")
+        result = copy_mapping(raw_result)
+        task_id = hashlib.sha256(
+            f"{_session_key(session_id)}\0{time.time_ns()}\0{role}\0{objective}".encode()
+        ).hexdigest()[:16]
+        record = _SubagentRecord(
+            task_id=task_id,
+            objective=objective,
+            role=role,
+            created_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+            result=result,
+        )
+        now = time.monotonic()
+        with self._lock:
+            self._session_locked(session_id, now).tasks[task_id] = record
+        return self._export(record, include_result=True)
+
+    def list(self, session_id: str) -> dict[str, Any]:
+        now = time.monotonic()
+        with self._lock:
+            session = self._session_locked(session_id, now)
+            tasks = [
+                self._export(record, include_result=False)
+                for record in session.tasks.values()
+            ]
+        return {"scope": "browser_session", "tasks": tasks}
+
+    def result(self, session_id: str, task_id: Any) -> dict[str, Any]:
+        normalized = _bounded_text(task_id, "task_id", 80)
+        now = time.monotonic()
+        with self._lock:
+            session = self._session_locked(session_id, now)
+            record = session.tasks.get(normalized)
+            if record is None:
+                raise ToolInputError("sub-agent task was not found in this browser session")
+            return self._export(record, include_result=True)
+
+    def forget(self, session_id: str, task_id: Any) -> dict[str, Any]:
+        normalized = _bounded_text(task_id, "task_id", 80)
+        now = time.monotonic()
+        with self._lock:
+            session = self._session_locked(session_id, now)
+            removed = session.tasks.pop(normalized, None) is not None
+        return {"task_id": normalized, "forgotten": removed, "scope": "browser_session"}
+
+    def clear(self, session_id: str) -> None:
+        with self._lock:
+            self._sessions.pop(_session_key(session_id), None)
+
+    def stats(self, session_id: str) -> dict[str, int]:
+        now = time.monotonic()
+        with self._lock:
+            self._cleanup_locked(now)
+            session = self._sessions.get(_session_key(session_id))
+            if session is None:
+                return {"tasks": 0}
+            session.last_seen = now
+            return {"tasks": len(session.tasks)}
+
+
+def copy_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    """JSON-safe defensive copy for helper results exposed back to the model."""
+
+    try:
+        copied = json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    except (TypeError, ValueError) as exc:
+        raise ToolInputError("sub-agent result could not be serialized") from exc
+    if not isinstance(copied, dict):
+        raise ToolInputError("sub-agent result must be an object")
+    return copied
+
+
 class PortalToolHarness:
     """Execute exactly the schemas in ``SAFE_TOOLS`` for one portal session."""
 
@@ -1854,6 +2044,7 @@ class PortalToolHarness:
         browser_runner: Callable[[str, float], str] | None = None,
         search_url_template: str | None = None,
         media_runner: Callable[[bytes, str, str], Mapping[str, Any]] | None = None,
+        subagent_runner: Callable[[str, str, str], Mapping[str, Any]] | None = None,
     ) -> None:
         self.documents = documents
         self.memory = SessionMemoryStore(ttl_s=ttl_s)
@@ -1866,12 +2057,14 @@ class PortalToolHarness:
             search_url_template=search_url_template,
         )
         self.workspace = SessionWorkspaceStore(ttl_s=ttl_s, media_runner=media_runner)
+        self.subagents = SessionSubagentStore(ttl_s=ttl_s, runner=subagent_runner)
 
     def clear(self, session_id: str) -> None:
         self.memory.clear(session_id)
         self.location.clear(session_id)
         self.web.clear(session_id)
         self.workspace.clear(session_id)
+        self.subagents.clear(session_id)
 
     def memory_stats(self, session_id: str) -> dict[str, int]:
         return self.memory.stats(session_id)
@@ -1884,6 +2077,9 @@ class PortalToolHarness:
 
     def location_stats(self, session_id: str) -> dict[str, bool]:
         return self.location.stats(session_id)
+
+    def subagent_stats(self, session_id: str) -> dict[str, int]:
+        return self.subagents.stats(session_id)
 
     def set_client_location(
         self, session_id: str, payload: Mapping[str, Any]
@@ -2030,6 +2226,14 @@ class PortalToolHarness:
                 result = self.workspace.media(session_id, "audio", arguments.get("media_id"))
             elif name == "video_scan":
                 result = self.workspace.media(session_id, "video", arguments.get("media_id"))
+            elif name == "subagent_delegate":
+                result = self.subagents.delegate(session_id, arguments)
+            elif name == "subagent_list":
+                result = self.subagents.list(session_id)
+            elif name == "subagent_result":
+                result = self.subagents.result(session_id, arguments.get("task_id"))
+            elif name == "subagent_forget":
+                result = self.subagents.forget(session_id, arguments.get("task_id"))
             elif name == "session_search":
                 query = _bounded_text(arguments.get("query"), "query", 500)
                 limit = _bounded_integer(
@@ -2113,6 +2317,13 @@ def tool_use_instructions() -> str:
         "session_search federates this session's evidence. safe_math_eval never executes code. "
         "audio_analyze and video_scan inspect only media observed in this session. working_notes "
         "and task_list are temporary session state.\n"
+        "Sub-agent workflow: subagent_delegate runs one fresh, synchronous, text-only helper "
+        "completion for an independently answerable analysis, plan, synthesis, or critique. "
+        "Pass only the minimum necessary evidence in context. The helper has no tools, media, "
+        "host access, or parent conversation, cannot recursively delegate, and its output is "
+        "model-generated analysis rather than external evidence. Multiple independent "
+        "delegations may be requested in one tool-call response. Use subagent_list and "
+        "subagent_result for this session's completed tasks and subagent_forget to discard one.\n"
         "Runtime workflow: call get_system_snapshot only for questions about this portal host's "
         "current hardware, utilization, platform, network counters, date, or time. Never treat "
         "that snapshot as information about the user's phone or device.\n"

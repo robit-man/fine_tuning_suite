@@ -221,13 +221,23 @@ beside the brain button. Opted-in turns include the portal's authoritative
 server-owned allowlisted schema array and request automatic execution. Qwen3.8
 emits standard Ollama `message.tool_calls`; the portal provides discovery,
 web, document/structured/OCR, memory/session recall, safe math, technical media
-analysis, working-note, and task tools, appends normal tool-role messages, and
-repeats until a final answer or the 50-call per-turn ceiling. The
+analysis, working-note, task, and isolated sub-agent tools, appends normal
+tool-role messages, and repeats until a final answer. There is no numeric call,
+round, or per-turn ceiling. An all-duplicate round stops as explicit no-progress;
+client disconnects, request timeouts, and upstream failures remain transport
+termination conditions. The
 assistant message shows a compact collapsible **Tools** trace with live running,
 completed/failed state, compact arguments, and bounded result evidence. Spoken
 output is deferred until no unresolved calls remain. Native structured calls
 are preferred; strict Omnius-style `<tool_call>` JSON is accepted as a renderer
 compatibility fallback and removed from visible text.
+
+`subagent_delegate` runs a fresh synchronous helper completion for isolated
+analysis, planning, synthesis, or review. `subagent_list`, `subagent_result`,
+and `subagent_forget` manage its completed records. Helpers receive no parent
+history except explicitly delegated context, no media, no tools, no host access,
+and `think=false`. Results are browser-session-local model analysis rather than
+independent evidence, and Trash deletes them with the rest of the session.
 
 The allowlist also includes `get_user_location`. With tools enabled, the
 browser—not the portal host—calls the HTTPS geolocation endpoint, keeps only

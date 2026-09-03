@@ -91,8 +91,10 @@ thinking, tool-round, PCM, and one authoritative final adapter event.
 The wrench button beside reasoning explicitly enables the portal's server-pinned
 structured tool array; it is off by default. The model can discover allowlisted
 capabilities, chain browser search/fetch/crawl, query or OCR attached documents,
-evaluate bounded math, inspect media metadata, federate session recall, and use
-temporary memory, notes, and tasks.
+evaluate bounded math, inspect media metadata, federate session recall, use
+temporary memory/notes/tasks, and delegate isolated text-only helper work.
+Tool calls and rounds have no numeric ceiling; an all-duplicate round stops as
+no-progress, while request timeout and disconnect remain transport boundaries.
 For location-dependent work, the enabled browser performs a direct HTTPS
 IP-geolocation lookup, strips the raw IP and non-geographic metadata, and makes
 the approximate session-scoped result available only through

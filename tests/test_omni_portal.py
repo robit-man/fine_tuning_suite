@@ -133,7 +133,7 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "function renderToolTrace" in javascript
     assert "function mergeToolTrace" in javascript
     assert "function appendToolJsonRows" in javascript
-    assert "MAX_TOOL_TRACE_ITEMS = 50" in javascript
+    assert "MAX_TOOL_TRACE_ITEMS" not in javascript
     assert ".tool-json-row" in css
     assert ".tool-json-branch" in css
     assert "portal_auto_tools: toolUseEnabled()" in javascript
@@ -434,9 +434,20 @@ def test_portal_status_probes_all_internal_stages() -> None:
         "streaming": True,
         "client_opt_in": True,
         "default_enabled": False,
-        "max_rounds": 50,
-        "max_calls_per_round": 50,
-        "max_calls_per_turn": 50,
+        "round_limit": None,
+        "call_limit": None,
+        "termination": [
+            "model_final",
+            "exact_duplicate_no_progress",
+            "request_timeout",
+            "client_disconnect",
+        ],
+    }
+    assert response.json["subagents"] == {
+        "scope": "browser_session",
+        "execution": "synchronous_isolated_text_only",
+        "tools_available_to_helper": False,
+        "tasks": 0,
     }
     assert response.json["web"] == {
         "discovery": "local_chromium",
@@ -851,6 +862,51 @@ def test_working_notes_and_task_list_are_session_scoped() -> None:
     assert harness.execute("one", "task_list", {"action": "list"})["tasks"]
     assert harness.execute("two", "working_notes", {"action": "list"})["notes"] == []
     assert harness.execute("two", "task_list", {"action": "list"})["tasks"] == []
+
+
+def test_subagent_tools_are_synchronous_and_session_scoped() -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    def runner(objective: str, role: str, context: str) -> dict[str, Any]:
+        calls.append((objective, role, context))
+        return {
+            "content": f"Reviewed: {objective}",
+            "provenance": {"tools_available": False},
+        }
+
+    harness = PortalToolHarness(
+        SessionDocumentStore(ttl_s=300), subagent_runner=runner
+    )
+    delegated = harness.execute(
+        "one",
+        "subagent_delegate",
+        {
+            "objective": "Critique the proposed interface.",
+            "role": "critic",
+            "context": "The interface has one primary action.",
+        },
+    )
+
+    assert calls == [
+        (
+            "Critique the proposed interface.",
+            "critic",
+            "The interface has one primary action.",
+        )
+    ]
+    assert delegated["status"] == "completed"
+    assert delegated["result"]["content"].startswith("Reviewed:")
+    task_id = delegated["task_id"]
+    assert harness.execute("one", "subagent_list", {})["tasks"][0]["task_id"] == task_id
+    assert harness.execute("one", "subagent_result", {"task_id": task_id})[
+        "result"
+    ] == delegated["result"]
+    assert harness.execute("two", "subagent_list", {})["tasks"] == []
+    assert harness.execute("two", "subagent_result", {"task_id": task_id})[
+        "error"
+    ] == "ToolInputError"
+    harness.clear("one")
+    assert harness.execute("one", "subagent_list", {})["tasks"] == []
 
 
 def test_audio_analyze_and_video_scan_use_only_observed_session_media() -> None:
@@ -1584,13 +1640,87 @@ def test_portal_executes_only_allowlisted_tool_and_strips_media_on_followup() ->
     assert media_events[0]["media_id"].startswith("image-")
 
 
-def test_portal_allows_tool_chains_longer_than_four_calls() -> None:
+def test_portal_subagent_delegation_uses_fresh_tool_free_text_context() -> None:
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        messages = body.get("messages") or []
+        if messages and "isolated, read-only helper" in str(messages[0].get("content")):
+            return httpx.Response(
+                200,
+                json={
+                    "model": DEFAULT_MODEL,
+                    "message": {
+                        "role": "assistant",
+                        "content": "The delegated review found one clear risk.",
+                    },
+                },
+            )
+        if len(requests) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "subagent_delegate",
+                                    "arguments": {
+                                        "objective": "Review the interface risk.",
+                                        "role": "critic",
+                                        "context": "One action is destructive.",
+                                    },
+                                },
+                            }
+                        ],
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": "I found one clear risk."}},
+        )
+
+    app = create_app(_config(), httpx.Client(transport=httpx.MockTransport(handler)))
+    response = app.test_client().post(
+        "/api/chat",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json=_request(portal_auto_tools=True, think=False),
+    )
+
+    assert response.status_code == 200
+    assert len(requests) == 3
+    delegated = requests[1]
+    assert delegated["think"] is False
+    assert delegated["stream"] is False
+    assert delegated["response_modalities"] == ["text"]
+    assert delegated["speech_mode"] == "never"
+    assert "tools" not in delegated
+    assert [message["role"] for message in delegated["messages"]] == ["system", "user"]
+    tool_result = json.loads(requests[2]["messages"][-1]["content"])
+    assert tool_result["status"] == "completed"
+    assert tool_result["result"]["provenance"] == {
+        "source_type": "isolated_model_completion",
+        "role": "critic",
+        "tools_available": False,
+        "media_available": False,
+        "reasoning_enabled": False,
+    }
+    assert response.json["portal"]["safe_tools_executed"][0]["name"] == "subagent_delegate"
+
+
+def test_portal_tool_chain_has_no_legacy_fifty_call_cap() -> None:
     requests = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(json.loads(request.content))
         call_number = len(requests)
-        if call_number <= 6:
+        if call_number <= 55:
             return httpx.Response(
                 200,
                 json={
@@ -1626,8 +1756,90 @@ def test_portal_allows_tool_chains_longer_than_four_calls() -> None:
     )
 
     assert response.status_code == 200
-    assert len(requests) == 7
-    assert len(response.json["portal"]["safe_tools_executed"]) == 6
+    assert len(requests) == 56
+    assert len(response.json["portal"]["safe_tools_executed"]) == 55
+
+
+def test_portal_tool_round_has_no_legacy_fifty_call_cap() -> None:
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "memory_write",
+                                    "arguments": {
+                                        "topic": "batch-test",
+                                        "key": f"item-{index}",
+                                        "value": str(index),
+                                    },
+                                },
+                            }
+                            for index in range(55)
+                        ],
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": "Batch complete."}},
+        )
+
+    app = create_app(_config(), httpx.Client(transport=httpx.MockTransport(handler)))
+    response = app.test_client().post(
+        "/api/chat",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json=_request(portal_auto_tools=True),
+    )
+
+    assert response.status_code == 200
+    assert len(requests) == 2
+    assert len(response.json["portal"]["safe_tools_executed"]) == 55
+
+
+def test_portal_stops_an_exact_duplicate_no_progress_tool_loop() -> None:
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "memory_search",
+                                "arguments": {"query": "unchanged"},
+                            },
+                        }
+                    ],
+                }
+            },
+        )
+
+    app = create_app(_config(), httpx.Client(transport=httpx.MockTransport(handler)))
+    response = app.test_client().post(
+        "/api/chat",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json=_request(portal_auto_tools=True),
+    )
+
+    assert response.status_code == 502
+    assert "exact duplicate" in response.json["error"]
+    assert len(requests) == 2
 
 
 def test_portal_parses_omnius_style_text_tool_call_fallback() -> None:
@@ -1937,3 +2149,52 @@ def test_portal_stream_route_requires_auth_and_chains_session_tools() -> None:
     assert complete_events[0]["tools"][0]["status"] == "complete"
     assert complete_events[0]["tools"][0]["result"]
     assert events[-1]["response"]["message"]["content"] == "Violet."
+
+
+def test_portal_stream_tool_chain_has_no_legacy_fifty_call_cap() -> None:
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        call_number = len(requests)
+        if call_number <= 55:
+            response = {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "memory_write",
+                                "arguments": {
+                                    "topic": "stream-chain",
+                                    "key": f"step-{call_number}",
+                                    "value": str(call_number),
+                                },
+                            },
+                        }
+                    ],
+                }
+            }
+        else:
+            response = {"message": {"role": "assistant", "content": "Complete."}}
+        wire = json.dumps({"type": "final", "response": response}) + "\n"
+        return httpx.Response(
+            200,
+            content=wire,
+            headers={"content-type": "application/x-ndjson"},
+        )
+
+    app = create_app(_config(), httpx.Client(transport=httpx.MockTransport(handler)))
+    response = app.test_client().post(
+        "/api/chat/stream",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json=_request(stream=True, portal_auto_tools=True),
+    )
+    events = [json.loads(line) for line in response.data.splitlines()]
+
+    assert response.status_code == 200
+    assert len(requests) == 56
+    assert events[-1]["type"] == "final"
+    assert len(events[-1]["response"]["portal"]["safe_tools_executed"]) == 55

@@ -32,7 +32,10 @@ reasoning-off routing, adaptive call VAD, smooth message handling, concurrent
 session and document-index isolation, bounded PDF/text ingestion,
 content-redacted diagnostic expiry/deletion, streamed PCM relay, public-web
 egress rejection, session memory/web-index isolation, and structured
-multi-round tool execution. The tool gate includes local-browser result and
+multi-round tool execution. The tool gate proves both synchronous and NDJSON
+chains continue past the former 50-call boundary, stops exact duplicate
+no-progress loops, and verifies isolated session-scoped sub-agent delegation.
+It also includes local-browser result and
 redirect parsing, provider-challenge fail-closed behavior, network-free session
 recall, search→fetch, textual-call compatibility, live bounded receipts, and
 memory-write→memory-search→final chains while ensuring tools remain off without

@@ -212,8 +212,8 @@ contains unresolved `tool_calls`; the client executes the tools, appends tool
 results, and submits the next turn before TTS.
 
 The authenticated reference portal can perform that client role when the user
-enables its wrench toggle (`portal_auto_tools=true`). It pins its own 20-tool
-schema array, executes no more than 50 bounded rounds/calls per turn, emits running/completed
+enables its wrench toggle (`portal_auto_tools=true`). It pins its own 24-tool
+schema array, executes uncapped progress-checked rounds/calls, emits running/completed
 tool events on the portal NDJSON extension, and returns bounded arguments and
 result evidence under `response.portal`. The toggle defaults off. This flag and
 trace are portal extensions, not fields in portable adapter v1.

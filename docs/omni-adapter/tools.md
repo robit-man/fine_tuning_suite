@@ -38,6 +38,10 @@ owns the schemas and implementations.
 | `video_scan` | Inspect observed video/audio streams and timeline metadata | Current browser-session media only |
 | `working_notes` | Add, list, search, or remove bounded research notes | Current browser session only |
 | `task_list` | Maintain bounded pending/in-progress/completed/blocked tasks | Current browser session only |
+| `subagent_delegate` | Run one fresh helper completion for isolated analysis, planning, synthesis, or critique | Synchronous text-only model call; no tools, media, host access, or parent history; result stored in the current browser session |
+| `subagent_list` | List completed helper delegations | Current browser session only |
+| `subagent_result` | Retrieve one completed helper result by task ID | Current browser session only |
+| `subagent_forget` | Delete one stored helper result | Current browser session only |
 
 The portal publishes the exact JSON schemas as `safe_tools` from `/api/status`.
 It also advertises `tool_execution.client_opt_in=true` and
@@ -86,10 +90,14 @@ user/media turn
   -> optional Qwen3-TTS after no unresolved calls remain
 ```
 
-Up to 50 tool calls per turn are allowed, whether the model emits them one at a
-time across 50 sequential rounds or batches several calls in a round. A single
-round is also capped at 50, and the combined per-turn total never exceeds 50.
-Identical calls in one turn are de-duplicated. Media bytes and raw document
+There is no numeric call, round, or per-turn ceiling in either the synchronous
+or streaming portal loop. The model may emit one call at a time or batch any
+number of independent calls in a round, and chaining continues until it emits a
+final answer. Exact call fingerprints are de-duplicated; if an entire round
+contains only calls already executed during the turn, the portal stops with an
+explicit no-progress error instead of spinning forever. A request timeout,
+client disconnect, or upstream failure also terminates execution. These are
+progress and transport boundaries, not hidden call quotas. Media bytes and raw document
 envelopes are removed from follow-up rounds; tagged observations, retrieved
 text, and prior dialogue remain as bounded text context. TTS is deferred while
 a tool call is unresolved and runs only for the final answer.
@@ -99,10 +107,30 @@ normal adapter events. Start events identify running calls; completion events
 carry their success state and a bounded result preview. The authoritative final
 response repeats this evidence in `portal.safe_tools_executed`. The UI merges
 the two phases by call ID and exposes arguments/results in a collapsible
-**Tools** row, parallel to the reasoning disclosure. JSON arguments and results
-render as bounded, nested key/value rows; plain-text previews are capped at
-12,000 characters. Traces are retained only in that browser session's existing
+**Tools** row, parallel to the reasoning disclosure. The browser retains every
+call receipt for the turn; JSON arguments and results render as nested key/value
+rows, while each plain-text result preview is capped at 12,000 characters to
+protect the DOM. Traces are retained only in that browser session's existing
 five-minute cache.
+
+## Sub-agent delegation
+
+`subagent_delegate` is a deliberately narrow orchestration primitive. It sends
+one independently answerable objective, an optional specialization
+(`general`, `researcher`, `planner`, or `critic`), and optional evidence to a
+fresh helper context. The helper request always has a system message first,
+`think=false`, text-only output, no speech, no media, no portal schemas, and no
+tool access. It therefore cannot recursively delegate or perform external
+actions. The parent remains responsible for web/document/tool work and for
+verifying source-dependent claims.
+
+The call is synchronous: its completed result is immediately returned as a
+normal `role="tool"` observation and stored under an opaque task ID. This avoids
+orphan background workers and polling loops. `subagent_list`, `subagent_result`,
+and `subagent_forget` manage those completed records. Storage is keyed by the
+hashed Secure browser-session cookie, expires under the same idle TTL as other
+portal state, and is deleted by Trash. A task ID from another browser session
+cannot retrieve a result.
 
 Native `message.tool_calls` remain authoritative. For compatible renderers that
 emit Omnius-style `<tool_call>{...}</tool_call>` text, the portal parses the
@@ -157,7 +185,7 @@ portal retains the pieces appropriate to a small public demonstration:
 
 - trusted server-owned schemas and explicit client opt-in;
 - native structured calls with a strict textual compatibility parser;
-- bounded multi-round execution and `role="tool"` observations;
+- uncapped progress-checked multi-round execution and `role="tool"` observations;
 - dependent chaining, duplicate suppression, and read-only batching guidance;
 - local browser discovery separated from direct page retrieval and bounded crawl;
 - per-session fetched-page indexing and lexical term/bigram recall;

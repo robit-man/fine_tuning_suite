@@ -21,7 +21,6 @@
   const PCM_CROSSFADE_SECONDS = 0.003;
   const PCM_CROSSFADE_MIN_BUFFER_SECONDS = 0.08;
   const CONVERSATION_BOTTOM_THRESHOLD_PX = 64;
-  const MAX_TOOL_TRACE_ITEMS = 50;
   const MAX_TOOL_RESULT_CHARS = 12_000;
   const LIVE_CALL_SYSTEM_PROMPT = (
     "You are participating in a live two-way spoken conversation. Answer the "
@@ -867,7 +866,7 @@
 
   function normalizedToolTrace(value) {
     if (!Array.isArray(value)) return [];
-    return value.slice(0, MAX_TOOL_TRACE_ITEMS).map(item => {
+    return value.map(item => {
       const result = (item || {}).resultIsJson
         ? {
           raw: String((item || {}).result || "").slice(0, MAX_TOOL_RESULT_CHARS),
@@ -907,7 +906,7 @@
       if (pendingIndex >= 0 && item.status !== "running") trace[pendingIndex] = item;
       else trace.push(item);
     }
-    return trace.slice(-MAX_TOOL_TRACE_ITEMS);
+    return trace;
   }
 
   function appendToolJsonRows(container, value, depth = 0, budget = { remaining: 300 }) {

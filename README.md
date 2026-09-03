@@ -425,12 +425,12 @@ pipe tables, viewport-bounded
 token-pinned chat scrolling, native Ollama reasoning control, deterministic
 Qwen3-TTS profiles, allowlisted Female/Male presets, request-local WAV voice
 cloning, streamed PCM playback, and bounded single-flight barge-in voice-call
-turn consolidation. An explicit wrench toggle beside reasoning adds 20
+turn consolidation. An explicit wrench toggle beside reasoning adds 24
 server-pinned Ollama tool schemas for locally
 browser-driven public web discovery/fetch,
 attached-document search, on-demand host snapshots, time/capabilities, and
 temporary session recall. The
-portal completes bounded multi-round tool chains before optional TTS and shows
+portal completes uncapped, progress-checked multi-round tool chains before optional TTS and shows
 a live collapsible execution trace with each assistant reply. Tools default off;
 the harness uses no hosted search API or key. The low-latency worker stays
 resident and emits two-frame, roughly 160 ms PCM windows. Distinct browser

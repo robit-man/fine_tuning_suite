@@ -313,6 +313,7 @@ def test_mock_call_vad_harness_rejects_noise_and_accepts_confirmed_events() -> N
         "sustained_speech": 1,
         "sustained_alarm": 1,
         "quiet_speech": 1,
+        "immediate_speech": 1,
         "continued_speech_segments": 2,
     }
 

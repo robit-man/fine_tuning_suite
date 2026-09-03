@@ -7,15 +7,17 @@
   "use strict";
 
   const DEFAULTS = Object.freeze({
-    calibrationMs: 1200,
-    startThreshold: 0.018,
-    releaseThreshold: 0.010,
-    noiseMultiplier: 3.5,
-    releaseMultiplier: 1.9,
-    startConfirmMs: 260,
-    silenceMs: 700,
-    minActiveMs: 520,
-    preRollFrames: 8,
+    calibrationMs: 800,
+    calibrationEscapeThreshold: 0.030,
+    calibrationEscapeMultiplier: 3.25,
+    startThreshold: 0.014,
+    releaseThreshold: 0.008,
+    noiseMultiplier: 2.75,
+    releaseMultiplier: 1.6,
+    startConfirmMs: 200,
+    silenceMs: 760,
+    minActiveMs: 400,
+    preRollFrames: 10,
     initialNoiseFloor: 0.003,
   });
 
@@ -56,9 +58,21 @@
   function processFrame(state, { level, samples, now, frameMs }) {
     const config = state.config;
     if (now < state.readyAt) {
-      updateNoiseFloor(state, level, 0.12);
-      state.preRoll = [];
-      return { event: "calibrating", active: false };
+      const calibrationEscapeThreshold = Math.max(
+        config.calibrationEscapeThreshold,
+        state.noiseFloor * config.calibrationEscapeMultiplier,
+      );
+      if (level >= calibrationEscapeThreshold) {
+        state.readyAt = now;
+      } else {
+        updateNoiseFloor(state, level, 0.12);
+        state.preRoll = [];
+        return {
+          event: "calibrating",
+          active: false,
+          calibrationEscapeThreshold,
+        };
+      }
     }
 
     const startThreshold = Math.max(

@@ -43,15 +43,17 @@
   );
   function fallbackCallVad() {
     const DEFAULTS = Object.freeze({
-      calibrationMs: 1200,
-      startThreshold: 0.018,
-      releaseThreshold: 0.01,
-      noiseMultiplier: 3.5,
-      releaseMultiplier: 1.9,
-      startConfirmMs: 260,
-      silenceMs: 700,
-      minActiveMs: 520,
-      preRollFrames: 8,
+      calibrationMs: 800,
+      calibrationEscapeThreshold: 0.030,
+      calibrationEscapeMultiplier: 3.25,
+      startThreshold: 0.014,
+      releaseThreshold: 0.008,
+      noiseMultiplier: 2.75,
+      releaseMultiplier: 1.6,
+      startConfirmMs: 200,
+      silenceMs: 760,
+      minActiveMs: 400,
+      preRollFrames: 10,
       initialNoiseFloor: 0.003,
     });
     const resetState = (vad, now = 0, { calibrate = false } = {}) => {
@@ -81,9 +83,21 @@
     const processFrame = (vad, { level, samples, now, frameMs }) => {
       const config = vad.config;
       if (now < vad.readyAt) {
-        updateNoiseFloor(vad, level, 0.12);
-        vad.preRoll = [];
-        return { event: "calibrating", active: false };
+        const calibrationEscapeThreshold = Math.max(
+          config.calibrationEscapeThreshold,
+          vad.noiseFloor * config.calibrationEscapeMultiplier,
+        );
+        if (level >= calibrationEscapeThreshold) {
+          vad.readyAt = now;
+        } else {
+          updateNoiseFloor(vad, level, 0.12);
+          vad.preRoll = [];
+          return {
+            event: "calibrating",
+            active: false,
+            calibrationEscapeThreshold,
+          };
+        }
       }
       const startThreshold = Math.max(
         config.startThreshold,
@@ -146,12 +160,12 @@
   if (!callPlayback) throw new Error("Call playback ownership helper failed to load");
   const BARGE_VAD_OPTIONS = {
     calibrationMs: 0,
-    startThreshold: 0.055,
-    releaseThreshold: 0.03,
-    noiseMultiplier: 4.0,
-    releaseMultiplier: 2.0,
-    startConfirmMs: 480,
-    minActiveMs: 560,
+    startThreshold: 0.045,
+    releaseThreshold: 0.025,
+    noiseMultiplier: 3.6,
+    releaseMultiplier: 1.9,
+    startConfirmMs: 360,
+    minActiveMs: 440,
   };
   const LIMITS = {
     audio: 30 * 1024 * 1024,

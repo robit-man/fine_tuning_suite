@@ -33,7 +33,12 @@ assert.equal(remoteRequests([...calibratedNoise, ...frames(40, 0.18), ...trailin
 assert.equal(remoteRequests([...frames(1300, 0.025), ...frames(2500, 0.026)]), 0);
 assert.equal(remoteRequests([...calibratedNoise, ...frames(720, 0.085), ...trailingSilence]), 1);
 assert.equal(remoteRequests([...calibratedNoise, ...frames(680, 0.065), ...trailingSilence]), 1);
-assert.equal(remoteRequests([...calibratedNoise, ...frames(620, 0.024), ...trailingSilence]), 1);
+assert.equal(remoteRequests([...calibratedNoise, ...frames(500, 0.018), ...trailingSilence]), 1);
+assert.equal(remoteRequests([
+  ...frames(200, 0.006),
+  ...frames(600, 0.045),
+  ...trailingSilence,
+]), 1);
 assert.equal(remoteRequests([
   ...calibratedNoise,
   ...frames(720, 0.085),
@@ -51,6 +56,7 @@ console.log(JSON.stringify({
     sustained_speech: 1,
     sustained_alarm: 1,
     quiet_speech: 1,
+    immediate_speech: 1,
     continued_speech_segments: 2,
   },
 }, null, 2));

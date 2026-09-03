@@ -76,12 +76,15 @@ turn, then consumes them after that response.
 The microphone remains active during inference and playback, but the browser
 permits only one cognitive request at a time. Consecutive confirmed segments
 are joined with short silence boundaries into one bounded latest-turn buffer.
-If the user continues before an unanswered inference completes, that stale
-request is aborted, its input is preserved, and the accumulated speech is sent
-once after a short settle interval. The buffer retains at most the newest 45
-seconds, so speech cannot create an unbounded HTTP/GPU queue. Sustained speech
-during playback stops the current audio while capture continues. Tap the phone
-icon again to clear pending audio, abort the active turn, and stop playback.
+If the user continues while a request is active, its now-stale reply is
+suppressed while the submitted audio is allowed to drain exactly once. Only
+new speech enters the bounded client buffer and is sent once as the next turn
+after the active request finishes. Submitted samples are never requeued, which
+prevents repeated earlier speech and server-side inference pileups when a
+browser abort cannot cancel work already running upstream. The buffer retains
+at most the newest 45 seconds. Sustained speech during playback stops the
+current audio while capture continues. Tap the phone icon again to clear
+pending audio, abort the active turn, and stop playback.
 
 Call turns include a dedicated conversational contract: answer the speaker's
 intent directly, do not echo/transcribe/paraphrase unless explicitly asked,

@@ -2307,31 +2307,6 @@
     });
   }
 
-  function abortActiveCallTurns(call, { preserveUnanswered = false } = {}) {
-    let aborted = 0;
-    for (const turn of call.turns) {
-      if (
-        preserveUnanswered
-        && !turn.responseStarted
-        && !turn.historyQueued
-        && !turn.inputRequeued
-        && !turn.soundOnly
-        && call.playbackTurn !== turn
-      ) {
-        callQueue.enqueue(call.pendingAudio, turn.inputChunks, turn.activeDurationMs);
-        turn.inputRequeued = true;
-      }
-      turn.discardReply = true;
-      if (turn.assistant) turn.assistant.node.classList.add("interrupted");
-      if (!turn.controller.signal.aborted) {
-        turn.controller.abort();
-        aborted += 1;
-      }
-    }
-    if (aborted || call.playbackTurn) stopCurrentPlayback();
-    return aborted;
-  }
-
   function clearPendingCallFlush(call) {
     if (call.pendingFlushTimer !== null) clearTimeout(call.pendingFlushTimer);
     call.pendingFlushTimer = null;
@@ -2361,8 +2336,10 @@
       : capturedDurationMs;
     if (confirmedDurationMs < call.vad.config.minActiveMs) return;
 
+    // A submitted turn is immutable. Aborting a browser fetch does not guarantee
+    // cancellation of its server-side inference, so requeueing submitted samples
+    // duplicates earlier speech. Only newly captured samples enter this buffer.
     callQueue.enqueue(call.pendingAudio, chunks, confirmedDurationMs);
-    if (call.inflight) abortActiveCallTurns(call, { preserveUnanswered: true });
     setComposerStatus(callListeningStatus(call));
     schedulePendingCallFlush(call);
   }
@@ -2443,10 +2420,6 @@
       discardReply: false,
       historyQueued: false,
       assistant: null,
-      inputChunks: chunks,
-      activeDurationMs: confirmedDurationMs,
-      inputRequeued: false,
-      responseStarted: false,
       soundOnly: false,
     };
     supersedeCallAudio(call, turn.sequence);
@@ -2576,12 +2549,12 @@
                 turn.controller.abort();
               }
             } else if (event.type === "delta") {
+              if (turn.discardReply) return;
               const contentDelta = String((event.message || {}).content || "");
               const thinkingDelta = showThinking
                 ? String((event.message || {}).thinking || "")
                 : "";
               streamedContent += contentDelta;
-              if (contentDelta || thinkingDelta) turn.responseStarted = true;
               if (showThinking) {
                 streamedThinking += thinkingDelta;
               }
@@ -2592,10 +2565,10 @@
                 streaming: true,
               });
             } else if (event.type === "stage" && event.stage === "tts") {
-              turn.responseStarted = true;
+              if (turn.discardReply) return;
               setComposerStatus("Call · preparing voice…");
             } else if (event.type === "tool") {
-              turn.responseStarted = true;
+              if (turn.discardReply) return;
               activeToolTrace = mergeToolTrace(activeToolTrace, event);
               const names = (event.tools || []).map(item => (
                 typeof item === "string" ? item : String((item || {}).name || "tool")
@@ -2604,7 +2577,6 @@
               updateMessage(assistant, { toolTrace: activeToolTrace, streaming: true });
               setComposerStatus(`Call · ${event.phase === "start" ? "using" : "used"} ${names.join(", ")}…`);
             } else if (event.type === "audio_start") {
-              turn.responseStarted = true;
               if (!callPlayback.canStart(call, turn)) turn.discardReply = true;
               if (!turn.discardReply) {
                 if (call.playbackTurn && call.playbackTurn !== turn) {
@@ -2643,13 +2615,24 @@
         setComposerStatus("Call · audio context saved · listening");
         return;
       }
-      if (!(reply.audio && reply.audio.data)) throw new Error("Voice call reply contained no audio");
       if (audioContextCount) call.audioContexts.splice(0, audioContextCount);
       const historyContent = audioEvidenceHistory(
         inputTranscript,
         inputAudioObservation,
         callFallback,
       );
+      if (turn.discardReply) {
+        turn.historyQueued = true;
+        call.completedHistory.set(turn.sequence, {
+          frame: Boolean(frame),
+          transcript: historyContent,
+          reply: "",
+        });
+        flushCallHistory(call);
+        if (assistant.node.isConnected) removeMessage(assistant);
+        return;
+      }
+      if (!(reply.audio && reply.audio.data)) throw new Error("Voice call reply contained no audio");
       revealMessage(assistant);
       updateMessage(assistant, {
         content: reply.content || "Spoken response",
@@ -2764,10 +2747,7 @@
         clearPendingCallFlush(call);
         setVadActive(call, true);
         const superseded = supersedeCallAudio(call, call.nextSequence);
-        const aborted = call.inflight
-          ? abortActiveCallTurns(call, { preserveUnanswered: true })
-          : 0;
-        if (superseded || aborted) {
+        if (superseded) {
           setComposerStatus("Call · interruption heard · consolidating speech…");
         } else {
           setComposerStatus(call.inflight

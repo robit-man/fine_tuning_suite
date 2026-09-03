@@ -149,13 +149,16 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "function submitCallUtterance" in javascript
     assert "function enqueueCallUtterance" in javascript
     assert "function flushPendingCallUtterances" in javascript
-    assert "function abortActiveCallTurns" in javascript
     assert "function rememberCallAudioContext" in javascript
     assert "callQueue.classifyObservation" in javascript
     assert "require_speech: true" in javascript
     assert 'content: frame ? "Camera audio context" : "Audio context"' in javascript
     assert "CALL_PENDING_MAX_SECONDS = 45" in javascript
-    assert "preserveUnanswered: true" in javascript
+    assert "A submitted turn is immutable" in javascript
+    assert "function abortActiveCallTurns" not in javascript
+    assert "preserveUnanswered" not in javascript
+    assert "inputRequeued" not in javascript
+    assert "responseStarted" not in javascript
     assert "|| call.inflight" in javascript
     assert "function supersedeCallAudio" in javascript
     assert "callPlayback.canStart(call, turn)" in javascript
@@ -333,6 +336,8 @@ def test_mock_call_queue_consolidates_segments_and_bounds_pending_audio() -> Non
         "consolidated_samples": 1100,
         "bounded_samples": 10,
         "single_flight_contract": "one active inference plus one bounded pending turn",
+        "submitted_samples_requeued": 0,
+        "next_turn_segments": 2,
         "sound_only_aborts_reply": True,
         "bounded_audio_contexts": 6,
     }

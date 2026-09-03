@@ -451,7 +451,9 @@ enabled, an explicit privacy-bounded `get_system_snapshot` call can sample
 portal-host CPU/RAM/GPU/network/date-time data; it is not dumped into every
 turn. A browser-side location lookup similarly exposes only sanitized,
 approximate session geography through `get_user_location`; raw IP and provider
-metadata never reach the portal or model. Sound-only call captures stop after
+metadata never reach the portal or model. Machine-readable provenance marks
+whether current audio/image/video exists and labels location/search/fetch data
+as tool evidence rather than visual perception. Sound-only call captures stop after
 comprehension without language/TTS, render as dim **Audio context**, and retain
 at most six bounded environmental observations for the next spoken turn. The
 broker-compliant CUDA-only supervisor publishes a

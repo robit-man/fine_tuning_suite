@@ -235,6 +235,12 @@ def adapter_contract() -> dict[str, Any]:
                 "audio_observation": (
                     "tagged environmental and non-speech acoustic evidence when available"
                 ),
+                "evidence_provenance": {
+                    "current_media_modalities": ["audio | image | video"],
+                    "current_visual_input": "boolean",
+                    "tool_data_is_visual_input": False,
+                    "prior_dialogue_is_current_observation": False,
+                },
             },
         },
     }

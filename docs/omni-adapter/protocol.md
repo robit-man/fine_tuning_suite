@@ -212,7 +212,7 @@ contains unresolved `tool_calls`; the client executes the tools, appends tool
 results, and submits the next turn before TTS.
 
 The authenticated reference portal can perform that client role when the user
-enables its wrench toggle (`portal_auto_tools=true`). It pins its own 19-tool
+enables its wrench toggle (`portal_auto_tools=true`). It pins its own 20-tool
 schema array, executes no more than 50 bounded rounds/calls per turn, emits running/completed
 tool events on the portal NDJSON extension, and returns bounded arguments and
 result evidence under `response.portal`. The toggle defaults off. This flag and
@@ -269,10 +269,21 @@ The adapter also adds a compact trace:
     "task": "chat",
     "route": ["comprehension", "language", "tts"],
     "input_modalities": ["text", "audio"],
+    "evidence_provenance": {
+      "current_media_modalities": ["audio"],
+      "current_visual_input": false,
+      "tool_data_is_visual_input": false,
+      "prior_dialogue_is_current_observation": false
+    },
     "speech_synthesized": true
   }
 }
 ```
+
+The provenance booleans are authoritative origin metadata. In particular,
+audio-only requests remain `current_visual_input=false` even if a perception
+backend emits visual-looking prose. Tool results and prior dialogue can inform
+an answer but cannot be represented as something currently seen.
 
 Implementations SHOULD omit internal chain-of-thought from logs and traces.
 Normal Ollama `message.thinking` behavior is controlled by the request and the

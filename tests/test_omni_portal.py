@@ -569,12 +569,17 @@ def test_safe_tools_search_fetch_memory_and_block_private_networks() -> None:
 
     search = harness.execute("one", "web_search", {"query": "example guide"})
     assert search["provider"] == "local_chromium"
+    assert search["provenance"]["authority"] == "discovery_only"
+    assert search["provenance"]["citation_ready"] is False
     assert search["results"][0]["url"] == "https://example.com/guide"
     fetched = harness.execute(
         "one", "web_fetch", {"url": search["results"][0]["url"]}
     )
     assert "Verified guide" in fetched["content"]
     assert "ignore()" not in fetched["content"]
+    assert fetched["provenance"]["source_url"] == "https://example.com/guide"
+    assert fetched["provenance"]["citation_ready"] is True
+    assert "does not prove the user's location" in fetched["claim_limits"]
     recalled = harness.execute(
         "one", "web_search", {"query": "copper verified", "mode": "session"}
     )
@@ -636,9 +641,18 @@ def test_user_location_tool_is_sanitized_session_scoped_and_clearable() -> None:
     assert supplied == result
     assert result["city"] == "Seattle"
     assert result["region_code"] == "WA"
-    assert result["latitude"] == 47.606
-    assert result["longitude"] == -122.332
+    assert result["latitude"] == 47.61
+    assert result["longitude"] == -122.33
     assert result["raw_ip_included"] is False
+    assert result["provenance"] == {
+        "tool": "get_user_location",
+        "source_type": "browser_ip_geolocation",
+        "evidence_type": "tool_data_not_visual_perception",
+        "authority": "approximate_network_area",
+        "device_gps": False,
+        "street_level": False,
+    }
+    assert "exact address" in result["claim_limits"]["unsupported"]
     assert "203.0.113.42" not in serialized
     assert "connection" not in result
     assert harness.execute("two", "get_user_location", {})["available"] is False
@@ -1757,6 +1771,8 @@ def test_mock_live_call_stream_defaults_native_reasoning_off() -> None:
     assert "<runtime_environment>" not in environment["content"]
     assert "conversational multimodal assistant" in environment["content"]
     assert "current tool result" in environment["content"]
+    assert "only a current visual observation" in environment["content"]
+    assert "never device GPS, a current street" in environment["content"]
 
 
 def test_runtime_environment_snapshot_is_bounded_and_omits_sensitive_network_data(

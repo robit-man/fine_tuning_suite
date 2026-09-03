@@ -1530,8 +1530,8 @@
       country_code: boundedLocationText(value.country_code, 8),
       continent: boundedLocationText(value.continent),
       continent_code: boundedLocationText(value.continent_code, 8),
-      latitude: Number.isFinite(latitude) ? Math.round(latitude * 1000) / 1000 : null,
-      longitude: Number.isFinite(longitude) ? Math.round(longitude * 1000) / 1000 : null,
+      latitude: Number.isFinite(latitude) ? Math.round(latitude * 100) / 100 : null,
+      longitude: Number.isFinite(longitude) ? Math.round(longitude * 100) / 100 : null,
       timezone: {
         id: boundedLocationText(timezone.id),
         abbreviation: boundedLocationText(timezone.abbreviation, 24),

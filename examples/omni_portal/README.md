@@ -225,7 +225,7 @@ compatibility fallback and removed from visible text.
 
 The allowlist also includes `get_user_location`. With tools enabled, the
 browser—not the portal host—calls the HTTPS geolocation endpoint, keeps only
-coarse geographic fields and three-decimal coordinates, and sends that
+coarse geographic fields and two-decimal coordinates, and sends that
 sanitized value with the request. Raw IP, ISP/connection, security, and currency
 metadata never reach the portal or model. The result is session-scoped,
 approximate, VPN/carrier-sensitive, and cleared by Trash or five-minute expiry.

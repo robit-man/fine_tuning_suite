@@ -56,7 +56,7 @@ The result describes the server running the portal, never the user's phone.
 
 User location is also explicit and tool-only. When tools are enabled, the
 browser calls `https://ipwho.is/` directly, allowlists only coarse geographic
-fields, rounds coordinates to three decimals, and sends that sanitized object
+fields, rounds coordinates to two decimals, and sends that sanitized object
 with the model request. The portal never receives the lookup's raw `ip`, ISP,
 connection, security, or currency fields. `get_user_location` returns only the
 current opaque browser session's sanitized value; Trash clears it and the
@@ -64,6 +64,15 @@ normal five-minute session TTL expires it. IP location is approximate and may
 identify a carrier gateway or VPN rather than the physical device. A typical
 dependent chain is `get_user_location -> web_search -> web_fetch`, while an
 unavailable location requires an explicit city from the user.
+
+Every location, search, fetch, and crawl result includes a machine-readable
+`provenance` object in the same JSON shown by the portal's **Tools** disclosure.
+It identifies the producing tool, evidence type, authority, source URL when
+applicable, and whether the material is ready to cite. Location additionally
+includes binding `claim_limits`: it may seed an approximate-area search but
+cannot establish device GPS, a street/address, visible surroundings, or a
+camera observation. Search metadata is discovery-only; factual web claims must
+come from a fetched `source_url` and be attributed to it.
 
 ## Tool round lifecycle
 

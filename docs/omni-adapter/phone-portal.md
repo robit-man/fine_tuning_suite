@@ -165,6 +165,12 @@ The live-call instruction answers the user's intent directly and forbids
 echoing, transcription, or paraphrase unless requested. Both audio-only and
 camera-call turns include the prior bounded text dialogue. A camera turn adds
 only the newest frame and labels older scene descriptions as historical.
+Adapter observations carry authoritative origin metadata including
+`current_media_modalities` and `current_visual_input`. An audio-only turn is
+therefore explicitly non-visual even if perception prose is malformed. Tool
+results expose their producing tool, authority, and source URL/claim limits in
+the existing **Tools** disclosure; specific current facts should be attributed
+to that source rather than described as something the assistant sees.
 
 Same-origin IndexedDB persists rendered messages, text context, drafts, reply
 audio, pending attachments, and bounded media previews across reload. Its key

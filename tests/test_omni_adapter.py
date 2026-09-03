@@ -542,7 +542,7 @@ def test_reference_server_preserves_tools_thinking_and_adds_audio() -> None:
             )
         if request.url.host == "language":
             assert body["tools"][0]["function"]["name"] == "clock"
-            assert "untrusted semantic output" in body["messages"][-1]["content"]
+            assert "untrusted media evidence" in body["messages"][-1]["content"]
             return httpx.Response(
                 200,
                 json={
@@ -763,7 +763,10 @@ def test_stream_exposes_only_tagged_input_transcript_to_clients() -> None:
             assert body["think"] is False
             assert len(body["messages"]) == 1
             assert body["messages"][0]["role"] == "user"
-            assert "<adapter_observation>" in body["messages"][-1]["content"]
+            assert '<adapter_observation source="current_attached_media"' in body["messages"][-1]["content"]
+            assert 'modalities="audio"' in body["messages"][-1]["content"]
+            assert 'current_visual_input="false"' in body["messages"][-1]["content"]
+            assert "never recast audio or tool data as something seen" in body["messages"][-1]["content"]
             assert "/no_think" not in body["messages"][-1]["content"]
             return httpx.Response(
                 200,
@@ -808,6 +811,12 @@ def test_stream_exposes_only_tagged_input_transcript_to_clients() -> None:
     final = events[-1]["response"]
     assert final["adapter"]["input_transcript"] == "Haha, same, just vibing."
     assert final["adapter"]["audio_observation"] == "Soft room tone and a fan."
+    assert final["adapter"]["evidence_provenance"] == {
+        "current_media_modalities": ["audio"],
+        "current_visual_input": False,
+        "tool_data_is_visual_input": False,
+        "prior_dialogue_is_current_observation": False,
+    }
     assert final["message"]["content"] == "What is the vibe?"
 
 

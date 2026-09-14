@@ -21,3 +21,10 @@ Qwen is a trademark or project name associated with its respective owner.
 This package is independently produced and is not an official Qwen, llama.cpp,
 Ollama, manitcor, or ggml-org release. No endorsement is implied.
 
+## Portal QR encoder
+
+The phone-sharing modal bundles the QRCode for JavaScript encoder by Kazuhiko
+Arase (copyright 2009) under the MIT License. Its license is distributed next
+to the browser bundle as `examples/omni_portal/static/qr_code.LICENSE.txt`.
+Encoding happens entirely in the browser; the portal URL and access fragment
+are not sent to a QR-code service.

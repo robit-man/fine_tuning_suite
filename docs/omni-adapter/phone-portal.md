@@ -59,7 +59,11 @@ examples/omni_portal/start.sh --stop
 ```
 
 The printed URL must be opened as-is so its `#access=...` fragment reaches the
-browser. Microphone permission requires the HTTPS endpoint. Hold the microphone
+browser. The QR icon in the upper-right opens a locally generated QR code for
+the exact current URL, including that access fragment, plus a copy-link action.
+The encoder runs entirely in the browser and does not disclose the URL to a QR
+service. Treat the QR image as a bearer credential. Microphone permission
+requires the HTTPS endpoint. Hold the microphone
 icon while speaking; release it to create a playable WAV attachment, then send.
 An unprompted audio clip runs the full comprehension-to-language route: the
 tagged ASR transcript replaces the temporary text in your bubble. Additional
@@ -118,7 +122,9 @@ lead, keeps a 3 ms late-arrival floor, and uses a guarded 3 ms crossfade for
 sufficiently large contiguous buffers. The final response retains a complete
 replayable WAV assembled from the original PCM. `stage=tts` is a
 preparing state; `audio_start` is emitted only with the first actual PCM chunk,
-so “streaming” never describes a request that is still in model prefill.
+so “streaming” never describes a request that is still in model prefill. A fast
+typed follow-up or call barge-in cancels stale audio ownership while preserving
+already-streamed assistant text and recording it in the same session history.
 The 512-frame ceiling applies to each synthesis block. Longer replies are split
 at natural text boundaries, retain one continuous PCM sequence across blocks,
 and finish as a single assembled replay WAV instead of stopping near 40 seconds.

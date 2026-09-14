@@ -119,7 +119,11 @@ change the portable adapter v1 contract, whose `/api/chat` route still requires
 scheduled directly into the browser's unlocked Web Audio context. The final
 event also carries the complete tagged 24 kHz mono PCM16 WAV for replay and
 adapter compatibility. The browser remains receptive to barge-in throughout
-generation and scheduled playback. The viewport disables focus and pinch zoom
+generation and scheduled playback. A new typed or VAD-confirmed turn stops the
+older playback/transport but retains any assistant text already streamed into
+the transcript. Text that reached the TTS handoff is treated as settled;
+earlier partial text is visibly marked interrupted, and either form is retained
+in session history rather than disappearing. The viewport disables focus and pinch zoom
 for a stable app-like mobile layout. Conversation text and decorative content
 also disable touch/mouse selection and iOS callouts; normal editing remains
 enabled in the composer and voice configuration fields.
@@ -386,7 +390,10 @@ https://random-words.trycloudflare.com/#access=HIGH_ENTROPY_TOKEN
 
 Fragments are not sent in HTTP requests or referrer headers. The browser keeps
 the token in session storage and sends it as an `Authorization: Bearer` header
-only to same-origin `/api/*` routes. Do not publish the complete access URL.
+only to same-origin `/api/*` routes. The upper-right QR control encodes this
+exact browser URL, including the access fragment, locally on the device; no QR
+API receives it. The modal also offers a copy-link action. Treat the QR code and
+complete access URL as bearer credentials and do not publish either one.
 
 Manage the deployment:
 

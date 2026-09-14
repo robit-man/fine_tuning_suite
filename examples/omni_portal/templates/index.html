@@ -11,7 +11,7 @@
   <title>Omni Chat</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/assets/favicon.svg">
-  <link rel="stylesheet" href="/assets/portal.css?v=20260902-local-tools">
+  <link rel="stylesheet" href="/assets/portal.css?v=20260914-share-qr">
 </head>
 <body data-model="{{ model }}" data-max-upload-mib="{{ max_upload_mib }}" data-session-scope="{{ session_scope }}">
   <main class="app-shell">
@@ -25,6 +25,9 @@
           </span>
         </div>
         <div class="top-actions">
+          <button class="icon-button share-button" id="share-button" type="button" aria-label="Show phone access QR code" title="Open on phone">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Zm11 0h2v2h-2v-2Zm3 0h2v4h-2v-4Zm-4 4h2v2h-2v-2Zm4 2v-2h2v2h-2Z"/></svg>
+          </button>
           <button class="icon-button voice-button" id="voice-button" type="button" aria-label="Configure reply voice" title="Voice settings">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h2m2-5v10m4-14v18m4-15v12m4-8v4"/></svg>
           </button>
@@ -97,6 +100,26 @@
       </section>
     </section>
   </main>
+
+  <dialog class="share-dialog" id="share-dialog" aria-labelledby="share-title">
+    <section class="share-sheet">
+      <header class="share-header">
+        <div>
+          <h2 id="share-title">Open on your phone</h2>
+          <p>Current portal URL · access key included</p>
+        </div>
+        <button class="icon-button" id="share-close" type="button" aria-label="Close QR code">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </header>
+      <div class="share-qr-frame">
+        <canvas id="share-qr" role="img" aria-label="QR code for this portal and its access key"></canvas>
+      </div>
+      <p class="share-origin" id="share-origin"></p>
+      <button class="voice-action primary share-copy" id="share-copy" type="button">Copy link</button>
+      <p class="share-warning">Treat this QR code like a password. Anyone who scans it can access this portal.</p>
+    </section>
+  </dialog>
 
   <dialog class="voice-dialog" id="voice-dialog" aria-labelledby="voice-title">
     <section class="voice-sheet">
@@ -195,6 +218,7 @@
   <script src="/assets/call_queue.js" defer></script>
   <script src="/assets/call_playback.js" defer></script>
   <script src="/assets/session_cache.js" defer></script>
-  <script src="/assets/portal.js?v=20260902-local-tools" defer></script>
+  <script src="/assets/qr_code.js?v=20260914-share-qr" defer></script>
+  <script src="/assets/portal.js?v=20260914-share-qr" defer></script>
 </body>
 </html>

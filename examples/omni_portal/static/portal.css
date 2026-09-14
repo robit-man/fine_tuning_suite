@@ -104,6 +104,7 @@ button { color: inherit; }
 .active-users { display: inline-flex; align-items: center; gap: 4px; color: rgba(255,255,255,.38); }
 #active-user-count { min-width: 1ch; color: rgba(134,239,172,.64); text-align: center; }
 .top-actions { display: flex; align-items: center; gap: 4px; }
+.share-button svg { fill: currentColor; stroke: none; }
 .call-button[aria-pressed="true"] { background: rgba(251,113,133,.14); color: var(--danger); }
 .call-button .call-stop { display: none; }
 .call-button[aria-pressed="true"] .call-start { display: none; }
@@ -494,6 +495,44 @@ textarea::placeholder { color: var(--quiet); }
   color: var(--danger);
   animation: record-pulse 1.15s ease-in-out infinite;
 }
+
+.share-dialog {
+  width: min(390px, calc(100% - 20px));
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 20px;
+  background: #0b0b0b;
+  color: var(--text);
+  box-shadow: 0 28px 100px rgba(0,0,0,.75);
+}
+
+.share-dialog::backdrop { background: rgba(0,0,0,.76); backdrop-filter: blur(6px); }
+.share-sheet { display: grid; gap: 14px; padding: 18px; }
+.share-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.share-header h2 { margin: 0; font-size: 18px; }
+.share-header p { margin: 3px 0 0; color: var(--quiet); font: 9px var(--mono); text-transform: uppercase; }
+.share-qr-frame {
+  display: grid;
+  width: min(100%, 304px);
+  margin-inline: auto;
+  padding: 12px;
+  place-items: center;
+  border-radius: 16px;
+  background: #fff;
+}
+.share-qr-frame canvas { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+.share-origin {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font: 10px var(--mono);
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-copy { width: 100%; }
+.share-warning { margin: 0; color: var(--quiet); font-size: 10px; line-height: 1.45; text-align: center; }
 
 .voice-dialog {
   width: min(520px, calc(100% - 20px));

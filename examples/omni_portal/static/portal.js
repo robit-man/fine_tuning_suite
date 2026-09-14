@@ -173,6 +173,75 @@
     document: 24 * 1024 * 1024,
   };
 
+  function createIcon(pathData) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    path.setAttribute("d", pathData);
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function ensureShareControls() {
+    if (!document.getElementById("share-button")) {
+      const button = document.createElement("button");
+      button.className = "icon-button share-button";
+      button.id = "share-button";
+      button.type = "button";
+      button.setAttribute("aria-label", "Show phone access QR code");
+      button.title = "Open on phone";
+      button.appendChild(createIcon("M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Zm11 0h2v2h-2v-2Zm3 0h2v4h-2v-4Zm-4 4h2v2h-2v-2Zm4 2v-2h2v2h-2Z"));
+      document.querySelector(".top-actions")?.prepend(button);
+    }
+    if (document.getElementById("share-dialog")) return;
+    const dialog = document.createElement("dialog");
+    dialog.className = "share-dialog";
+    dialog.id = "share-dialog";
+    dialog.setAttribute("aria-labelledby", "share-title");
+    const sheet = document.createElement("section");
+    sheet.className = "share-sheet";
+    const header = document.createElement("header");
+    header.className = "share-header";
+    const heading = document.createElement("div");
+    const title = document.createElement("h2");
+    title.id = "share-title";
+    title.textContent = "Open on your phone";
+    const subtitle = document.createElement("p");
+    subtitle.textContent = "Current portal URL · access key included";
+    heading.append(title, subtitle);
+    const close = document.createElement("button");
+    close.className = "icon-button";
+    close.id = "share-close";
+    close.type = "button";
+    close.setAttribute("aria-label", "Close QR code");
+    close.appendChild(createIcon("m6 6 12 12M18 6 6 18"));
+    header.append(heading, close);
+    const frame = document.createElement("div");
+    frame.className = "share-qr-frame";
+    const canvas = document.createElement("canvas");
+    canvas.id = "share-qr";
+    canvas.setAttribute("role", "img");
+    canvas.setAttribute("aria-label", "QR code for this portal and its access key");
+    frame.appendChild(canvas);
+    const origin = document.createElement("p");
+    origin.className = "share-origin";
+    origin.id = "share-origin";
+    const copy = document.createElement("button");
+    copy.className = "voice-action primary share-copy";
+    copy.id = "share-copy";
+    copy.type = "button";
+    copy.textContent = "Copy link";
+    const warning = document.createElement("p");
+    warning.className = "share-warning";
+    warning.textContent = "Treat this QR code like a password. Anyone who scans it can access this portal.";
+    sheet.append(header, frame, origin, copy, warning);
+    dialog.appendChild(sheet);
+    document.body.appendChild(dialog);
+  }
+
+  ensureShareControls();
+
   const elements = {
     headerStatus: document.getElementById("header-status"),
     statusText: document.getElementById("status-text"),
@@ -188,6 +257,12 @@
     cameraButton: document.getElementById("camera-button"),
     cameraPreview: document.getElementById("camera-preview"),
     cameraVideo: document.getElementById("camera-video"),
+    shareButton: document.getElementById("share-button"),
+    shareDialog: document.getElementById("share-dialog"),
+    shareClose: document.getElementById("share-close"),
+    shareQr: document.getElementById("share-qr"),
+    shareOrigin: document.getElementById("share-origin"),
+    shareCopy: document.getElementById("share-copy"),
     voiceButton: document.getElementById("voice-button"),
     voiceDialog: document.getElementById("voice-dialog"),
     voiceClose: document.getElementById("voice-close"),
@@ -2293,7 +2368,17 @@
   function supersedeCallAudio(call, sequence) {
     const result = callPlayback.supersedeBefore(call, sequence);
     for (const turn of result.turns) {
-      if (turn.assistant) turn.assistant.node.classList.add("interrupted");
+      turn.superseded = true;
+      if (turn.assistant && !turn.assistant.node.hidden) {
+        const retention = callPlayback.retentionState({
+          content: turn.assistant.content,
+          thinking: turn.assistant.thinking,
+          toolTrace: turn.assistant.toolTrace,
+          languageSettled: turn.languageSettled,
+        });
+        updateMessage(turn.assistant, { streaming: false });
+        if (retention.interrupted) turn.assistant.node.classList.add("interrupted");
+      }
     }
     if (result.playbackInterrupted) stopCurrentPlayback();
     return result.turns.length;
@@ -2420,6 +2505,8 @@
       historyQueued: false,
       assistant: null,
       soundOnly: false,
+      superseded: false,
+      languageSettled: false,
     };
     supersedeCallAudio(call, turn.sequence);
     call.nextSequence += 1;
@@ -2564,6 +2651,7 @@
                 streaming: true,
               });
             } else if (event.type === "stage" && event.stage === "tts") {
+              turn.languageSettled = true;
               if (turn.discardReply) return;
               setComposerStatus("Call · preparing voice…");
             } else if (event.type === "tool") {
@@ -2576,6 +2664,7 @@
               updateMessage(assistant, { toolTrace: activeToolTrace, streaming: true });
               setComposerStatus(`Call · ${event.phase === "start" ? "using" : "used"} ${names.join(", ")}…`);
             } else if (event.type === "audio_start") {
+              turn.languageSettled = true;
               if (!callPlayback.canStart(call, turn)) turn.discardReply = true;
               if (!turn.discardReply) {
                 if (call.playbackTurn && call.playbackTurn !== turn) {
@@ -2621,14 +2710,36 @@
         callFallback,
       );
       if (turn.discardReply) {
+        const preservedReply = String(assistant.content || streamedContent || "").trim();
+        const retention = callPlayback.retentionState({
+          content: preservedReply,
+          thinking: showThinking ? (assistant.thinking || streamedThinking) : "",
+          toolTrace: (assistant.toolTrace && assistant.toolTrace.length)
+            ? assistant.toolTrace
+            : activeToolTrace,
+          languageSettled: turn.languageSettled,
+        });
         turn.historyQueued = true;
         call.completedHistory.set(turn.sequence, {
           frame: Boolean(frame),
           transcript: historyContent,
-          reply: "",
+          reply: preservedReply,
         });
         flushCallHistory(call);
-        if (assistant.node.isConnected) removeMessage(assistant);
+        if (!retention.preserve && assistant.node.isConnected) {
+          removeMessage(assistant);
+        } else if (assistant.node.isConnected) {
+          revealMessage(assistant);
+          updateMessage(assistant, {
+            content: assistant.content || streamedContent,
+            thinking: showThinking ? (assistant.thinking || streamedThinking) : "",
+            toolTrace: (assistant.toolTrace && assistant.toolTrace.length)
+              ? assistant.toolTrace
+              : activeToolTrace,
+            streaming: false,
+          });
+          if (retention.interrupted) assistant.node.classList.add("interrupted");
+        }
         return;
       }
       if (!(reply.audio && reply.audio.data)) throw new Error("Voice call reply contained no audio");
@@ -2948,6 +3059,8 @@
     let inputTranscript = "";
     let inputAudioObservation = "";
     let activeToolTrace = [];
+    let languageSettled = false;
+    let historyRecorded = false;
     const applyInputAudioEvidence = (transcriptValue, audioObservationValue) => {
       const transcript = String(transcriptValue || "").trim();
       const audioObservation = String(audioObservationValue || "").trim();
@@ -2967,6 +3080,51 @@
           streaming: false,
         });
       }
+    };
+    const recordTurnHistory = replyContent => {
+      if (historyRecorded || !(built.task === "chat" || built.hasMedia)) return;
+      state.history.push({
+        role: "user",
+        content: built.audioOnly
+          ? audioEvidenceHistory(
+            inputTranscript,
+            inputAudioObservation,
+            built.message.content,
+          )
+          : built.message.content,
+      });
+      if (replyContent) state.history.push({ role: "assistant", content: replyContent });
+      historyRecorded = true;
+    };
+    const preserveStreamedAssistant = () => {
+      const content = String(assistant.content || streamedContent || "");
+      const thinking = built.wantsThinking
+        ? String(assistant.thinking || streamedThinking || "")
+        : "";
+      const trace = (assistant.toolTrace && assistant.toolTrace.length)
+        ? assistant.toolTrace
+        : activeToolTrace;
+      const retention = callPlayback.retentionState({
+        content,
+        thinking,
+        toolTrace: trace,
+        languageSettled,
+      });
+      if (!retention.preserve) {
+        if (assistant.node.isConnected) removeMessage(assistant);
+        return false;
+      }
+      revealMessage(assistant);
+      updateMessage(assistant, {
+        content,
+        thinking,
+        toolTrace: trace,
+        streaming: false,
+      });
+      if (retention.interrupted) assistant.node.classList.add("interrupted");
+      recordTurnHistory(content.trim());
+      scheduleBrowserSessionSave();
+      return true;
     };
     const requestController = new AbortController();
     if (state.requestController) state.requestController.abort();
@@ -2994,6 +3152,10 @@
               streaming: true,
             });
           } else if (event.type === "stage") {
+            if (event.stage === "tts") {
+              languageSettled = true;
+              if (requestSequence === state.requestSequence) elements.send.disabled = false;
+            }
             const labels = {
               comprehension: "Understanding media…",
               language: built.wantsThinking ? "Reasoning…" : "Replying…",
@@ -3009,6 +3171,8 @@
             updateMessage(assistant, { toolTrace: activeToolTrace, streaming: true });
             setComposerStatus(`${event.phase === "start" ? "Using" : "Used"} ${names.join(", ")}…`);
           } else if (event.type === "audio_start") {
+            languageSettled = true;
+            if (requestSequence === state.requestSequence) elements.send.disabled = false;
             pcmController = beginPcmPlayback();
             streamedAudio = Boolean(pcmController);
             if (pcmController) assistant.playback = pcmController.promise;
@@ -3022,7 +3186,7 @@
         },
       });
       if (requestSequence !== state.requestSequence) {
-        removeMessage(assistant);
+        preserveStreamedAssistant();
         return;
       }
       const reply = data.message || {};
@@ -3043,28 +3207,17 @@
         streaming: false,
         autoplayAudio: !streamedAudio,
       });
-      if (built.task === "chat" || built.hasMedia) {
-        state.history.push({
-          role: "user",
-          content: built.audioOnly
-            ? audioEvidenceHistory(
-              inputTranscript,
-              inputAudioObservation,
-              built.message.content,
-            )
-            : built.message.content,
-        });
-        if (reply.content) state.history.push({ role: "assistant", content: reply.content });
-      }
+      recordTurnHistory(String(reply.content || ""));
       scheduleBrowserSessionSave();
       setComposerStatus(reply.audio ? "Text and spoken reply ready" : "Text reply ready");
     } catch (error) {
-      removeMessage(assistant);
+      preserveStreamedAssistant();
       if (error.name !== "AbortError") showError(error);
     } finally {
-      if (state.requestController === requestController) state.requestController = null;
+      const isCurrentRequest = state.requestController === requestController;
+      if (isCurrentRequest) state.requestController = null;
       assistant.node.classList.remove("streaming");
-      elements.send.disabled = false;
+      if (isCurrentRequest) elements.send.disabled = false;
       refreshStatus();
     }
   }
@@ -3097,12 +3250,106 @@
     if (state.recording) stopRecording({ discard: briefTap }).catch(showError);
   }
 
+  function portalShareUrl() {
+    const url = new URL(window.location.href);
+    const fragment = new URLSearchParams(url.hash.replace(/^#/, ""));
+    if (!fragment.get("access") && state.token) fragment.set("access", state.token);
+    url.hash = fragment.toString();
+    return url.toString();
+  }
+
+  let qrEncoderPromise = null;
+  function ensureQrEncoder() {
+    if (typeof window.OmniQRCode === "function") return Promise.resolve();
+    if (qrEncoderPromise) return qrEncoderPromise;
+    qrEncoderPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "/assets/qr_code.js?v=20260914-share-qr";
+      script.async = true;
+      script.addEventListener("load", () => {
+        if (typeof window.OmniQRCode === "function") resolve();
+        else reject(new Error("Local QR encoder failed to initialize"));
+      }, { once: true });
+      script.addEventListener("error", () => reject(new Error("Local QR encoder failed to load")), { once: true });
+      document.head.appendChild(script);
+    });
+    return qrEncoderPromise;
+  }
+
+  function renderShareQr(value) {
+    if (typeof window.OmniQRCode !== "function") {
+      throw new Error("Local QR encoder failed to load");
+    }
+    const qr = new window.OmniQRCode(-1, 0);
+    qr.addData(value);
+    qr.make();
+    const quietZone = 4;
+    const moduleCount = qr.getModuleCount();
+    const scale = Math.max(6, Math.floor(320 / (moduleCount + quietZone * 2)));
+    const size = (moduleCount + quietZone * 2) * scale;
+    const canvas = elements.shareQr;
+    const context = canvas.getContext("2d", { alpha: false });
+    canvas.width = size;
+    canvas.height = size;
+    context.imageSmoothingEnabled = false;
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, size, size);
+    context.fillStyle = "#000";
+    for (let row = 0; row < moduleCount; row += 1) {
+      for (let column = 0; column < moduleCount; column += 1) {
+        if (!qr.isDark(row, column)) continue;
+        context.fillRect(
+          (column + quietZone) * scale,
+          (row + quietZone) * scale,
+          scale,
+          scale,
+        );
+      }
+    }
+  }
+
+  async function openShareDialog() {
+    await ensureQrEncoder();
+    const value = portalShareUrl();
+    renderShareQr(value);
+    elements.shareOrigin.textContent = new URL(value).origin;
+    elements.shareDialog.showModal();
+  }
+
+  async function copyShareUrl() {
+    const value = portalShareUrl();
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+    } else {
+      const fallback = document.createElement("textarea");
+      fallback.value = value;
+      fallback.setAttribute("readonly", "");
+      fallback.style.position = "fixed";
+      fallback.style.opacity = "0";
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand("copy");
+      fallback.remove();
+    }
+    elements.shareCopy.textContent = "Copied";
+    window.setTimeout(() => { elements.shareCopy.textContent = "Copy link"; }, 1_200);
+  }
+
   async function closeVoiceDialog() {
     if (state.voice.recording) await stopVoiceReferenceRecording();
     setVoicePresetMenu(false);
     elements.voiceDialog.close();
     setComposerStatus(elements.voiceCloneEnabled.checked ? "Voice clone configured" : "Voice settings saved");
   }
+
+  elements.shareButton.addEventListener("click", () => {
+    openShareDialog().catch(showError);
+  });
+  elements.shareClose.addEventListener("click", () => elements.shareDialog.close());
+  elements.shareCopy.addEventListener("click", () => copyShareUrl().catch(showError));
+  elements.shareDialog.addEventListener("click", event => {
+    if (event.target === elements.shareDialog) elements.shareDialog.close();
+  });
 
   elements.voiceButton.addEventListener("click", () => {
     syncVoiceUi();

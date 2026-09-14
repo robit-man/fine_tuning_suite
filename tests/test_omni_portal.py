@@ -73,6 +73,9 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
     assert b'id="call-button"' in response.data
     assert b'id="camera-button"' in response.data
     assert b'id="camera-video"' in response.data
+    assert b'id="share-button"' in response.data
+    assert b'id="share-dialog"' in response.data
+    assert b'id="share-qr"' in response.data
     assert b'id="voice-button"' in response.data
     assert b'id="voice-clone-enabled"' in response.data
     assert b'id="voice-clone-toggle"' in response.data
@@ -96,6 +99,9 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
         b"/assets/session_cache.js"
     )
     assert response.data.index(b"/assets/session_cache.js") < response.data.index(
+        b"/assets/qr_code.js"
+    )
+    assert response.data.index(b"/assets/qr_code.js") < response.data.index(
         b"/assets/portal.js"
     )
     cache_scope = re.search(rb'data-session-scope="([a-f0-9]{64})"', response.data)
@@ -123,6 +129,9 @@ def test_portal_index_has_mobile_security_headers_and_no_token() -> None:
     asset = client.get("/assets/portal.js")
     assert asset.status_code == 200
     assert asset.headers["Cache-Control"] == "no-store"
+    qr_asset = client.get("/assets/qr_code.js")
+    assert qr_asset.status_code == 200
+    assert qr_asset.headers["Cache-Control"] == "no-store"
 
 
 def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None:
@@ -141,6 +150,12 @@ def test_portal_assets_include_markdown_call_flow_and_neutral_composer() -> None
     assert "function sanitizeClientLocation" in javascript
     assert "portal_client_location" in javascript
     assert 'document.getElementById("tool-toggle")' in javascript
+    assert "function portalShareUrl" in javascript
+    assert "function renderShareQr" in javascript
+    assert "fragment.set(\"access\", state.token)" in javascript
+    assert "const preserveStreamedAssistant" in javascript
+    assert "const recordTurnHistory" in javascript
+    assert "if (retention.interrupted) assistant.node.classList.add(\"interrupted\")" in javascript
     assert "function markdownTableSpec" in javascript
     assert "function renderMarkdownTable" in javascript
     assert ".markdown-table-wrap" in css
@@ -356,6 +371,8 @@ def test_mock_call_playback_harness_rejects_stale_audio() -> None:
         "stale_pending_audio_suppressed": True,
         "active_playback_interrupted": True,
         "newest_turn_owns_playback": True,
+        "settled_transcript_retained": True,
+        "partial_transcript_retained_and_marked": True,
     }
 
 

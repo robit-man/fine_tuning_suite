@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { supersedeBefore, canStart } = require("./static/call_playback.js");
+const { supersedeBefore, canStart, retentionState } = require("./static/call_playback.js");
 
 const oldTurn = { sequence: 0, discardReply: false };
 const call = {
@@ -43,9 +43,24 @@ assert.equal(canStart(call, newerTurn), true);
 call.vadActive = true;
 assert.equal(canStart(call, newerTurn), false);
 
+assert.deepEqual(retentionState({ content: "already streamed", languageSettled: true }), {
+  preserve: true,
+  interrupted: false,
+});
+assert.deepEqual(retentionState({ content: "partial", languageSettled: false }), {
+  preserve: true,
+  interrupted: true,
+});
+assert.deepEqual(retentionState({ content: "", thinking: "", toolTrace: [] }), {
+  preserve: false,
+  interrupted: false,
+});
+
 console.log(JSON.stringify({
   status: "passed",
   stale_pending_audio_suppressed: true,
   active_playback_interrupted: true,
   newest_turn_owns_playback: true,
+  settled_transcript_retained: true,
+  partial_transcript_retained_and_marked: true,
 }, null, 2));

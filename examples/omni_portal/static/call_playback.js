@@ -28,5 +28,22 @@
     );
   }
 
-  return { supersedeBefore, canStart };
+  function retentionState({
+    content = "",
+    thinking = "",
+    toolTrace = [],
+    languageSettled = false,
+  } = {}) {
+    const preserve = Boolean(
+      String(content || "").trim()
+      || String(thinking || "").trim()
+      || (Array.isArray(toolTrace) && toolTrace.length),
+    );
+    return {
+      preserve,
+      interrupted: preserve && !languageSettled,
+    };
+  }
+
+  return { supersedeBefore, canStart, retentionState };
 }));

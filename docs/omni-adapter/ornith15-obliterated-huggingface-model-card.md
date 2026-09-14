@@ -1,5 +1,6 @@
 ---
-license: mit
+license: other
+license_name: Mixed MIT and Apache-2.0 component licenses
 base_model:
   - OBLITERATUS/Ornith-1.5-9B-OBLITERATED
   - Qwen/Qwen3-Omni-30B-A3B-Instruct

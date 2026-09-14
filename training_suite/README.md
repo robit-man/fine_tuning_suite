@@ -60,6 +60,12 @@ Modelfile `FROM` target. Stock Ollama ignores the custom layer and remains fully
 usable for its standard capabilities. The adapter resolves the same tag and
 executes media views with a pinned multimedia runtime.
 
+Published model families may use different compatible language/vision bases.
+`robit/ornith-1.5-omni:q4km` uses stock Ornith 1.5 9B;
+`robit/ornith-1.5-obliterated-omni:q4km` uses the separately pinned
+OBLITERATUS derivative. They share byte-identical Qwen3-Omni comprehension and
+Qwen3-TTS views but never share or mislabel their base-model tensors.
+
 ### Plan, pack, attach, and prepare
 
 ```bash

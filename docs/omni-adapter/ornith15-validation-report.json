@@ -1,0 +1,82 @@
+{
+  "artifact_schema": "robit.ollama-monolithic-omni.v3",
+  "gates": [
+    {
+      "assertion": "Stock: six views and 2,889 tensors; obliterated: six views and 2,904 tensors; no schema errors",
+      "name": "sidecar_inspection",
+      "status": "pass"
+    },
+    {
+      "assertion": "All twelve extracted component views matched their pinned source SHA-256 values",
+      "name": "materialized_digest_round_trip",
+      "status": "pass"
+    },
+    {
+      "assertion": "Generic Omni tag uses stock Ornith; the separately named obliterated Omni tag uses OBLITERATUS",
+      "name": "variant_identity",
+      "status": "pass"
+    },
+    {
+      "assertion": "Exact text sentinels with think=false and no reasoning output",
+      "name": "native_text_thinking_disabled",
+      "status": "pass"
+    },
+    {
+      "assertion": "Both variants returned non-empty, separately parsed thinking with no think-tag bleed",
+      "name": "native_thinking_enabled",
+      "status": "pass"
+    },
+    {
+      "assertion": "Both variants emitted get_weather with location=Seattle",
+      "name": "native_structured_tool",
+      "status": "pass"
+    },
+    {
+      "assertion": "Both variants read the blue/42 vision fixture",
+      "name": "native_image_vision",
+      "status": "pass"
+    },
+    {
+      "assertion": "Exact speech transcription and separate non-speech electronic-tone observation",
+      "name": "qwen3_omni_audio",
+      "status": "pass"
+    },
+    {
+      "assertion": "Red-to-blue temporal order plus exact spoken phrase",
+      "name": "qwen3_omni_video_audio",
+      "status": "pass"
+    },
+    {
+      "assertion": "Both logical tags routed media through the correct distinct Ornith language backend",
+      "name": "adapter_variant_routing",
+      "status": "pass"
+    },
+    {
+      "assertion": "Full audio comprehension to language to 24 kHz PCM16 TTS passed for both variants",
+      "name": "adapter_audio_chat_tts",
+      "status": "pass"
+    },
+    {
+      "assertion": "58 two-frame windows, median boundary jump ratio 0.142 below 0.35, shared-prefix ratio 0.177 below 0.85",
+      "name": "tts_pcm_continuity",
+      "status": "pass"
+    },
+    {
+      "assertion": "117 tests passed and compileall passed; repository-wide Ruff retains pre-existing unrelated findings",
+      "name": "repository_tests",
+      "status": "pass"
+    }
+  ],
+  "models": [
+    {
+      "artifact_sha256": "1302c601bbfa81d0efa80167beecaac14b6ecbbada377ff814ce1da4d22e0f6d",
+      "model": "robit/ornith-1.5-omni:q4km"
+    },
+    {
+      "artifact_sha256": "22a38a92994dd9b21cee273c7fbbe5b21e57498bc6f56e1d6646211fc641b55e",
+      "model": "robit/ornith-1.5-obliterated-omni:q4km"
+    }
+  ],
+  "schema": "robit.ollama.omni-validation.v1",
+  "wire_schema": "robit.ollama.omni-adapter.v1"
+}

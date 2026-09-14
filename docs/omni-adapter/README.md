@@ -1,16 +1,22 @@
 # Ollama Omni Adapter
 
 The Robit Omni Adapter adds turn-based audio input, video comprehension, and
-speech output to an otherwise normal Ollama model tag. The first target is:
+speech output to otherwise normal Ollama model tags. Verified targets include:
 
 ```text
 robit/qwen3.8-27b-e03-obliterated-omni:q4km
+robit/ornith-1.5-omni:q4km
+robit/ornith-1.5-obliterated-omni:q4km
 ```
 
 Callers use one model name and one `/api/chat`-shaped endpoint. Stock Ollama
-continues to execute Qwen3.8 completion, native image vision, parsed thinking,
-and structured tools. The adapter resolves the same tag's custom media layer
-for Qwen3-Omni comprehension and Qwen3-TTS synthesis.
+continues to execute the selected base model's completion, native image vision,
+parsed thinking, and structured tools. The adapter resolves the same tag's
+custom media layer for Qwen3-Omni comprehension and Qwen3-TTS synthesis.
+
+The two Ornith tags are intentionally distinct: `ornith-1.5-omni` uses stock
+`ornith-ai/Ornith-1.5-9B`, while `ornith-1.5-obliterated-omni` uses
+`OBLITERATUS/Ornith-1.5-9B-OBLITERATED` as its language/vision base.
 
 ## What “one model” means
 
@@ -147,6 +153,9 @@ session can reconstruct it from the tag's sidecar layer.
 - [Build and release runbook](build-and-release.md)
 - [Test plan](testing.md)
 - [First release record](qwen38-27b-e03-release.md)
+- [Ornith 1.5 dual-release record](ornith15-release.md)
+- [Stock Ornith sidecar manifest](ornith15-stock-sidecar-manifest.json)
+- [Obliterated Ornith sidecar manifest](ornith15-obliterated-sidecar-manifest.json)
 - [Hugging Face model card](huggingface-model-card.md)
 - [Machine-readable first-release manifest](sidecar-manifest.json)
 - [Machine-readable validation report](validation-report.json)

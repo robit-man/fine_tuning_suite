@@ -293,13 +293,13 @@ training_suite/.venv/bin/python -m training_suite omni-plan \
   --out training_suite/outputs/omni/qwen38-27b-experiment
 ```
 
-Ornith example:
+Ornith compatibility example:
 
 ```bash
 training_suite/.venv/bin/python -m training_suite omni-plan \
   --text-source OBLITERATUS/Ornith-1.5-9B-OBLITERATED \
   --omni-source Qwen/Qwen3-Omni-30B-A3B-Instruct \
-  --target-tag robit/ornith-1.5-omni-experiment:latest \
+  --target-tag robit/ornith-1.5-obliterated-omni:latest \
   --out training_suite/outputs/omni/ornith15-9b-experiment
 ```
 
@@ -315,6 +315,19 @@ For Qwen3.8 and Ornith, the expected result is `monolithic-router`: direct
 hidden-state fusion is blocked, while a namespaced multi-graph GGUF is used as
 the custom media layer of one logical Ollama tag. `--require-native` exits with
 status 2 when tensor-level signatures do not match.
+
+The verified Ornith releases deliberately preserve two distinct base
+identities:
+
+| Logical tag | Base model |
+|---|---|
+| `robit/ornith-1.5-omni:q4km` | stock `ornith-ai/Ornith-1.5-9B` |
+| `robit/ornith-1.5-obliterated-omni:q4km` | `OBLITERATUS/Ornith-1.5-9B-OBLITERATED` |
+
+Both include the same pinned comprehension/TTS views, full 262,144-token
+language context, native Ollama vision/tools/thinking, and an unlimited
+model-level `num_predict=-1`. Their exact component hashes and release gates
+are recorded in the [Ornith dual-release record](docs/omni-adapter/ornith15-release.md).
 
 #### Build the six-view sidecar
 

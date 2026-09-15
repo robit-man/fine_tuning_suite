@@ -1,6 +1,13 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.coverage
+.coverage.*
+
+# Host-local GPU broker scopes are generated for a single deployment and may
+# contain lease-specific state. Never commit them with durable model tooling.
+.codex-obliteratus-gpu-scope.conf
+.codex-obliteratus-gpu-scope.env
 
 .venv/
 .venv-*/

@@ -71,7 +71,15 @@
          LOG_ERR("no prompt provided, use -p \"text\"\n");
          return 1;
      }
-@@ -138,142 +154,170 @@
+@@ -104,7 +120,6 @@
+     auto llama_init = common_init_from_params(params);
+     llama_model    * model = llama_init->model();
+     llama_context  * lctx  = llama_init->context();
+-    common_sampler * smpl  = llama_init->sampler(0);
+     if (!model || !lctx) {
+         LOG_ERR("failed to init model/context\n");
+         return 1;
+@@ -138,142 +154,176 @@
      }
  
 -    mtmd_helper::gen_audio gen(lctx, mctx.get());
@@ -214,7 +222,13 @@
 +    auto generate = [&](const std::string & prompt, bool framed) -> bool {
 +        mtmd_helper::gen_audio gen(lctx, mctx.get());
 +        llama_memory_clear(llama_get_memory(lctx), true);
-+        common_sampler_reset(smpl);
++        mtmd_gen_audio_reset_rng(mctx.get());
++        common_sampler_ptr request_sampler(
++            common_sampler_init(model, params.sampling));
++        if (!request_sampler) {
++            LOG_ERR("failed to initialize request sampler\n");
++            return false;
++        }
 +
 +        mtmd_helper_gen_audio_inp inp{};
 +        inp.seq_id      = 0;
@@ -245,8 +259,8 @@
 +        }
 +
 +        auto sample_semantic_code = [&]() -> llama_token {
-+            llama_token t = common_sampler_sample(smpl, lctx, -1);
-+            common_sampler_accept(smpl, t, true);
++            llama_token t = common_sampler_sample(request_sampler.get(), lctx, -1);
++            common_sampler_accept(request_sampler.get(), t, true);
 +            return t;
 +        };
 +
@@ -379,3 +393,74 @@
  
      llama_backend_free();
      return 0;
+diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
+--- a/tools/mtmd/clip.cpp
++++ b/tools/mtmd/clip.cpp
+@@ -177,6 +177,7 @@ struct clip_ctx {
+     // for audio gen, reseeded only when the caller asks for another seed
+     std::mt19937 rng{std::random_device{}()};
+     uint32_t rng_seed = UINT32_MAX;
++    bool rng_seed_valid = false;
+ 
+     clip_ctx(clip_context_params & ctx_params) {
+         flash_attn_type = ctx_params.flash_attn_type;
+@@ -4348,6 +4349,10 @@ bool clip_image_encode(struct clip_ctx * ctx, int n_threads, const clip_image_f3
+     return clip_image_batch_encode(ctx, n_threads, &imgs, out_vec);
+ }
+ 
++void clip_reset_rng(struct clip_ctx * ctx) {
++    ctx->rng_seed_valid = false;
++}
++
+ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32_batch * imgs_c_ptr, std::vector<float> & out_batch_embd) {
+     clip_encode_params params;
+     params.imgs = imgs_c_ptr;
+@@ -4381,8 +4386,9 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+         clip_model_loader::warmup(*ctx, *params->imgs);
+     }
+ 
+-    if (params->seed != ctx->rng_seed) {
++    if (!ctx->rng_seed_valid || params->seed != ctx->rng_seed) {
+         ctx->rng_seed = params->seed;
++        ctx->rng_seed_valid = true;
+         ctx->rng.seed(params->seed == UINT32_MAX ? std::random_device{}() : params->seed);
+     }
+ 
+diff --git a/tools/mtmd/clip.h b/tools/mtmd/clip.h
+--- a/tools/mtmd/clip.h
++++ b/tools/mtmd/clip.h
+@@ -118,6 +118,7 @@ struct clip_encode_params {
+     std::vector<uint8_t> *       state_out = nullptr; // state for the next call
+ };
+ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params);
++void clip_reset_rng(struct clip_ctx * ctx);
+ 
+ bool clip_is_llava(const struct clip_ctx * ctx);
+ // note for contributor: this clip_is_(model) pattern is deprecated
+diff --git a/tools/mtmd/mtmd.cpp b/tools/mtmd/mtmd.cpp
+--- a/tools/mtmd/mtmd.cpp
++++ b/tools/mtmd/mtmd.cpp
+@@ -1829,6 +1829,12 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
+     return info;
+ }
+ 
++void mtmd_gen_audio_reset_rng(mtmd_context * ctx) {
++    if (ctx && ctx->ctx_gen_a) {
++        clip_reset_rng(ctx->ctx_gen_a);
++    }
++}
++
+ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
+     mtmd_gen_inp inp{};
+     inp.type = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
+diff --git a/tools/mtmd/mtmd.h b/tools/mtmd/mtmd.h
+--- a/tools/mtmd/mtmd.h
++++ b/tools/mtmd/mtmd.h
+@@ -361,6 +361,7 @@ struct mtmd_gen_audio_info {
+ };
+ 
+ MTMD_API struct mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx);
++MTMD_API void mtmd_gen_audio_reset_rng(mtmd_context * ctx);
+ 
+ 
+ enum mtmd_gen_process_type {

@@ -168,9 +168,10 @@ This route is experimental. If generation fails after response headers, the
 PCM stream terminates early; the final WAV is still checked server-side when
 generation succeeds. `--tts-persistent` loads the backbone, projector, and
 default speaker reference once, emits an explicit ready frame, accepts bounded
-base64 prompts on stdin, resets model/sampler state, constructs a fresh
-audio-generation helper for each prompt, and emits length-framed PCM windows on
-stdout. The helper must not be reused: its decoded-output state otherwise makes
+base64 prompts on stdin, clears model memory, creates a fresh semantic sampler,
+explicitly resets the MTMD audio RNG, constructs a fresh audio-generation helper
+for each prompt, and emits length-framed PCM windows on stdout. The helper must
+not be reused: its decoded-output state otherwise makes
 audio trail the displayed response by one request. The Python wrapper keeps the
 weight-bearing process resident for matching profiles and exposes the same HTTP
 contracts. A changed profile restarts it deliberately; inline speaker bytes use

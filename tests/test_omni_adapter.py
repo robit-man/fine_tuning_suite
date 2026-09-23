@@ -198,6 +198,11 @@ def test_persistent_tts_patch_recreates_audio_helper_per_prompt() -> None:
 
     assert "+        mtmd_helper::gen_audio gen(lctx, mctx.get());" in patch
     assert "+        gen.reset();" not in patch
+    assert "+        common_sampler_ptr request_sampler(" in patch
+    assert "common_sampler_init(model, params.sampling)" in patch
+    assert "+        common_sampler_reset(smpl);" not in patch
+    assert "+        mtmd_gen_audio_reset_rng(mctx.get());" in patch
+    assert "+void clip_reset_rng(struct clip_ctx * ctx)" in patch
 
 
 def test_tts_accepts_bounded_wav_speaker_envelope(tmp_path: Path) -> None:

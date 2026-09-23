@@ -200,21 +200,26 @@ def prepare_ollama_sidecar(
     *,
     model: str,
     output_dir: Path,
-    views: tuple[str, ...] = RUNTIME_VIEWS,
+    views: tuple[str, ...] | None = None,
     models_dir: Path | None = None,
     overwrite: bool = False,
 ) -> dict[str, Any]:
     """Materialize disposable runtime views directly from an installed Ollama tag."""
-    unknown = sorted(set(views) - set(RUNTIME_VIEWS))
+    resolved = resolve_ollama_sidecar(model=model, models_dir=models_dir)
+    selected_views = views
+    if selected_views is None:
+        manifest = resolved["inspection"].get("manifest") or {}
+        declared = (manifest.get("runtime") or {}).get("materialized_views")
+        selected_views = tuple(declared) if declared else RUNTIME_VIEWS
+    unknown = sorted(set(selected_views) - set(RUNTIME_VIEWS))
     if unknown:
         raise OllamaSidecarError(f"unsupported runtime views: {', '.join(unknown)}")
-    if not views:
+    if not selected_views:
         raise OllamaSidecarError("at least one runtime view is required")
-    resolved = resolve_ollama_sidecar(model=model, models_dir=models_dir)
     destination = output_dir.expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=True)
     outputs: dict[str, dict[str, Any]] = {}
-    for view in views:
+    for view in selected_views:
         output = destination / (view.replace("_", "-") + ".gguf")
         outputs[view] = materialize_component_view(
             bundle_gguf=Path(resolved["bundle"]),
@@ -226,6 +231,7 @@ def prepare_ollama_sidecar(
         "model": model,
         "bundle": resolved["bundle"],
         "bundle_digest": resolved["layer"]["digest"],
+        "profile": (resolved["inspection"].get("manifest") or {}).get("profile"),
         "output_dir": str(destination),
         "disposable_cache": True,
         "views": outputs,

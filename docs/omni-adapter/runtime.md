@@ -129,9 +129,10 @@ Run `python examples/omni_adapter/verify_pcm_stream.py` against raw
 a substitute for this source-level continuity gate.
 
 The persistent process keeps model, projector, and speaker weights resident,
-but constructs a fresh audio-generation helper for every prompt. Reusing that
-helper carries decoded output into the next request and can make spoken audio
-lag displayed text by exactly one turn even when KV memory and samplers reset.
+but clears generation memory, creates a fresh semantic sampler, resets the MTMD
+audio RNG, and constructs a fresh audio-generation helper for every prompt.
+Reusing any request state can carry decoded output or advance randomness into
+the next request, causing one-turn lag or intermittent non-speech collapse.
 Likewise, a client cancellation before the done frame closes the persistent
 worker before releasing its lock, preventing unread PCM from becoming the next
 turn's response.

@@ -17,15 +17,18 @@ from training_suite.models.audio import (
 from training_suite.models.omni import (
     architecture_signature,
     assess_native_omni_splice,
+    assess_trained_encoder_bridge,
     plan_omni_bundle,
     write_omni_bundle,
 )
 from training_suite.models.single_gguf import (
     BUNDLE_SCHEMA,
+    LIGHTWEIGHT_AUDIO_BRIDGE_SCHEMA,
     audio_router_contract,
     inspect_monolithic_gguf,
     materialize_component_view,
     monolithic_bundle_manifest,
+    pack_audio_bridge_sidecar,
     pack_monolithic_gguf,
 )
 from training_suite.omni_runtime import OmniRuntimeConfig, run_http_cascade
@@ -62,7 +65,11 @@ OMNI_CONFIG = {
             "num_experts": 128,
             "num_experts_per_tok": 8,
         },
-        "audio_config": {"output_dim": 2048, "sampling_rate": 16000},
+        "audio_config": {
+            "d_model": 1280,
+            "output_dim": 2048,
+            "sampling_rate": 16000,
+        },
         "vision_config": {"out_hidden_size": 2048},
         "video_token_id": 151656,
     },
@@ -193,6 +200,45 @@ def test_monolithic_packer_writes_three_tensor_namespaces(tmp_path) -> None:
     ]
 
 
+def test_lightweight_audio_bridge_sidecar_contains_tts_only(tmp_path) -> None:
+    gguf = pytest.importorskip("gguf")
+    np = pytest.importorskip("numpy")
+
+    def make(path, architecture: str, tensor_name: str) -> None:
+        writer = gguf.GGUFWriter(str(path), arch=architecture)
+        writer.add_key_value("general.name", path.stem, gguf.GGUFValueType.STRING)
+        writer.add_tensor(tensor_name, np.asarray([[1.0, 2.0]], dtype=np.float32))
+        writer.write_header_to_file()
+        writer.write_kv_data_to_file()
+        writer.write_tensors_to_file()
+        writer.close()
+
+    tts = tmp_path / "tts.gguf"
+    projector = tmp_path / "tts-projector.gguf"
+    output = tmp_path / "audio-bridge-sidecar.gguf"
+    make(tts, "llama", "blk.0.weight")
+    make(projector, "clip", "codec.weight")
+
+    report = pack_audio_bridge_sidecar(
+        tts_gguf=tts,
+        tts_projector_gguf=projector,
+        out_gguf=output,
+        base_source="target-base",
+        combined_projector_source="target-audio-mmproj",
+    )
+    inspection = inspect_monolithic_gguf(output)
+
+    assert report["schema"] == LIGHTWEIGHT_AUDIO_BRIDGE_SCHEMA
+    assert inspection["valid"] is True
+    assert inspection["tensor_counts"] == {"base": 0, "comprehension": 0, "tts": 2}
+    assert inspection["manifest"]["runtime"]["language_trunk_copies"] == 1
+    assert materialize_component_view(
+        bundle_gguf=output,
+        view="tts_model",
+        out_gguf=tmp_path / "restored-tts.gguf",
+    )["tensor_count"] == 1
+
+
 def test_monolithic_packer_round_trips_all_six_executable_views(tmp_path) -> None:
     gguf = pytest.importorskip("gguf")
     np = pytest.importorskip("numpy")
@@ -270,6 +316,39 @@ def test_qwen38_and_ornith_are_not_native_omni_splice_compatible() -> None:
     assert any("model_type" in item for item in ornith["mismatches"])
 
 
+def test_qwen38_has_an_explicit_trained_encoder_bridge_research_path() -> None:
+    bridge = assess_trained_encoder_bridge(QWEN38_CONFIG, OMNI_CONFIG)
+
+    assert bridge["feasible_research_path"] is True
+    assert bridge["direct_tensor_substitution"] is False
+    assert bridge["status"] == "requires-training-and-runtime"
+    assert bridge["modalities"]["audio"] == {
+        "available": True,
+        "encoder_output_width": 1280,
+        "language_embedding_width": 5120,
+        "minimum_linear_bridge_parameters": 6_558_720,
+        "minimum_linear_bridge_bf16_bytes": 13_117_440,
+        "target_has_native_path": False,
+        "recommended_path": "train-omni-encoder-bridge",
+        "donor_projector_output_width": 2048,
+        "runtime_fusion": (
+            "replace Qwen3A mm.a.mlp.2 with the trained target-width projection"
+        ),
+    }
+    assert "target language weights" in bridge["stage_one_freeze"]
+
+
+def test_ornith_bridge_retains_its_native_vision_path() -> None:
+    bridge = assess_trained_encoder_bridge(ORNITH_CONFIG, OMNI_CONFIG)
+
+    assert bridge["modalities"]["audio"]["minimum_linear_bridge_parameters"] == 5_246_976
+    assert bridge["modalities"]["vision"]["target_has_native_path"] is True
+    assert (
+        bridge["modalities"]["vision"]["recommended_path"]
+        == "retain-target-native-path"
+    )
+
+
 def test_full_omni_config_has_all_component_signatures() -> None:
     signature = architecture_signature(OMNI_CONFIG)
 
@@ -311,6 +390,8 @@ def test_qwen38_plan_selects_monolithic_router_without_claiming_native_fusion() 
     }
     assert "video-output" not in plan["requested_capabilities"]
     assert plan["video_policy"]["scope"].startswith("video comprehension")
+    assert plan["trained_encoder_bridge"]["feasible_research_path"] is True
+    assert plan["trained_encoder_bridge"]["direct_tensor_substitution"] is False
 
 
 def test_native_omni_bundle_plan_and_files(tmp_path) -> None:

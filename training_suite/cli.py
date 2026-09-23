@@ -6,7 +6,17 @@ from pathlib import Path
 
 from training_suite.core.config import DEFAULT_TARGET_CAPABILITIES, PATHS
 from training_suite.core.state import StateStore
-from training_suite.evals.runner import capability_gate, omni_audio_smoke, tool_smoke
+from training_suite.evals.runner import (
+    capability_gate,
+    omni_audio_smoke,
+    tool_smoke,
+    write_eval_report,
+)
+from training_suite.models.audio_bridge_projector import build_audio_bridge_projector
+from training_suite.models.audio_bridge_release import (
+    AudioBridgeReleaseSpec,
+    build_audio_bridge_release,
+)
 from training_suite.models.intake import inspect_intake
 from training_suite.models.ollama import (
     ModelfileSpec,
@@ -14,8 +24,8 @@ from training_suite.models.ollama import (
     show_model,
     write_modelfile,
 )
+from training_suite.models.ollama_audio_bridge import create_audio_bridge_tag
 from training_suite.models.ollama_sidecar import (
-    RUNTIME_VIEWS,
     attach_ollama_sidecar,
     prepare_ollama_sidecar,
     resolve_ollama_sidecar,
@@ -29,7 +39,15 @@ from training_suite.models.omni import (
 from training_suite.models.single_gguf import (
     inspect_monolithic_gguf,
     materialize_component_view,
+    pack_audio_bridge_sidecar,
     pack_monolithic_gguf,
+)
+from training_suite.training.bridge_initialization import (
+    initialize_bridge_from_token_spaces,
+)
+from training_suite.training.omni_encoder_bridge import (
+    build_bridge_manifest,
+    write_bridge_manifest,
 )
 
 
@@ -94,11 +112,21 @@ def cmd_job_list(args: argparse.Namespace) -> None:
 
 
 def cmd_tool_smoke(args: argparse.Namespace) -> None:
-    print(json.dumps(tool_smoke(args.model), indent=2, sort_keys=True))
+    report = tool_smoke(args.model)
+    if args.out:
+        write_eval_report(Path(args.out), report)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    if not report.get("ok"):
+        raise SystemExit(1)
 
 
 def cmd_capability_gate(args: argparse.Namespace) -> None:
-    print(json.dumps(capability_gate(args.model, args.capability), indent=2, sort_keys=True))
+    report = capability_gate(args.model, args.capability)
+    if args.out:
+        write_eval_report(Path(args.out), report)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    if not report.get("ok"):
+        raise SystemExit(1)
 
 
 def cmd_omni_audio_smoke(args: argparse.Namespace) -> None:
@@ -150,6 +178,21 @@ def cmd_omni_plan(args: argparse.Namespace) -> None:
     print(json.dumps(plan, indent=2, sort_keys=True))
     if args.require_native and plan["mode"] != "native-omni":
         raise SystemExit(2)
+
+
+def cmd_omni_bridge_plan(args: argparse.Namespace) -> None:
+    text_config = load_config_reference(args.text_source)
+    omni_config = load_config_reference(args.omni_source)
+    manifest = build_bridge_manifest(
+        text_config=text_config,
+        omni_config=omni_config,
+        target_source=args.text_source,
+        omni_source=args.omni_source,
+    )
+    if args.out:
+        output = write_bridge_manifest(Path(args.out), manifest)
+        manifest["output"] = str(output)
+    print(json.dumps(manifest, indent=2, sort_keys=True))
 
 
 def cmd_omni_pack(args: argparse.Namespace) -> None:
@@ -237,9 +280,98 @@ def cmd_omni_prepare(args: argparse.Namespace) -> None:
     report = prepare_ollama_sidecar(
         model=args.model,
         output_dir=Path(args.out),
-        views=tuple(args.view) if args.view else RUNTIME_VIEWS,
+        views=tuple(args.view) if args.view else None,
         models_dir=Path(args.models_dir) if args.models_dir else None,
         overwrite=args.overwrite,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
+def cmd_omni_bridge_assemble(args: argparse.Namespace) -> None:
+    report = build_audio_bridge_projector(
+        base_projector_gguf=Path(args.base_projector),
+        omni_projector_gguf=Path(args.omni_projector),
+        bridge_checkpoint=Path(args.checkpoint),
+        out_gguf=Path(args.out),
+        target_name=args.name,
+        overwrite=args.overwrite,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
+def cmd_omni_bridge_initialize(args: argparse.Namespace) -> None:
+    report = initialize_bridge_from_token_spaces(
+        omni_text_gguf=Path(args.omni_text_gguf),
+        target_text_gguf=Path(args.target_text_gguf),
+        omni_projector_gguf=Path(args.omni_projector),
+        output_dir=Path(args.out),
+        device=args.device,
+        max_tokens=args.max_tokens,
+        holdout_tokens=args.holdout_tokens,
+        ridge=args.ridge,
+        seed=args.seed,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
+def cmd_omni_bridge_pack(args: argparse.Namespace) -> None:
+    report = pack_audio_bridge_sidecar(
+        tts_gguf=Path(args.tts_gguf),
+        tts_projector_gguf=Path(args.tts_projector_gguf),
+        out_gguf=Path(args.out),
+        base_source=args.base_source,
+        combined_projector_source=args.combined_projector_source,
+        tts_source=args.tts_source,
+        tts_projector_source=args.tts_projector_source,
+        overwrite=args.overwrite,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
+def cmd_omni_bridge_tag(args: argparse.Namespace) -> None:
+    report = create_audio_bridge_tag(
+        source_model=args.source_model,
+        target_model=args.target_model,
+        combined_projector_gguf=Path(args.combined_projector),
+        tts_sidecar_gguf=Path(args.tts_sidecar),
+        models_dir=Path(args.models_dir) if args.models_dir else None,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
+def cmd_omni_bridge_release(args: argparse.Namespace) -> None:
+    report = build_audio_bridge_release(
+        spec=AudioBridgeReleaseSpec(
+            display_name=args.name,
+            base_model=args.base_model,
+            ollama_tag=args.ollama_tag,
+            classifier=args.classifier,
+            quantization=args.quantization,
+            prior_bundle_bytes=args.prior_bundle_bytes,
+            license_id=args.license,
+            license_name=args.license_name,
+            component_models=tuple(args.component_model),
+        ),
+        language_model_gguf=Path(args.language_model),
+        language_filename=args.language_filename,
+        combined_projector_gguf=Path(args.combined_projector),
+        projector_filename=args.projector_filename,
+        tts_sidecar_gguf=Path(args.tts_sidecar),
+        sidecar_filename=args.sidecar_filename,
+        training_report=Path(args.training_report),
+        evaluation_report=Path(args.evaluation_report),
+        vision_evaluation_report=Path(args.vision_evaluation_report),
+        capability_report=Path(args.capability_report),
+        tool_smoke_report=Path(args.tool_smoke_report),
+        tts_alignment_report=Path(args.tts_alignment_report),
+        tts_vocabulary_report=Path(args.tts_vocabulary_report),
+        tts_vocabulary_audit_report=Path(args.tts_vocabulary_audit_report),
+        output_dir=Path(args.out),
+        checkpoint_selection_report=(
+            Path(args.checkpoint_selection_report)
+            if args.checkpoint_selection_report
+            else None
+        ),
     )
     print(json.dumps(report, indent=2, sort_keys=True))
 
@@ -289,11 +421,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     smoke = sub.add_parser("tool-smoke", help="Run a synchronous Ollama tool smoke test")
     smoke.add_argument("model")
+    smoke.add_argument("--out")
     smoke.set_defaults(func=cmd_tool_smoke)
 
     gate = sub.add_parser("capability-gate", help="Check Ollama advertised capabilities")
     gate.add_argument("model")
     gate.add_argument("--capability", action="append", default=["vision", "tools", "thinking"])
+    gate.add_argument("--out")
     gate.set_defaults(func=cmd_capability_gate)
 
     ornith = sub.add_parser("ornith-seed", help="Register the canonical Ornith 9B intake")
@@ -329,6 +463,121 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exit 2 when the text trunk cannot be substituted into the Omni Thinker",
     )
     omni.set_defaults(func=cmd_omni_plan)
+
+    omni_bridge = sub.add_parser(
+        "omni-bridge-plan",
+        help="Plan a frozen Omni-audio to frozen language-model embedding bridge",
+    )
+    omni_bridge.add_argument(
+        "--text-source",
+        required=True,
+        help="Local config.json path or Hugging Face repo for the frozen language model",
+    )
+    omni_bridge.add_argument(
+        "--omni-source",
+        default=QWEN3_OMNI_INSTRUCT,
+        help="Local config.json path or Hugging Face repo for the frozen Omni encoder",
+    )
+    omni_bridge.add_argument("--out", help="Write the bridge experiment manifest here")
+    omni_bridge.set_defaults(func=cmd_omni_bridge_plan)
+
+    omni_bridge_assemble = sub.add_parser(
+        "omni-bridge-assemble",
+        help="Build a target-native vision plus trained Omni-audio projector GGUF",
+    )
+    omni_bridge_assemble.add_argument("--base-projector", required=True)
+    omni_bridge_assemble.add_argument("--omni-projector", required=True)
+    omni_bridge_assemble.add_argument("--checkpoint", required=True)
+    omni_bridge_assemble.add_argument("--out", required=True)
+    omni_bridge_assemble.add_argument("--name", required=True)
+    omni_bridge_assemble.add_argument("--overwrite", action="store_true")
+    omni_bridge_assemble.set_defaults(func=cmd_omni_bridge_assemble)
+
+    omni_bridge_initialize = sub.add_parser(
+        "omni-bridge-initialize",
+        help="Initialize a deployable audio bridge from shared tokenizer embeddings",
+    )
+    omni_bridge_initialize.add_argument("--omni-text-gguf", required=True)
+    omni_bridge_initialize.add_argument("--target-text-gguf", required=True)
+    omni_bridge_initialize.add_argument("--omni-projector", required=True)
+    omni_bridge_initialize.add_argument("--out", required=True)
+    omni_bridge_initialize.add_argument("--device", default="cpu")
+    omni_bridge_initialize.add_argument("--max-tokens", type=int, default=32768)
+    omni_bridge_initialize.add_argument("--holdout-tokens", type=int, default=2048)
+    omni_bridge_initialize.add_argument("--ridge", type=float, default=1e-3)
+    omni_bridge_initialize.add_argument("--seed", type=int, default=42)
+    omni_bridge_initialize.set_defaults(func=cmd_omni_bridge_initialize)
+
+    omni_bridge_pack = sub.add_parser(
+        "omni-bridge-pack",
+        help="Pack the lightweight TTS sidecar for a trained audio-bridge model",
+    )
+    omni_bridge_pack.add_argument("--tts-gguf", required=True)
+    omni_bridge_pack.add_argument("--tts-projector-gguf", required=True)
+    omni_bridge_pack.add_argument("--base-source", required=True)
+    omni_bridge_pack.add_argument("--combined-projector-source", required=True)
+    omni_bridge_pack.add_argument("--tts-source")
+    omni_bridge_pack.add_argument("--tts-projector-source")
+    omni_bridge_pack.add_argument("--out", required=True)
+    omni_bridge_pack.add_argument("--overwrite", action="store_true")
+    omni_bridge_pack.set_defaults(func=cmd_omni_bridge_pack)
+
+    omni_bridge_tag = sub.add_parser(
+        "omni-bridge-tag",
+        help="Create an Ollama tag with a trained combined projector and TTS sidecar",
+    )
+    omni_bridge_tag.add_argument("--source-model", required=True)
+    omni_bridge_tag.add_argument("--target-model", required=True)
+    omni_bridge_tag.add_argument("--combined-projector", required=True)
+    omni_bridge_tag.add_argument("--tts-sidecar", required=True)
+    omni_bridge_tag.add_argument("--models-dir")
+    omni_bridge_tag.set_defaults(func=cmd_omni_bridge_tag)
+
+    omni_bridge_release = sub.add_parser(
+        "omni-bridge-release",
+        help="Build gated release evidence and a Hugging Face model card",
+    )
+    omni_bridge_release.add_argument("--name", required=True)
+    omni_bridge_release.add_argument("--base-model", required=True)
+    omni_bridge_release.add_argument("--ollama-tag", required=True)
+    omni_bridge_release.add_argument("--classifier", default="audio-bridge")
+    omni_bridge_release.add_argument("--license", default="other")
+    omni_bridge_release.add_argument("--license-name")
+    omni_bridge_release.add_argument(
+        "--component-model",
+        action="append",
+        default=[],
+        help="Repeat for every upstream model represented by the release",
+    )
+    omni_bridge_release.add_argument(
+        "--quantization",
+        default="Q4_K_M language; BF16 final audio projection",
+    )
+    omni_bridge_release.add_argument("--prior-bundle-bytes", required=True, type=int)
+    omni_bridge_release.add_argument("--language-model", required=True)
+    omni_bridge_release.add_argument("--language-filename", required=True)
+    omni_bridge_release.add_argument("--combined-projector", required=True)
+    omni_bridge_release.add_argument("--projector-filename", required=True)
+    omni_bridge_release.add_argument("--tts-sidecar", required=True)
+    omni_bridge_release.add_argument("--sidecar-filename", required=True)
+    omni_bridge_release.add_argument("--training-report", required=True)
+    omni_bridge_release.add_argument("--evaluation-report", required=True)
+    omni_bridge_release.add_argument("--vision-evaluation-report", required=True)
+    omni_bridge_release.add_argument("--capability-report", required=True)
+    omni_bridge_release.add_argument("--tool-smoke-report", required=True)
+    omni_bridge_release.add_argument("--tts-alignment-report", required=True)
+    omni_bridge_release.add_argument("--tts-vocabulary-report", required=True)
+    omni_bridge_release.add_argument(
+        "--tts-vocabulary-audit-report",
+        required=True,
+        help="Strict audit binding the complete vocabulary report",
+    )
+    omni_bridge_release.add_argument(
+        "--checkpoint-selection-report",
+        help="Optional behavior-gated checkpoint selection evidence",
+    )
+    omni_bridge_release.add_argument("--out", required=True)
+    omni_bridge_release.set_defaults(func=cmd_omni_bridge_release)
 
     omni_pack = sub.add_parser(
         "omni-pack",

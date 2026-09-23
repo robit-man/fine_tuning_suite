@@ -74,6 +74,26 @@ python -m training_suite omni-plan \
   --omni-source Qwen/Qwen3-Omni-30B-A3B-Instruct \
   --out training_suite/outputs/omni/qwen38-plan
 
+python -m training_suite omni-bridge-plan \
+  --text-source manitcor/Qwen3.8-27B-Obliterated-E03 \
+  --omni-source Qwen/Qwen3-Omni-30B-A3B-Instruct \
+  --out training_suite/outputs/omni/qwen38-audio-bridge.json
+
+# Initialize the exact final projection already supported by llama.cpp Qwen3A.
+python -m training_suite omni-bridge-initialize \
+  --omni-text-gguf ./components/qwen3-omni-q4km.gguf \
+  --target-text-gguf ./components/target-q4km.gguf \
+  --omni-projector ./components/qwen3-omni-mmproj-q8.gguf \
+  --out ./audio-bridge/initial
+
+# After supervised audio training, retain target vision and append trained audio.
+python -m training_suite omni-bridge-assemble \
+  --base-projector ./components/target-mmproj-bf16.gguf \
+  --omni-projector ./components/qwen3-omni-mmproj-q8.gguf \
+  --checkpoint ./audio-bridge/training/best \
+  --name "Target Omni Audio Bridge" \
+  --out ./audio-bridge/mmproj-audio-bridge-bf16.gguf
+
 python -m training_suite omni-pack \
   --base-gguf ./components/base.gguf \
   --base-projector-gguf ./components/base-projector.gguf \
@@ -90,6 +110,121 @@ python -m training_suite omni-resolve robit/example-omni:q4km
 python -m training_suite omni-prepare robit/example-omni:q4km \
   --out ./runtime-cache
 ```
+
+The release bridge is the deployable Qwen3A final projection:
+1,280→5,120 for Qwen3.8 E03 and 1,280→4,096 for standard Ornith 1.5 9B.
+
+Generate the focused synthetic corpus first, then augment it with natural
+LibriSpeech speech. The importer keeps speakers in only one split, rejects
+recordings longer than the configured limit instead of truncating their target
+transcripts, and preserves `current_visual_input=false` for every record:
+
+```bash
+python -m training_suite.training.audio_bridge_data \
+  --out ./audio-bridge/corpus-v1
+
+python -m training_suite.training.audio_bridge_data \
+  --out ./audio-bridge/corpus-v2 \
+  --base-manifest ./audio-bridge/corpus-v1/manifest.jsonl \
+  --librispeech-dir ./LibriSpeech/dev-clean \
+  --librispeech-samples 1200 \
+  --max-duration-seconds 12
+```
+The Omni Thinker is not included. `audio_bridge_data.py` generates deterministic
+audio-only supervision with separate transcript and acoustic labels, while
+`audio_bridge_training.py` freezes both large models and writes periodic
+sanity-checked checkpoints. The lightweight release sidecar contains only
+Qwen3-TTS; the target model and combined vision/audio projector remain standard
+Ollama layers so the language trunk is resident exactly once.
+
+Bridge training and live evaluation use the target trunk's native
+`enable_thinking=false` generation prefill. This keeps private reasoning from
+consuming the bounded perception budget before the evidence tags. The live
+gate also uses deterministic decoding and a 1.1 repetition penalty, matching
+the trained-bridge runtime and preventing rare greedy ASR repetition loops.
+Both training and evaluation explicitly require plain text inside the evidence
+elements; nested spans, timestamps, coordinates, Markdown, and code fences are
+contract failures.
+
+If the release vocabulary gate exposes weak short-utterance or rare-word
+coverage, build a separate recovery corpus from the complete LibriSpeech
+transcript vocabulary. Its training carrier and deterministic shuffle differ
+from the release evaluator, and systematic numerals cover speech normalization
+without shrinking the gate. Synthesis is cached and crash-resumable:
+
+```bash
+python -m training_suite.training.tts_vocabulary_recovery_data \
+  --out ./audio-bridge/corpus-v3-tts-recovery \
+  --base-manifest ./audio-bridge/corpus-v2/manifest.jsonl \
+  --transcript-root ./LibriSpeech/dev-clean \
+  --tts-endpoint http://127.0.0.1:8892/synthesize \
+  --speaker-file ./speaker.wav \
+  --chunk-words 20 \
+  --maximum-numeral 1000 \
+  --training-repeats 3
+```
+
+If live held-out evaluation exposes a speech/non-speech boundary regression,
+rebalance only the training split without duplicating validation or test evidence:
+
+```bash
+python -m training_suite.training.audio_bridge_rebalance \
+  --source-manifest ./audio-bridge/corpus-v3-tts-recovery/manifest.jsonl \
+  --out ./audio-bridge/corpus-v4-nonspeech-recovery \
+  --additional-repeats 6
+```
+
+The rebalance manifest resolves every audio path, retains the source corpus and
+large-vocabulary provenance, and reports the exact added no-speech population.
+
+After assembling the trained projector and starting the pinned llama.cpp
+server, run the live held-out gate before creating release tags:
+
+```bash
+python -m training_suite.evals.audio_bridge \
+  --endpoint http://127.0.0.1:8901/v1/chat/completions \
+  --model audio-bridge-candidate \
+  --manifest ./audio-bridge/corpus-v2/manifest.jsonl \
+  --out ./audio-bridge/evaluation.json
+
+python -m training_suite.evals.vision_bridge \
+  --endpoint http://127.0.0.1:8901/v1/chat/completions \
+  --model audio-bridge-candidate \
+  --out ./audio-bridge/vision-evaluation.json
+
+python -m training_suite.evals.tts_alignment \
+  --tts-endpoint http://127.0.0.1:8892/synthesize \
+  --comprehension-endpoint http://127.0.0.1:8901/v1/chat/completions \
+  --model audio-bridge-candidate \
+  --speaker-file ./speaker.wav \
+  --out ./audio-bridge/tts-alignment.json
+
+python -m training_suite.evals.tts_vocabulary \
+  --tts-endpoint http://127.0.0.1:8892/synthesize \
+  --comprehension-endpoint http://127.0.0.1:8901/v1/chat/completions \
+  --model audio-bridge-candidate \
+  --manifest ./audio-bridge/corpus-v2/manifest.jsonl \
+  --speaker-file ./speaker.wav \
+  --chunk-words 10 \
+  --wav-cache-dir ./audio-bridge/tts-vocabulary-wavs \
+  --out ./audio-bridge/tts-vocabulary.json
+```
+
+The gate records per-example output and fails the release on excessive speech
+WER, invented transcripts for no-speech audio, malformed evidence tags, or any
+visual claim derived from audio-only input. The second gate exercises the
+target-native image tower in a red -> blue -> red sequence with
+`cache_prompt:false`; release metadata cannot be built unless both the current
+color and exact visual evidence tag are correct on all three turns.
+The TTS gates verify a persistent A -> B -> A worker sequence and synthesize
+the complete 4,000+-word corpus vocabulary in ten-word carrier phrases,
+including a separately scored rare-word set. The vocabulary runner checkpoints
+after every batch and resumes only
+when the model, corpus, seed, batch size, comprehension-prompt digest, and
+existing batch prefix all match.
+Validated WAVs can be atomically cached and reused across language-trunk
+candidates only when the manifest, complete batch sequence, speaker digest,
+seed, carrier, and TTS endpoint identity all match.
 
 `omni-prepare` outputs disposable component cache files derived from the
 installed tag. Remove them after media workers stop.
@@ -124,6 +259,15 @@ through a temporary Cloudflare tunnel.
 | `models/ollama.py` | Ollama metadata and Modelfile helpers |
 | `models/audio.py`, `models/omni_adapter.py` | Media transport and route parsing |
 | `models/omni.py` | Qwen3-Omni compatibility planning |
+| `training/omni_encoder_bridge.py` | Frozen audio encoder/language graph and compact bridge checkpoints |
+| `training/bridge_initialization.py` | Shared-token initialization and exact final-projector fusion |
+| `training/audio_bridge_data.py` | Deterministic speech/non-speech evidence corpus |
+| `training/audio_bridge_training.py` | Frozen-trunk training with intermediate sanity gates |
+| `models/audio_bridge_projector.py` | Combined native-vision and trained-audio projector builder |
+| `models/ollama_audio_bridge.py` | One-trunk Ollama audio-bridge tag assembly |
+| `models/audio_bridge_release.py` | Gated release manifest and Hugging Face model-card builder |
+| `evals/tts_alignment.py` | Persistent-worker A -> B -> A TTS state-reset and WAV contract gate |
+| `evals/tts_vocabulary.py` | Complete-corpus 4,000+ unique-word TTS-to-ASR stress gate |
 | `models/single_gguf.py` | Six-view sidecar pack/inspect/materialize |
 | `models/ollama_sidecar.py` | Custom Ollama layer attach/resolve/prepare |
 | `omni_runtime.py` | Legacy HTTP audio cascade |
@@ -158,4 +302,7 @@ git diff --check
 ```
 
 Unit tests do not start CUDA services. Live text, vision, audio, video, and TTS
-gates require their corresponding workers and fixtures.
+gates require their corresponding workers and fixtures. A publishable trained
+audio-bridge release additionally requires live capability/tool reports, the
+persistent-worker A -> B -> A TTS gate, and the complete large-vocabulary gate;
+calibration subsets are not release evidence.

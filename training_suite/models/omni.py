@@ -28,6 +28,7 @@ class ArchitectureSignature:
     num_hidden_layers: int | None
     vocab_size: int | None
     architecture: str | None = None
+    audio_projector_input_size: int | None = None
     audio_output_size: int | None = None
     vision_output_size: int | None = None
     has_audio_encoder: bool = False
@@ -74,6 +75,9 @@ def architecture_signature(config: Mapping[str, Any]) -> ArchitectureSignature:
         hidden_size=_int_or_none(text.get("hidden_size")),
         num_hidden_layers=_int_or_none(text.get("num_hidden_layers")),
         vocab_size=_int_or_none(text.get("vocab_size")),
+        audio_projector_input_size=_int_or_none(
+            audio.get("d_model") or audio.get("hidden_size")
+        ),
         audio_output_size=_int_or_none(audio.get("output_dim")),
         vision_output_size=_int_or_none(vision.get("out_hidden_size")),
         has_audio_encoder=bool(audio),
@@ -143,6 +147,108 @@ def assess_native_omni_splice(
     }
 
 
+def assess_trained_encoder_bridge(
+    text_config: Mapping[str, Any],
+    omni_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Describe the trainable bridge that can replace the Omni Thinker.
+
+    This is deliberately separate from :func:`assess_native_omni_splice`.
+    Incompatible language tensors do not become compatible merely because a
+    learned encoder bridge is feasible.  The bridge keeps the target language
+    graph intact and maps frozen Omni audio/vision encoder sequences into that
+    graph's embedding width.
+    """
+
+    target = architecture_signature(text_config)
+    donor = architecture_signature(omni_config)
+    target_width = target.hidden_size
+
+    def modality(
+        *,
+        available: bool,
+        encoder_width: int | None,
+        target_has_native_path: bool,
+    ) -> dict[str, Any]:
+        trainable = bool(available and encoder_width and target_width)
+        parameters = (
+            encoder_width * target_width + target_width
+            if trainable and encoder_width is not None and target_width is not None
+            else None
+        )
+        return {
+            "available": available,
+            "encoder_output_width": encoder_width,
+            "language_embedding_width": target_width,
+            "minimum_linear_bridge_parameters": parameters,
+            "minimum_linear_bridge_bf16_bytes": parameters * 2 if parameters else None,
+            "target_has_native_path": target_has_native_path,
+            "recommended_path": (
+                "retain-target-native-path"
+                if target_has_native_path
+                else "train-omni-encoder-bridge"
+            ),
+        }
+
+    audio = modality(
+        available=donor.has_audio_encoder,
+        encoder_width=(
+            donor.audio_projector_input_size or donor.audio_output_size
+        ),
+        target_has_native_path=False,
+    )
+    audio["donor_projector_output_width"] = donor.audio_output_size
+    audio["runtime_fusion"] = (
+        "replace Qwen3A mm.a.mlp.2 with the trained target-width projection"
+    )
+    vision = modality(
+        available=donor.has_vision_encoder,
+        encoder_width=donor.vision_output_size,
+        target_has_native_path=target.has_vision_encoder,
+    )
+    blockers = []
+    if target_width is None:
+        blockers.append("target language hidden size is unknown")
+    if not donor.has_audio_encoder and not donor.has_vision_encoder:
+        blockers.append("Omni donor has no reusable audio or vision encoder")
+    if donor.has_audio_encoder and not (
+        donor.audio_projector_input_size or donor.audio_output_size
+    ):
+        blockers.append("Omni audio final-projector input size is unknown")
+    if donor.has_vision_encoder and donor.vision_output_size is None:
+        blockers.append("Omni vision encoder output size is unknown")
+
+    return {
+        "schema_version": 1,
+        "feasible_research_path": not blockers,
+        "status": "requires-training-and-runtime" if not blockers else "blocked",
+        "direct_tensor_substitution": False,
+        "target_language": target.to_dict(),
+        "omni_encoder_donor": donor.to_dict(),
+        "modalities": {"audio": audio, "vision": vision},
+        "blockers": blockers,
+        "stage_one_freeze": [
+            "target language weights",
+            "Omni audio encoder",
+            "Omni vision encoder",
+        ],
+        "train_first": [
+            "modality sequence bridge",
+            "modality boundary-token embeddings",
+        ],
+        "runtime_requirement": (
+            "a new graph that accepts Omni encoder sequences, applies the trained bridge, "
+            "and interleaves the resulting embeddings into the target language model; "
+            "for Qwen3A this is exported as a replacement mm.a.mlp.2 tensor"
+        ),
+        "release_gate": (
+            "text-only target behavior remains unchanged and held-out audio/image/video "
+            "quality matches the current semantic-router baseline before the Omni Thinker "
+            "may be removed"
+        ),
+    }
+
+
 def plan_omni_bundle(
     *,
     text_config: Mapping[str, Any],
@@ -152,6 +258,7 @@ def plan_omni_bundle(
     target_tag: str | None = None,
 ) -> dict[str, Any]:
     compatibility = assess_native_omni_splice(text_config, omni_config)
+    trained_bridge = assess_trained_encoder_bridge(text_config, omni_config)
     native = bool(compatibility["compatible"])
     mode = "native-omni" if native else "monolithic-router"
 
@@ -229,6 +336,7 @@ def plan_omni_bundle(
             "thinking",
         ],
         "compatibility": compatibility,
+        "trained_encoder_bridge": trained_bridge,
         "components": components,
         "rationale": rationale,
         "artifact_policy": {

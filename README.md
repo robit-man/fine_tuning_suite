@@ -100,11 +100,17 @@ Qwen3.8 and Ornith configurations targeted by this repository. The
 `omni-plan` gate therefore selects a `monolithic-router` layout for those
 combinations instead of claiming native hidden-state fusion.
 
-A true native graft would require training alignment components—for example,
-an audio/vision sequence bridge from the donor encoder width into the target
-language width—plus special-token alignment, multimodal instruction data, and
-runtime support for the new graph. Padding, reshaping, or copying incompatible
-tensors is not a valid substitute for that training.
+A native audio graft therefore uses a trained interface instead of copying
+incompatible tensors. The implemented release path keeps the frozen Omni audio
+tower through `proj1` + GELU, trains only its 1,280-to-target-width final
+projector, retains the target model's native vision path, and omits the Omni
+Thinker from the shipped graph.
+
+`omni-plan` records the bridge contract, while `omni-bridge-initialize`,
+`omni-bridge-assemble`, `omni-bridge-pack`, and `omni-bridge-tag` build the
+single-language-trunk release. The executable design, training order, measured
+artifact sizes, quantization fallback, and speculative-decoding gates are in the
+[trained encoder bridge plan](docs/omni-adapter/trained-encoder-bridge.md).
 
 ### The current multimodal scope
 
@@ -515,6 +521,12 @@ The package CLI provides control-plane and inspection commands:
 | `capability-gate` | Compare Ollama-advertised capabilities with requirements |
 | `ornith-seed` | Register the canonical Ornith intake case |
 | `omni-plan` | Generate a native-graft or monolithic-router plan |
+| `omni-bridge-plan` | Plan a frozen Omni-audio → frozen language-model bridge |
+| `omni-bridge-initialize` | Initialize the deployable final audio projector from aligned token spaces |
+| `omni-bridge-assemble` | Combine target-native vision, the frozen Omni audio tower, and the trained bridge |
+| `omni-bridge-pack` | Pack the lightweight TTS-only release sidecar |
+| `omni-bridge-tag` | Create a new one-trunk Ollama audio-bridge tag |
+| `omni-bridge-release` | Fail closed on training, selected-projector provenance, audio/vision/tools/TTS, and strict large-vocabulary evidence, then write release metadata/model card |
 | `omni-pack` | Pack six model/projector views into one custom GGUF sidecar |
 | `omni-inspect` | Validate sidecar schema, metadata, and tensor namespaces |
 | `omni-unpack` | Materialize one executable component view |

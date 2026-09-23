@@ -12,6 +12,7 @@ from typing import Any
 from training_suite.models.omni_adapter import adapter_contract
 
 BUNDLE_SCHEMA = "robit.ollama-monolithic-omni.v3"
+LIGHTWEIGHT_AUDIO_BRIDGE_SCHEMA = "robit.ollama-audio-bridge.v1"
 BUNDLE_NAMESPACE = "robit.audio_bundle"
 CONTAINER_FORMAT = "robit-namespaced-multigraph-gguf-v1"
 MAX_GGML_TENSOR_NAME_BYTES = 127
@@ -450,6 +451,128 @@ def pack_monolithic_gguf(
     }
 
 
+def pack_audio_bridge_sidecar(
+    *,
+    tts_gguf: Path,
+    tts_projector_gguf: Path,
+    out_gguf: Path,
+    base_source: str,
+    combined_projector_source: str,
+    tts_source: str | None = None,
+    tts_projector_source: str | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Pack only TTS graphs when language and trained audio live in standard layers."""
+    gguf, np = _require_gguf()
+    tts_path = tts_gguf.expanduser().resolve()
+    projector_path = tts_projector_gguf.expanduser().resolve()
+    out = out_gguf.expanduser().resolve()
+    inputs = (tts_path, projector_path)
+    for path in inputs:
+        if not path.is_file():
+            raise SingleGGUFError(f"GGUF input does not exist: {path}")
+    if out in inputs:
+        raise SingleGGUFError("output GGUF must not overwrite an input component")
+    if out.exists() and not overwrite:
+        raise SingleGGUFError(f"output already exists; pass overwrite=True to replace it: {out}")
+
+    readers = (
+        (
+            TTS_COMPONENT,
+            tts_path,
+            tts_source or tts_path.name,
+            gguf.GGUFReader(str(tts_path)),
+        ),
+        (
+            TTS_PROJECTOR_COMPONENT,
+            projector_path,
+            tts_projector_source or projector_path.name,
+            gguf.GGUFReader(str(projector_path)),
+        ),
+    )
+    components = {
+        component.name: _component_summary(path, reader, component.tensor_prefix, source)
+        for component, path, source, reader in readers
+    }
+    manifest = {
+        "schema": LIGHTWEIGHT_AUDIO_BRIDGE_SCHEMA,
+        "profile": "trained-audio-bridge",
+        "physical_bundle_artifacts": 1,
+        "standard_layers": {
+            "language_model": base_source,
+            "combined_vision_audio_projector": combined_projector_source,
+        },
+        "components": [
+            EmbeddedComponent(
+                **{**asdict(component), "source": source}
+            ).to_dict()
+            for component, _, source, _ in readers
+        ],
+        "component_files": components,
+        "runtime": {
+            "language_trunk_copies": 1,
+            "omni_thinker_required": False,
+            "materialized_views": ["tts_model", "tts_projector"],
+            "combined_projector_is_standard_ollama_layer": True,
+        },
+    }
+    out.parent.mkdir(parents=True, exist_ok=True)
+    partial = out.with_name(out.name + ".partial")
+    if partial.exists():
+        partial.unlink()
+    writer = gguf.GGUFWriter(str(partial), arch="clip")
+    started = time.time()
+    metadata_counts: dict[str, int] = {}
+    metadata_skipped: dict[str, list[str]] = {}
+    try:
+        for component, _, _, reader in readers:
+            copied, skipped = _copy_metadata(
+                reader=reader,
+                writer=writer,
+                prefix=component.metadata_prefix,
+            )
+            metadata_counts[component.name] = copied
+            metadata_skipped[component.name] = skipped
+        writer.add_key_value(
+            f"{BUNDLE_NAMESPACE}.schema",
+            LIGHTWEIGHT_AUDIO_BRIDGE_SCHEMA,
+            gguf.GGUFValueType.STRING,
+        )
+        writer.add_key_value(
+            f"{BUNDLE_NAMESPACE}.manifest",
+            json.dumps(manifest, separators=(",", ":"), sort_keys=True),
+            gguf.GGUFValueType.STRING,
+        )
+        for component, _, _, reader in readers:
+            for tensor in reader.tensors:
+                _add_reader_tensor(writer, tensor, component.tensor_prefix + tensor.name, np)
+        writer.write_header_to_file()
+        writer.write_kv_data_to_file()
+        writer.write_tensors_to_file(progress=True)
+        writer.close()
+        os.replace(partial, out)
+    except Exception:
+        try:
+            writer.close()
+        except Exception:  # noqa: BLE001,S110 - preserve original pack failure
+            pass
+        if partial.exists():
+            partial.unlink()
+        raise
+    inspection = inspect_monolithic_gguf(out)
+    if not inspection["valid"]:
+        raise SingleGGUFError(f"post-write bundle inspection failed: {inspection['errors']}")
+    return {
+        "schema": LIGHTWEIGHT_AUDIO_BRIDGE_SCHEMA,
+        "output": str(out),
+        "output_size_bytes": out.stat().st_size,
+        "elapsed_s": round(time.time() - started, 2),
+        "components": components,
+        "metadata": {"copied": metadata_counts, "skipped": metadata_skipped},
+        "inspection": inspection,
+    }
+
+
 def inspect_monolithic_gguf(path: Path) -> dict[str, Any]:
     gguf, _ = _require_gguf()
     resolved = path.expanduser().resolve()
@@ -464,7 +587,8 @@ def inspect_monolithic_gguf(path: Path) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         manifest = None
         errors.append(f"invalid bundle manifest JSON: {exc}")
-    if metadata.get(f"{BUNDLE_NAMESPACE}.schema") != BUNDLE_SCHEMA:
+    schema = metadata.get(f"{BUNDLE_NAMESPACE}.schema")
+    if schema not in {BUNDLE_SCHEMA, LIGHTWEIGHT_AUDIO_BRIDGE_SCHEMA}:
         errors.append("missing or unsupported bundle schema")
     view_counts = {"base": 0, **{component.name: 0 for component in EMBEDDED_COMPONENTS}}
     for tensor in reader.tensors:
@@ -481,7 +605,12 @@ def inspect_monolithic_gguf(path: Path) -> dict[str, Any]:
         ),
         "tts": view_counts["tts_model"] + view_counts["tts_projector"],
     }
-    for component in ("base", "comprehension", "tts"):
+    required_groups = (
+        ("tts",)
+        if schema == LIGHTWEIGHT_AUDIO_BRIDGE_SCHEMA
+        else ("base", "comprehension", "tts")
+    )
+    for component in required_groups:
         if counts[component] == 0:
             errors.append(f"bundle has no {component} tensors")
     declared = {
@@ -565,7 +694,10 @@ def materialize_component_view(
 
     reader = gguf.GGUFReader(str(source))
     metadata = _reader_metadata(reader)
-    if metadata.get(f"{BUNDLE_NAMESPACE}.schema") != BUNDLE_SCHEMA:
+    if metadata.get(f"{BUNDLE_NAMESPACE}.schema") not in {
+        BUNDLE_SCHEMA,
+        LIGHTWEIGHT_AUDIO_BRIDGE_SCHEMA,
+    }:
         raise SingleGGUFError(f"unsupported or missing bundle schema in {source}")
     if component:
         architecture = str(metadata.get(component.metadata_prefix + "general.architecture") or "")

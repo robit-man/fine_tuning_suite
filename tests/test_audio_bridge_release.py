@@ -152,6 +152,17 @@ def _release_kwargs(tmp_path, **overrides):
     return values
 
 
+def test_release_spec_rejects_non_slug_license_name() -> None:
+    with pytest.raises(ValueError, match="metadata slug"):
+        AudioBridgeReleaseSpec(
+            display_name="Test",
+            base_model="owner/base",
+            ollama_tag="owner/base:q4km",
+            prior_bundle_bytes=100,
+            license_name="MIT and Apache-2.0",
+        )
+
+
 def test_release_records_reduced_weight_set_and_honest_memory_scope(tmp_path) -> None:
     kwargs = _release_kwargs(tmp_path)
     artifacts = [

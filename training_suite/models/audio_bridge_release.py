@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 RELEASE_SCHEMA = "robit.ollama-audio-bridge-release.v1"
+HF_LICENSE_NAME = re.compile(r"^[a-z0-9.-]+$")
 
 
 class AudioBridgeReleaseError(RuntimeError):
@@ -32,6 +34,10 @@ class AudioBridgeReleaseSpec:
             raise ValueError("release classifier must be audio-bridge")
         if self.prior_bundle_bytes <= 0:
             raise ValueError("prior bundle size must be positive")
+        if self.license_name and not HF_LICENSE_NAME.fullmatch(self.license_name):
+            raise ValueError(
+                "license_name must be a lowercase Hugging Face metadata slug"
+            )
 
 
 def _sha256(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:

@@ -26,7 +26,7 @@ from training_suite.core.config import (
     safe_model_tag,
     slugify,
 )
-from training_suite.core.jobs import JobRunner
+from training_suite.core.jobs import GpuLeaseSpec, JobRunner
 from training_suite.core.state import StateStore
 from training_suite.datasets.registry import CURATION_RECIPES, dataset_record
 from training_suite.evals.runner import (
@@ -58,6 +58,7 @@ from training_suite.omni_runtime import (
     OmniRuntimeError,
     run_http_cascade,
 )
+from training_suite.omnius_intake import ingest_omnius_bundle
 from training_suite.models.ollama import (
     ModelfileSpec,
     copy_command,
@@ -521,6 +522,60 @@ def create_app(
             action = get_action(key)
         except KeyError as exc:
             return jsonify({"error": str(exc)}), 400
+        raw_environment = data.get("environment") or {}
+        if not isinstance(raw_environment, dict):
+            return jsonify({"error": "environment must be a JSON object"}), 400
+        environment: dict[str, str] = {}
+        for env_key, env_value in raw_environment.items():
+            if not isinstance(env_key, str) or not env_key.startswith("DISTILL_"):
+                return jsonify({"error": f"environment key is not allowed: {env_key}"}), 400
+            if not isinstance(env_value, (str, int, float, bool)):
+                return jsonify({"error": f"environment value must be scalar: {env_key}"}), 400
+            environment[env_key] = str(env_value)
+        gpu_lease = None
+        raw_lease = data.get("gpu_lease")
+        if raw_lease is not None:
+            if not isinstance(raw_lease, dict):
+                return jsonify({"error": "gpu_lease must be a JSON object"}), 400
+            try:
+                gpu_lease = GpuLeaseSpec(
+                    owner=str(raw_lease.get("owner") or ""),
+                    justification=str(raw_lease.get("justification") or ""),
+                    expected_duration=int(raw_lease.get("expected_duration") or 0),
+                    gpu_uuids=tuple(str(value) for value in (raw_lease.get("gpu_uuids") or [])),
+                    ready_command=str(raw_lease.get("ready_command") or ""),
+                    vram_mib=(int(raw_lease["vram_mib"]) if raw_lease.get("vram_mib") is not None else None),
+                )
+                gpu_lease.validate()
+            except (TypeError, ValueError) as exc:
+                return jsonify({"error": str(exc)}), 400
+        if action.uses_cuda and gpu_lease is None:
+            return jsonify({
+                "error": (
+                    f"action {action.key} uses CUDA and requires gpu_lease with owner, justification, "
+                    "expected_duration, gpu_uuids, vram_mib, and ready_command"
+                )
+            }), 400
+        if action.uses_cuda and gpu_lease is not None and gpu_lease.ready_command != "auto":
+            return jsonify({
+                "error": "suite CUDA actions require ready_command=auto so readiness is emitted only after model residency"
+            }), 400
+        if action.uses_cuda and gpu_lease is not None and gpu_lease.vram_mib is None:
+            return jsonify({"error": "suite CUDA actions require gpu_lease.vram_mib"}), 400
+        if action.requires_dataset:
+            if dataset_id is None:
+                return jsonify({"error": f"action {action.key} requires dataset_id"}), 400
+            dataset = store.get_dataset(int(dataset_id))
+            if dataset is None:
+                return jsonify({"error": f"dataset not found: {dataset_id}"}), 404
+            split_names = dataset.get("split_config", {}).get("split_names", {})
+            if isinstance(split_names, dict):
+                if isinstance(split_names.get("train"), str):
+                    environment.setdefault("DISTILL_TRAIN_FILE", split_names["train"])
+                if isinstance(split_names.get("val"), str):
+                    environment.setdefault("DISTILL_VAL_FILE", split_names["val"])
+                if action.key != "train" and isinstance(split_names.get("test"), str):
+                    environment.setdefault("DISTILL_TEST_FILE", split_names["test"])
         job_id = runner.start(
             kind=action.kind,
             command=action.command,
@@ -528,6 +583,8 @@ def create_app(
             model_id=model_id,
             dataset_id=dataset_id,
             metadata={"action": action.key, "label": action.label},
+            environment=environment,
+            gpu_lease=gpu_lease,
         )
         return jsonify({"id": job_id, "kind": action.kind, "label": action.label}), 201
 
@@ -551,6 +608,40 @@ def create_app(
         )
         dataset_id = store.add_dataset(record)
         return jsonify({"id": dataset_id}), 201
+
+    @app.post("/api/omnius/intake")
+    def api_omnius_intake() -> Response:
+        store: StateStore = app.config["STORE"]
+        data = request.get_json(force=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "request body must be a JSON object"}), 400
+        try:
+            result = ingest_omnius_bundle(
+                data.get("bundle_path", ""),
+                split_config=data.get("split_config") or {},
+            )
+        except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 400
+        record = dataset_record(
+            name=data.get("name") or f"omnius-{result.bundle_sha256[:12]}",
+            source=str(result.bundle_path),
+            schema_mapping={
+                "messages": "messages",
+                "review_event_id": "reviewEventId",
+                "source_refs": "sourceRefs",
+                "format": "omnius.self-improvement.bundle.v1",
+            },
+            split_config={
+                **(data.get("split_config") or {}),
+                "strategy": "provenance_grouped",
+                "frozen_manifest": str(result.split_dir / "manifest.json"),
+                "split_names": result.split_names,
+                "split_sha256": result.split_sha256,
+            },
+            license_note=data.get("license_note"),
+        )
+        dataset_id = store.add_dataset(record)
+        return jsonify({"id": dataset_id, "intake": result.to_dict()}), 201
 
     @app.get("/api/evals")
     def api_evals() -> Response:
@@ -629,6 +720,7 @@ def create_app(
                     "kind": a.kind,
                     "requires_model": a.requires_model,
                     "requires_dataset": a.requires_dataset,
+                    "uses_cuda": a.uses_cuda,
                 }
                 for a in action_specs().values()
             ]

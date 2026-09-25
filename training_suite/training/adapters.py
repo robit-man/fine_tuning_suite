@@ -19,6 +19,7 @@ class ActionSpec:
     command: list[str]
     requires_model: bool = False
     requires_dataset: bool = False
+    uses_cuda: bool = False
 
 
 def _script(name: str) -> str:
@@ -29,8 +30,26 @@ def action_specs() -> dict[str, ActionSpec]:
     specs = {
         "bootstrap": ActionSpec("bootstrap", "Bootstrap environment", "bootstrap", [PYTHON, _script("app.py"), "bootstrap"]),
         "prepare": ActionSpec("prepare", "Prepare default split", "prepare", [PYTHON, _script("app.py"), "prepare"]),
-        "train": ActionSpec("train", "Train LoRA", "train", [PYTHON, _script("app.py"), "train"]),
-        "merge-export": ActionSpec("merge-export", "Merge and export GGUF", "export", [PYTHON, _script("app.py"), "export"], requires_model=True),
+        "baseline": ActionSpec(
+            "baseline", "Run frozen base-model baseline", "baseline",
+            [PYTHON, _script("app.py"), "baseline"], requires_dataset=True, uses_cuda=True,
+        ),
+        "train": ActionSpec(
+            "train",
+            "Train LoRA",
+            "train",
+            [PYTHON, _script("app.py"), "train"],
+            requires_dataset=True,
+            uses_cuda=True,
+        ),
+        "evaluate-adapter": ActionSpec(
+            "evaluate-adapter", "Evaluate adapter against frozen baseline", "eval",
+            [PYTHON, _script("app.py"), "eval"], requires_model=True, requires_dataset=True, uses_cuda=True,
+        ),
+        "merge-export": ActionSpec(
+            "merge-export", "Merge and export GGUF", "export",
+            [PYTHON, _script("app.py"), "export"], requires_model=True, uses_cuda=True,
+        ),
         "prepare-tools": ActionSpec("prepare-tools", "Prepare tool benchmark", "tools", [PYTHON, _script("app.py"), "prepare-tools"]),
         "baseline-tools": ActionSpec("baseline-tools", "Run base tool benchmark", "tools", [PYTHON, _script("app.py"), "baseline-tools"]),
         "eval-tools": ActionSpec("eval-tools", "Run tuned tool benchmark", "tools", [PYTHON, _script("app.py"), "eval-tools"], requires_model=True),

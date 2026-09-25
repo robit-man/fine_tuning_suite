@@ -191,6 +191,11 @@ class StateStore:
             rows = conn.execute("SELECT * FROM datasets ORDER BY updated_at DESC, id DESC").fetchall()
         return [self._row(r) for r in rows if r is not None]
 
+    def get_dataset(self, dataset_id: int) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM datasets WHERE id = ?", (dataset_id,)).fetchone()
+        return self._row(row)
+
     def add_dataset(self, data: dict[str, Any]) -> int:
         now = utc_now()
         with self.connect() as conn:

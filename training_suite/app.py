@@ -53,12 +53,10 @@ VENV = ROOT / ".venv"
 REQS = ROOT / "requirements.txt"
 MARKER = VENV / ".installed.sha256"
 
-# GPU selection. User first said use 2 (0,2) while ollama held GPU 1, then later
-# freed GPU 1 — so we use all 3 A100s from training onward. Baseline already ran
-# on 0,2 and that's fine: no state leakage since we only read, not write.
-# Override via env DISTILL_GPUS="0,1,2" etc.
-CUDA_VISIBLE = os.environ.get("DISTILL_GPUS", "0,1,2")
-NUM_GPUS = len(CUDA_VISIBLE.split(","))
+# CUDA scope must be injected by the ollama-unify broker wrapper. Never fall
+# back to static ordinals: another process may own those devices.
+CUDA_VISIBLE = os.environ.get("DISTILL_GPUS") or os.environ.get("CUDA_VISIBLE_DEVICES", "")
+NUM_GPUS = len([value for value in CUDA_VISIBLE.split(",") if value])
 
 CONFIG = {
     "base_model": "Qwen/Qwen3.5-9B",
@@ -206,9 +204,41 @@ def _log(tag: str, msg: str) -> None:
 
 
 def _set_gpus() -> None:
-    os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE
+    if CUDA_VISIBLE:
+        os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE
     os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+
+def _require_gpu_lease(operation: str) -> None:
+    if not os.environ.get("OLLAMA_UNIFY_GPU_LEASE"):
+        raise RuntimeError(
+            f"{operation} requires an ollama-unify broker lease. Use the REST job API "
+            "with gpu_lease or wrap this command with `docker gpu run`."
+        )
+    if not CUDA_VISIBLE or any(not value.startswith("GPU-") for value in CUDA_VISIBLE.split(",")):
+        raise RuntimeError(
+            f"{operation} requires DISTILL_GPUS/CUDA_VISIBLE_DEVICES to contain the exact leased GPU UUIDs"
+        )
+
+
+def _mark_cuda_ready(operation: str, **details) -> None:
+    ready_value = os.environ.get("DISTILL_READY_FILE")
+    if not ready_value:
+        return
+    ready_path = Path(ready_value).expanduser().resolve()
+    ready_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": "fine-tuning-suite.cuda-ready.v1",
+        "operation": operation,
+        "pid": os.getpid(),
+        "cuda_visible_devices": CUDA_VISIBLE,
+        "model": CONFIG["base_model"],
+        **details,
+    }
+    temporary = ready_path.with_suffix(ready_path.suffix + f".{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, ready_path)
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +373,7 @@ def _load_base_model(dtype: str = "bf16"):
 
 def cmd_baseline() -> None:
     """Evaluate untouched base model on held-out test + GSM8K sample."""
+    _require_gpu_lease("baseline")
     _ensure_dirs()
     _set_gpus()
     _log("baseline", "Evaluating BASE model (pre-training floor)...")
@@ -367,9 +398,11 @@ def _evaluate_model(model_kind: str, adapter_path: Path | None):
         _log("eval", f"Attaching LoRA adapter from {adapter_path}")
         model = PeftModel.from_pretrained(model, str(adapter_path))
     model.eval()
+    _mark_cuda_ready("evaluation", model_kind=model_kind, adapter_path=str(adapter_path) if adapter_path else None)
 
     # --- Part A: teacher-forced loss on test split (proxy for distillation fit)
-    test_loss = _teacher_forced_loss(model, tok, PATHS["splits"] / "test.jsonl")
+    test_name = os.environ.get("DISTILL_TEST_FILE", "test")
+    test_loss = _teacher_forced_loss(model, tok, PATHS["splits"] / f"{test_name}.jsonl")
     _log("eval", f"  test_split_loss = {test_loss:.4f}")
 
     # --- Part B: GSM8K greedy accuracy (external reasoning probe)
@@ -514,6 +547,7 @@ def _print_eval_summary(tag: str, r: dict) -> None:
 
 def cmd_train() -> None:
     """Launch DDP training via torchrun on GPUs 0,2 (NUM_GPUS processes)."""
+    _require_gpu_lease("train")
     _ensure_dirs()
     _set_gpus()
     # Relaunch under torchrun so we get proper DDP with 2 processes
@@ -539,6 +573,7 @@ def cmd_train() -> None:
 
 def _train_worker() -> None:
     """Actual training logic — invoked per-rank via torchrun."""
+    _require_gpu_lease("train worker")
     import torch
     from datasets import Dataset
     from peft import LoraConfig
@@ -663,6 +698,9 @@ def _train_worker() -> None:
         callbacks=[EarlyStoppingCallback(early_stopping_patience=patience)],
     )
 
+    if trainer.is_world_process_zero():
+        _mark_cuda_ready("training", output_dir=str(out_dir))
+
     _log("train", "Starting training...")
     train_result = trainer.train()
     _log("train", "Training complete.")
@@ -693,6 +731,7 @@ def _train_worker() -> None:
 
 def cmd_eval() -> None:
     """Evaluate tuned model and produce delta-vs-baseline honesty report."""
+    _require_gpu_lease("eval")
     _ensure_dirs()
     _set_gpus()
     suffix = os.environ.get("DISTILL_OUTPUT_SUFFIX", "")
@@ -769,6 +808,7 @@ def cmd_eval() -> None:
 
 
 def cmd_export() -> None:
+    _require_gpu_lease("export")
     _ensure_dirs()
     _set_gpus()
     adapter_path = PATHS["checkpoints"] / CONFIG["output_name"] / "final_adapter"
@@ -797,6 +837,7 @@ def _merge_lora(adapter_path: Path, merged_dir: Path) -> None:
     )
     _log("export", f"Attaching adapter {adapter_path}")
     model = PeftModel.from_pretrained(base, str(adapter_path))
+    _mark_cuda_ready("export", adapter_path=str(adapter_path), merged_dir=str(merged_dir))
     _log("export", "Merging LoRA weights into base...")
     merged = model.merge_and_unload()
     _log("export", f"Saving merged model to {merged_dir}")
@@ -2001,6 +2042,12 @@ def main() -> None:
         bootstrap(force=args.force_venv)
         print(f"venv ready: {VENV}")
         return
+
+    # Reject uncoordinated CUDA work before bootstrap can download or mutate a
+    # training environment. The command-level guards below remain as defense
+    # in depth for callers that import these functions directly.
+    if args.cmd in {"baseline", "train", "_train_worker", "eval", "export", "all"}:
+        _require_gpu_lease(args.cmd)
 
     # All other commands need the venv
     bootstrap(force=args.force_venv)

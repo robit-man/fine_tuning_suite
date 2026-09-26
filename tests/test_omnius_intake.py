@@ -87,6 +87,8 @@ def test_omnius_bundle_intake_materializes_frozen_provenance_splits(tmp_path, mo
 
     assert result.examples == 12
     assert sum(result.split_counts.values()) == 12
+    assert result.split_dir.is_relative_to(paths.data / "splits")
+    assert all(result.split_counts[name] > 0 for name in ("train", "val", "test"))
     assert result.split_names["train"].startswith("omnius/omnius-")
     manifest = json.loads((result.split_dir / "manifest.json").read_text())
     assert manifest["provenance_grouped"] is True
@@ -161,6 +163,71 @@ def test_train_job_binds_ingested_splits_and_explicit_gpu_lease(tmp_path, monkey
     assert runner.kwargs["environment"]["DISTILL_VAL_FILE"].endswith("/val")
     assert "DISTILL_TEST_FILE" not in runner.kwargs["environment"]
     assert runner.kwargs["gpu_lease"].gpu_uuids == ("GPU-example",)
+
+
+def test_experiment_contract_derives_collision_free_seed_paths_server_side(tmp_path, monkeypatch) -> None:
+    class CapturingRunner:
+        def __init__(self):
+            self.kwargs = None
+
+        def start(self, **kwargs):
+            self.kwargs = kwargs
+            return 73
+
+        def cancel(self, _job_id):
+            return False
+
+    paths = _paths(tmp_path)
+    monkeypatch.setattr("training_suite.omnius_intake.PATHS", paths)
+    monkeypatch.setattr("training_suite.web.PATHS", paths)
+    store = StateStore(tmp_path / "suite.sqlite3")
+    runner = CapturingRunner()
+    app = create_app(store=store, runner=runner)
+    app.testing = True
+    client = app.test_client()
+    intake = client.post(
+        "/api/omnius/intake",
+        json={"bundle_path": str(_bundle(tmp_path)), "name": "omnius-reviewed"},
+    ).get_json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "action": "train",
+            "dataset_id": intake["id"],
+            "experiment": {"candidate_id": "candidate/alpha", "seed": 17},
+            "gpu_lease": {
+                "owner": "omnius/adapter-trial",
+                "justification": "private multi-seed adapter qualification",
+                "expected_duration": 3600,
+                "gpu_uuids": ["GPU-example"],
+                "vram_mib": 24000,
+                "ready_command": "auto",
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    environment = runner.kwargs["environment"]
+    candidate_key = f"candidate-alpha-{hashlib.sha256(b'candidate/alpha').hexdigest()[:12]}"
+    assert environment["DISTILL_CANDIDATE_ID"] == "candidate/alpha"
+    assert environment["DISTILL_SEED"] == "17"
+    assert environment["DISTILL_OUTPUT_SUFFIX"] == f".omnius-{candidate_key}-17"
+    assert environment["DISTILL_RESULT_PATH"].endswith(f"/omnius/{candidate_key}/17/train-result.json")
+    metadata = runner.kwargs["metadata"]["omnius_experiment"]
+    assert metadata["private_fixture_isolation"] is True
+    assert metadata["stage"] == "train"
+
+    rejected = client.post(
+        "/api/jobs",
+        json={
+            "action": "train",
+            "dataset_id": intake["id"],
+            "environment": {"DISTILL_SEED": "999"},
+        },
+    )
+    assert rejected.status_code == 400
+    assert "managed by the experiment contract" in rejected.get_json()["error"]
 
 
 def test_gpu_lease_requires_a_visible_owner_scope_and_readiness_probe() -> None:

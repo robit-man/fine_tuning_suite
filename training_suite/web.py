@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,7 @@ from training_suite.omni_runtime import (
     run_http_cascade,
 )
 from training_suite.omnius_intake import ingest_omnius_bundle
+from training_suite.omnius_results import resolve_omnius_job_artifacts
 from training_suite.models.ollama import (
     ModelfileSpec,
     copy_command,
@@ -226,6 +228,18 @@ def create_app(
         if not job:
             return jsonify({"error": "not found"}), 404
         return jsonify({"job": job, "log": runner.read_log(job_id)})
+
+    @app.get("/api/jobs/<int:job_id>/artifacts")
+    def job_artifacts_api(job_id: int) -> Response:
+        store: StateStore = app.config["STORE"]
+        job = store.get_job(job_id)
+        if not job:
+            return jsonify({"error": "not found"}), 404
+        try:
+            return jsonify(resolve_omnius_job_artifacts(job))
+        except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
+            status = 409 if job.get("status") != "succeeded" else 422
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), status
 
     @app.post("/jobs/<int:job_id>/cancel")
     def cancel_job(job_id: int) -> Response:
@@ -526,12 +540,62 @@ def create_app(
         if not isinstance(raw_environment, dict):
             return jsonify({"error": "environment must be a JSON object"}), 400
         environment: dict[str, str] = {}
+        reserved_experiment_keys = {
+            "DISTILL_CANDIDATE_ID",
+            "DISTILL_OUTPUT_SUFFIX",
+            "DISTILL_RESULT_PATH",
+            "DISTILL_SEED",
+        }
         for env_key, env_value in raw_environment.items():
             if not isinstance(env_key, str) or not env_key.startswith("DISTILL_"):
                 return jsonify({"error": f"environment key is not allowed: {env_key}"}), 400
+            if env_key in reserved_experiment_keys:
+                return jsonify({"error": f"environment key is managed by the experiment contract: {env_key}"}), 400
             if not isinstance(env_value, (str, int, float, bool)):
                 return jsonify({"error": f"environment value must be scalar: {env_key}"}), 400
             environment[env_key] = str(env_value)
+        experiment_metadata = None
+        raw_experiment = data.get("experiment")
+        if raw_experiment is not None:
+            if action.key not in {"baseline", "train", "evaluate-adapter"}:
+                return jsonify({"error": f"action {action.key} does not support an Omnius experiment"}), 400
+            if not isinstance(raw_experiment, dict):
+                return jsonify({"error": "experiment must be a JSON object"}), 400
+            candidate_id = str(raw_experiment.get("candidate_id") or "").strip()
+            candidate_slug = slugify(candidate_id, "")
+            try:
+                seed = int(raw_experiment.get("seed"))
+            except (TypeError, ValueError):
+                seed = -1
+            if not candidate_id or not candidate_slug or seed < 0:
+                return jsonify({"error": "experiment requires candidate_id and a non-negative integer seed"}), 400
+            candidate_key = (
+                f"{candidate_slug[:48]}-"
+                f"{hashlib.sha256(candidate_id.encode('utf-8')).hexdigest()[:12]}"
+            )
+            stage = {
+                "baseline": "baseline",
+                "train": "train",
+                "evaluate-adapter": "evaluation",
+            }[action.key]
+            output_suffix = f".omnius-{candidate_key}-{seed}"
+            result_path = PATHS.outputs / "omnius" / candidate_key / str(seed) / f"{stage}-result.json"
+            environment.update(
+                {
+                    "DISTILL_CANDIDATE_ID": candidate_id,
+                    "DISTILL_OUTPUT_SUFFIX": output_suffix,
+                    "DISTILL_RESULT_PATH": str(result_path),
+                    "DISTILL_SEED": str(seed),
+                }
+            )
+            experiment_metadata = {
+                "candidate_id": candidate_id,
+                "seed": seed,
+                "stage": stage,
+                "output_suffix": output_suffix,
+                "result_path": str(result_path),
+                "private_fixture_isolation": True,
+            }
         gpu_lease = None
         raw_lease = data.get("gpu_lease")
         if raw_lease is not None:
@@ -582,7 +646,11 @@ def create_app(
             cwd=PATHS.package_root,
             model_id=model_id,
             dataset_id=dataset_id,
-            metadata={"action": action.key, "label": action.label},
+            metadata={
+                "action": action.key,
+                "label": action.label,
+                **({"omnius_experiment": experiment_metadata} if experiment_metadata is not None else {}),
+            },
             environment=environment,
             gpu_lease=gpu_lease,
         )

@@ -97,10 +97,21 @@ def _assign_groups(
     groups: dict[str, list[dict[str, Any]]] = {}
     for example in examples:
         groups.setdefault(_provenance_group(example), []).append(example)
+    ordered_groups = sorted(groups.items())
+    if len(ordered_groups) < 3:
+        raise ValueError("provenance-isolated training requires at least three independent source groups")
+    test_groups = max(1, round(len(ordered_groups) * test_ratio)) if test_ratio else 0
+    val_groups = max(1, round(len(ordered_groups) * val_ratio)) if val_ratio else 0
+    while test_groups + val_groups >= len(ordered_groups):
+        if test_groups >= val_groups and test_groups > 1:
+            test_groups -= 1
+        elif val_groups > 1:
+            val_groups -= 1
+        else:
+            raise ValueError("split ratios do not leave an independent training provenance group")
     result = {"train": [], "val": [], "test": []}
-    for group_id, members in sorted(groups.items()):
-        bucket = int(group_id[:16], 16) / float(0xFFFFFFFFFFFFFFFF)
-        split = "test" if bucket < test_ratio else "val" if bucket < test_ratio + val_ratio else "train"
+    for index, (_group_id, members) in enumerate(ordered_groups):
+        split = "test" if index < test_groups else "val" if index < test_groups + val_groups else "train"
         result[split].extend(members)
     return result
 
@@ -130,7 +141,10 @@ def ingest_omnius_bundle(
 
     digest = _sha256_bytes(raw)
     name = slugify(f"omnius-{digest[:16]}")
-    split_dir = PATHS.outputs / "splits" / "omnius" / name
+    # app.py resolves DISTILL_{TRAIN,VAL,TEST}_FILE relative to data/splits.
+    # Keep the frozen provenance groups in that exact tree so an admitted job
+    # can consume the intake result without a second copy or path translation.
+    split_dir = PATHS.data / "splits" / "omnius" / name
     split_dir.mkdir(parents=True, exist_ok=True)
     splits = _assign_groups(examples, split_config or {})
     counts: dict[str, int] = {}

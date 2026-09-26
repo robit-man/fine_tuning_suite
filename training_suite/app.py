@@ -42,6 +42,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -319,6 +320,55 @@ def _file_sha(p: Path) -> str:
     return h.hexdigest()
 
 
+def _output_suffix() -> str:
+    suffix = os.environ.get("DISTILL_OUTPUT_SUFFIX", "")
+    if suffix and (not suffix.startswith(".") or any(char not in ".-_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" for char in suffix)):
+        raise ValueError("DISTILL_OUTPUT_SUFFIX must be a dot-prefixed path-safe suffix")
+    return suffix
+
+
+def _run_seed() -> int:
+    try:
+        seed = int(os.environ.get("DISTILL_SEED", CONFIG["seed"]))
+    except ValueError as exc:
+        raise ValueError("DISTILL_SEED must be an integer") from exc
+    if seed < 0:
+        raise ValueError("DISTILL_SEED must be non-negative")
+    return seed
+
+
+def _report_path(stem: str) -> Path:
+    suffix = _output_suffix()
+    if os.environ.get("DISTILL_CANDIDATE_ID"):
+        return PATHS["reports"] / f"{stem}{suffix}.seed-{_run_seed()}.json"
+    return PATHS["reports"] / f"{stem}{suffix}.json"
+
+
+def _write_experiment_result(stage: str, artifacts: list[dict], metrics: list[dict] | None = None) -> None:
+    raw_path = os.environ.get("DISTILL_RESULT_PATH")
+    if not raw_path:
+        return
+    result_path = Path(raw_path).expanduser().resolve()
+    output_root = (ROOT / "outputs").resolve()
+    if result_path != output_root and output_root not in result_path.parents:
+        raise ValueError("DISTILL_RESULT_PATH must remain inside the suite outputs directory")
+    candidate_id = os.environ.get("DISTILL_CANDIDATE_ID", "").strip()
+    if not candidate_id:
+        raise ValueError("DISTILL_CANDIDATE_ID is required with DISTILL_RESULT_PATH")
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": "fine-tuning-suite.omnius-experiment-result.v1",
+        "candidate_id": candidate_id,
+        "stage": stage,
+        "seed": _run_seed(),
+        "artifacts": artifacts,
+        "metrics": metrics or [],
+    }
+    temporary = result_path.with_suffix(result_path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, result_path)
+
+
 def _prepare_gsm8k() -> None:
     from datasets import load_dataset
 
@@ -378,8 +428,12 @@ def cmd_baseline() -> None:
     _set_gpus()
     _log("baseline", "Evaluating BASE model (pre-training floor)...")
     results = _evaluate_model(model_kind="base", adapter_path=None)
-    out = PATHS["reports"] / "baseline.json"
+    out = _report_path("baseline")
     out.write_text(json.dumps(results, indent=2))
+    _write_experiment_result(
+        "baseline",
+        [{"kind": "baseline-report", "path": str(out), "media_type": "application/json"}],
+    )
     _log("baseline", f"Saved {out}")
     _print_eval_summary("BASELINE", results)
 
@@ -389,6 +443,14 @@ def _evaluate_model(model_kind: str, adapter_path: Path | None):
     import torch
     from transformers import AutoModelForCausalLM
 
+    started = time.monotonic()
+    seed = _run_seed()
+    import random
+
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     tok = _load_tokenizer()
     _log("eval", f"Loading {model_kind} model...")
     model = _load_base_model()
@@ -402,7 +464,8 @@ def _evaluate_model(model_kind: str, adapter_path: Path | None):
 
     # --- Part A: teacher-forced loss on test split (proxy for distillation fit)
     test_name = os.environ.get("DISTILL_TEST_FILE", "test")
-    test_loss = _teacher_forced_loss(model, tok, PATHS["splits"] / f"{test_name}.jsonl")
+    held_out = _teacher_forced_loss(model, tok, PATHS["splits"] / f"{test_name}.jsonl")
+    test_loss = held_out["mean"]
     _log("eval", f"  test_split_loss = {test_loss:.4f}")
 
     # --- Part B: GSM8K greedy accuracy (external reasoning probe)
@@ -414,10 +477,13 @@ def _evaluate_model(model_kind: str, adapter_path: Path | None):
 
     return {
         "model_kind": model_kind,
+        "seed": seed,
         "adapter_path": str(adapter_path) if adapter_path else None,
         "test_split_loss": test_loss,
         "test_split_perplexity": float(torch.tensor(test_loss).exp().item()),
+        "held_out_tail": held_out,
         "gsm8k": gsm_results,
+        "latency_seconds": time.monotonic() - started,
     }
 
 
@@ -426,12 +492,13 @@ def _apply_chat_template_sample(tok, messages: list[dict]) -> str:
     return tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
 
 
-def _teacher_forced_loss(model, tok, path: Path) -> float:
+def _teacher_forced_loss(model, tok, path: Path) -> dict:
     """Compute average per-token NLL on assistant tokens of held-out samples."""
     import torch
 
     total_loss = 0.0
     total_tokens = 0
+    sample_losses: list[float] = []
     max_len = CONFIG["train"]["max_seq_length"]
 
     with path.open() as f:
@@ -469,7 +536,24 @@ def _teacher_forced_loss(model, tok, path: Path) -> float:
                 if n_tok > 0:
                     total_loss += loss_sum
                     total_tokens += n_tok
-    return total_loss / max(total_tokens, 1)
+                    sample_losses.append(loss_sum / n_tok)
+    ordered = sorted(sample_losses)
+
+    def percentile(fraction: float) -> float:
+        if not ordered:
+            return 0.0
+        index = min(len(ordered) - 1, max(0, int((len(ordered) - 1) * fraction)))
+        return ordered[index]
+
+    tail_count = max(1, (len(ordered) + 9) // 10)
+    return {
+        "mean": total_loss / max(total_tokens, 1),
+        "p95": percentile(0.95),
+        "p99": percentile(0.99),
+        "worst_decile_mean": sum(ordered[-tail_count:]) / tail_count if ordered else 0.0,
+        "sample_count": len(ordered),
+        "token_count": total_tokens,
+    }
 
 
 def _gsm8k_eval(model, tok) -> dict:
@@ -636,7 +720,7 @@ def _train_worker() -> None:
     tcfg = CONFIG["train"]
     # DISTILL_OUTPUT_SUFFIX appends to the checkpoint dir name so we can run
     # additional training rounds without clobbering the first-round adapter.
-    suffix = os.environ.get("DISTILL_OUTPUT_SUFFIX", "")
+    suffix = _output_suffix()
     out_dir = PATHS["checkpoints"] / (CONFIG["output_name"] + suffix)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -670,8 +754,8 @@ def _train_worker() -> None:
         metric_for_best_model=tcfg["metric_for_best_model"],
         greater_is_better=tcfg["greater_is_better"],
         report_to="none",
-        seed=CONFIG["seed"],
-        data_seed=CONFIG["seed"],
+        seed=_run_seed(),
+        data_seed=_run_seed(),
         dataset_text_field="text",
         packing=False,
         ddp_find_unused_parameters=False,
@@ -722,6 +806,21 @@ def _train_worker() -> None:
         _log("train", f"Log history: {history_path}")
         _log("train", f"Best val loss seen: {trainer.state.best_metric}")
         _log("train", f"Final adapter: {adapter_dir}")
+        _write_experiment_result(
+            "train",
+            [
+                {"kind": "adapter", "path": str(adapter_dir)},
+                {"kind": "train-metrics", "path": str(metrics_path), "media_type": "application/json"},
+                {"kind": "train-history", "path": str(history_path), "media_type": "application/json"},
+            ],
+            [
+                {
+                    "name": "training_loss",
+                    "value": float(metrics.get("train_loss", 0.0)),
+                    "direction": "minimize",
+                }
+            ],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -734,11 +833,11 @@ def cmd_eval() -> None:
     _require_gpu_lease("eval")
     _ensure_dirs()
     _set_gpus()
-    suffix = os.environ.get("DISTILL_OUTPUT_SUFFIX", "")
+    suffix = _output_suffix()
     adapter_path = PATHS["checkpoints"] / (CONFIG["output_name"] + suffix) / "final_adapter"
     if not adapter_path.exists():
         raise FileNotFoundError(f"No adapter at {adapter_path}. Run `train` first.")
-    baseline_path = PATHS["reports"] / "baseline.json"
+    baseline_path = _report_path("baseline")
     if not baseline_path.exists():
         raise FileNotFoundError(
             f"No baseline at {baseline_path}. Run `baseline` BEFORE `train` for honest delta."
@@ -746,7 +845,8 @@ def cmd_eval() -> None:
 
     _log("eval", "Evaluating TUNED model...")
     tuned = _evaluate_model(model_kind="tuned", adapter_path=adapter_path)
-    (PATHS["reports"] / "tuned.json").write_text(json.dumps(tuned, indent=2))
+    tuned_path = _report_path("tuned")
+    tuned_path.write_text(json.dumps(tuned, indent=2))
     _print_eval_summary("TUNED", tuned)
 
     baseline = json.loads(baseline_path.read_text())
@@ -755,6 +855,68 @@ def cmd_eval() -> None:
         "test_split_ppl_delta": tuned["test_split_perplexity"] - baseline["test_split_perplexity"],
         "gsm8k_accuracy_delta": tuned["gsm8k"]["accuracy"] - baseline["gsm8k"]["accuracy"],
     }
+
+    baseline_tail = baseline.get("held_out_tail") or {}
+    tuned_tail = tuned.get("held_out_tail") or {}
+    baseline_loss = float(baseline["test_split_loss"])
+    tuned_loss = float(tuned["test_split_loss"])
+    generalization_delta = float(delta["gsm8k_accuracy_delta"])
+    loss_gain_fraction = max(0.0, (baseline_loss - tuned_loss) / max(abs(baseline_loss), 1e-9))
+    reward_hacking_signal = loss_gain_fraction * max(0.0, 0.02 - generalization_delta)
+    objective_metrics = [
+        {
+            "name": "quality_gsm8k_accuracy",
+            "value": float(tuned["gsm8k"]["accuracy"]),
+            "direction": "maximize",
+            "unit": "ratio",
+        },
+        {
+            "name": "held_out_loss",
+            "value": tuned_loss,
+            "direction": "minimize",
+            "unit": "nll",
+        },
+        {
+            "name": "tail_loss_p95",
+            "value": float(tuned_tail.get("p95", tuned_loss)),
+            "direction": "minimize",
+            "unit": "nll",
+            "tail": True,
+        },
+        {
+            "name": "tail_loss_worst_decile",
+            "value": float(tuned_tail.get("worst_decile_mean", tuned_loss)),
+            "direction": "minimize",
+            "unit": "nll",
+            "tail": True,
+        },
+        {
+            "name": "tail_loss_regression_p95",
+            "value": float(tuned_tail.get("p95", tuned_loss)) - float(baseline_tail.get("p95", baseline_loss)),
+            "direction": "minimize",
+            "unit": "nll-delta",
+            "tail": True,
+        },
+        {
+            "name": "generalization_delta",
+            "value": generalization_delta,
+            "direction": "maximize",
+            "unit": "accuracy-delta",
+        },
+        {
+            "name": "reward_hacking_signal",
+            "value": reward_hacking_signal,
+            "direction": "minimize",
+            "unit": "risk-signal",
+            "reward_hacking": True,
+        },
+        {
+            "name": "evaluation_latency_seconds",
+            "value": float(tuned.get("latency_seconds", 0.0)),
+            "direction": "minimize",
+            "unit": "seconds",
+        },
+    ]
 
     # Honesty flags
     flags = []
@@ -776,6 +938,7 @@ def cmd_eval() -> None:
         "tuned": tuned,
         "delta": delta,
         "flags": flags,
+        "objectives": objective_metrics,
         "config": CONFIG,
         "notes": {
             "gpus_used": CUDA_VISIBLE,
@@ -785,8 +948,17 @@ def cmd_eval() -> None:
             "eval_probes": ["held-out test split (frozen)", "GSM8K 100-sample (fixed seed)"],
         },
     }
-    report_path = PATHS["reports"] / "final_report.json"
+    report_path = _report_path("final_report")
     report_path.write_text(json.dumps(report, indent=2))
+    _write_experiment_result(
+        "evaluation",
+        [
+            {"kind": "evaluation-report", "path": str(report_path), "media_type": "application/json"},
+            {"kind": "tuned-report", "path": str(tuned_path), "media_type": "application/json"},
+            {"kind": "adapter", "path": str(adapter_path)},
+        ],
+        objective_metrics,
+    )
     _log("eval", f"Final report: {report_path}")
 
     print("\n========== HONESTY REPORT ==========")

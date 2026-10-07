@@ -1,0 +1,46 @@
+{{- $disabled := and .IsThinkSet (not .Think) -}}
+{{- $effort := "Reasoning effort is set to high. Think carefully through the task in the user's language, validate key assumptions, consider plausible alternatives, and prioritize correctness and clarity." -}}
+{{- if $disabled -}}
+{{- $effort = "Reasoning is disabled. Proceed straight to answering according to the user's instructions." -}}
+{{- else if or (eq .ThinkLevel "low") (eq .ThinkLevel "minimal") -}}
+{{- $effort = "Reasoning effort is set to low. Think briefly through only the essential steps in the user's language, then proceed directly to the answer." -}}
+{{- else if eq .ThinkLevel "medium" -}}
+{{- $effort = "Reasoning effort is set to medium. Think through the task methodically in the user's language, check key assumptions, and provide a well-supported answer." -}}
+{{- end -}}
+{{- $firstSystem := false -}}
+{{- $lastUser := len .Messages -}}
+{{- range $i, $message := .Messages -}}
+{{- if and (eq $i 0) (eq .Role "system") -}}{{- $firstSystem = true -}}{{- end -}}
+{{- if eq .Role "user" -}}{{- $lastUser = $i -}}{{- end -}}
+{{- end -}}
+{{- printf "<|im_start|>system\n" -}}
+{{- if $firstSystem -}}{{- (index .Messages 0).Content -}}{{- printf "\n\n" -}}{{- end -}}
+{{- printf "# Reasoning effort\n\n%s" $effort -}}
+{{- if .Tools -}}
+{{- printf "\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" -}}
+{{- range .Tools -}}{{- printf "\n" -}}{{- json . -}}{{- end -}}
+{{- printf "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>" -}}
+{{- end -}}
+{{- printf "<|im_end|>\n" -}}
+{{- $toolGroup := false -}}
+{{- range $i, $message := .Messages -}}
+{{- if and $toolGroup (ne .Role "tool") -}}{{- printf "<|im_end|>\n" -}}{{- $toolGroup = false -}}{{- end -}}
+{{- if or (eq .Role "user") (and (eq .Role "system") (ne $i 0)) -}}
+{{- printf "<|im_start|>%s\n%s<|im_end|>\n" .Role .Content -}}
+{{- else if eq .Role "assistant" -}}
+{{- printf "<|im_start|>assistant\n" -}}
+{{ if gt $i $lastUser }}<think>
+{{ .Thinking }}
+</think>
+
+{{ end }}{{ .Content }}{{ if and $message.Content $message.ToolCalls }}{{ printf "\n" }}{{ end }}{{ $lastCall := 0 }}{{ range $callIndex, $call := .ToolCalls }}{{ $lastCall = $callIndex }}{{ end }}{{ if .ToolCalls }}{{ range $callIndex, $call := .ToolCalls }}<tool_call>
+{"name": {{ json .Function.Name }}, "arguments": {{ .Function.Arguments }}}
+</tool_call>{{ if ne $callIndex $lastCall }}{{ printf "\n" }}{{ end }}{{ end }}{{ end }}{{ printf "<|im_end|>\n" }}
+{{- else if eq .Role "tool" -}}
+{{- if not $toolGroup -}}{{- printf "<|im_start|>user" -}}{{- $toolGroup = true -}}{{- end -}}
+{{- printf "\n<tool_response>\n%s\n</tool_response>" .Content -}}
+{{- end -}}
+{{- end -}}
+{{- if $toolGroup -}}{{- printf "<|im_end|>\n" -}}{{- end -}}
+{{- printf "<|im_start|>assistant\n" -}}
+{{- if $disabled -}}{{- printf "<think>\n\n</think>\n\n" -}}{{- end -}}

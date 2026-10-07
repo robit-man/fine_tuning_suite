@@ -1,0 +1,83 @@
+{
+  "tag": "kolibri-vision-aligned:bf16-20261006",
+  "precision": "BF16",
+  "projector_sha256": "e04280d08056feb4197db272d2625b8bc18706961dc64dfce2ae85f98d4b1c0d",
+  "examples": [
+    {
+      "id": "invoice-id",
+      "reference": "KBR-5937",
+      "answer": "INV-2024-08-06-020",
+      "normalized_exact": false,
+      "anls": 0.0,
+      "done": true,
+      "reason": "length"
+    },
+    {
+      "id": "invoice-total",
+      "reference": "$112.25",
+      "answer": "$25.00",
+      "normalized_exact": false,
+      "anls": 0.0,
+      "done": true,
+      "reason": "stop"
+    },
+    {
+      "id": "table-lookup",
+      "reference": "47",
+      "answer": "82",
+      "normalized_exact": false,
+      "anls": 0.0,
+      "done": true,
+      "reason": "stop"
+    },
+    {
+      "id": "paragraph-code",
+      "reference": "N7Q4-Z8M2",
+      "answer": "NQZ8MS",
+      "normalized_exact": false,
+      "anls": 0.5555555555555556,
+      "done": true,
+      "reason": "stop"
+    },
+    {
+      "id": "ui-button",
+      "reference": "Synchronize",
+      "answer": "Cancel",
+      "normalized_exact": false,
+      "anls": 0.0,
+      "done": true,
+      "reason": "stop"
+    },
+    {
+      "id": "bar-chart",
+      "reference": "Bravo",
+      "answer": "Bravo",
+      "normalized_exact": true,
+      "anls": 1.0,
+      "done": true,
+      "reason": "stop"
+    },
+    {
+      "id": "spatial-shape",
+      "reference": "circle",
+      "answer": "circle",
+      "normalized_exact": true,
+      "anls": 1.0,
+      "done": true,
+      "reason": "stop"
+    },
+    {
+      "id": "spatial-position",
+      "reference": "right",
+      "answer": "left",
+      "normalized_exact": false,
+      "anls": 0.0,
+      "done": true,
+      "reason": "stop"
+    }
+  ],
+  "published": false,
+  "scope": "eight fresh evaluation-only engineering checks; no best-in-class claim",
+  "stock_cli_returncode": 0,
+  "completed": true
+}

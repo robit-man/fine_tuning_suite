@@ -1,0 +1,213 @@
+{
+  "scope": "Source-only experimental snapshot; not a qualified model release",
+  "source_run": "training_suite/outputs/kolibri-1-vision-20261006",
+  "text_release_run": "training_suite/outputs/kolibri-1-20261004",
+  "paused": true,
+  "vision_published": false,
+  "files": [
+    {
+      "file": "runtime-source/align-transferred-projection.py",
+      "source_run_file": "runtime-source/align-transferred-projection.py",
+      "sha256": "96d887a2d5a4ba5448968cd441d92d83bfc6a0c335ab0fee6b89e01e40870296",
+      "bytes": 18530
+    },
+    {
+      "file": "runtime-source/build-data-recipe.py",
+      "source_run_file": "runtime-source/build-data-recipe.py",
+      "sha256": "fe94831430119390fd6306ba2d0a73ab75ce3367b3694ff839c4157c288140bf",
+      "bytes": 5948
+    },
+    {
+      "file": "runtime-source/cache-vision-features.py",
+      "source_run_file": "runtime-source/cache-vision-features.py",
+      "sha256": "a91ad6b512ff796731d38dcbd3f2f5c9ec01555ed43b22d297d10206b257de5f",
+      "bytes": 4972
+    },
+    {
+      "file": "runtime-source/capture-stock-layers.cpp",
+      "source_run_file": "runtime-source/capture-stock-layers.cpp",
+      "sha256": "e7630138cf2d9b598de085f58b6d3dbf1f70e9faabf09705f2bdeb2db232d623",
+      "bytes": 3429
+    },
+    {
+      "file": "runtime-source/evaluate-bf16-independent.py",
+      "source_run_file": "runtime-source/evaluate-bf16-independent.py",
+      "sha256": "459283c95b4ee76d86d86d3f7bdf4c628b1a7e2f573b5d6869fce7ea69545653",
+      "bytes": 3846
+    },
+    {
+      "file": "runtime-source/evaluate-stock-quality.py",
+      "source_run_file": "runtime-source/evaluate-stock-quality.py",
+      "sha256": "20bbfb4a62eff9a33280b6717f88ff33bc2672b9f95909dc869988be8aaa0918",
+      "bytes": 12670
+    },
+    {
+      "file": "runtime-source/evaluate-stock-transfer.py",
+      "source_run_file": "runtime-source/evaluate-stock-transfer.py",
+      "sha256": "3449f79604a33ad6d9f0fe1cc46d39f6e0950cf0a8a3608a4a9be8576d6f8353",
+      "bytes": 7970
+    },
+    {
+      "file": "runtime-source/export-vision-projector.py",
+      "source_run_file": "runtime-source/export-vision-projector.py",
+      "sha256": "68300ce943ceb98e63626236260bcf1297dbbaebb9e5bcabdfdb7e46fdac0343",
+      "bytes": 6022
+    },
+    {
+      "file": "runtime-source/fence-independent-natural-images.py",
+      "source_run_file": "runtime-source/fence-independent-natural-images.py",
+      "sha256": "7a1b71b2ae9144610eb3def1ad85f924c2b7b6fa77778a13bc9b9a91129281bf",
+      "bytes": 1594
+    },
+    {
+      "file": "runtime-source/frozen-decoder.py",
+      "source_run_file": "runtime-source/frozen-decoder.py",
+      "sha256": "7f6c163359678fbfedbdb2289f724a4225dec170c074bc48fc7e97c42b5d582c",
+      "bytes": 14728
+    },
+    {
+      "file": "runtime-source/inventory-ocr-task-groups.py",
+      "source_run_file": "runtime-source/inventory-ocr-task-groups.py",
+      "sha256": "76ef09c572824d537388c985b23e86581708806ef5d6dcbe8eb7637bf51ad5c4",
+      "bytes": 2553
+    },
+    {
+      "file": "runtime-source/make-compatibility-fixtures.py",
+      "source_run_file": "runtime-source/make-compatibility-fixtures.py",
+      "sha256": "30399b07b2c4be0297593611a62b05803209774c80fbbed041bdc2a872a5f50a",
+      "bytes": 6317
+    },
+    {
+      "file": "runtime-source/make-counterfactual-checks.py",
+      "source_run_file": "runtime-source/make-counterfactual-checks.py",
+      "sha256": "1894ba305e220f2b7d07ad0b60c3ff5a13c828cb9784e213fbbcdfc5b11be21b",
+      "bytes": 6327
+    },
+    {
+      "file": "runtime-source/make-independent-vision-checks.py",
+      "source_run_file": "runtime-source/make-independent-vision-checks.py",
+      "sha256": "1c56d6c0f60295008430f574f21f87647d305ae42bcd2be68ef1c2b9f77021d7",
+      "bytes": 4930
+    },
+    {
+      "file": "runtime-source/prepare-broader-alignment.py",
+      "source_run_file": "runtime-source/prepare-broader-alignment.py",
+      "sha256": "dc15fb7b0b29c1a8759fed87d5cf19ac370d029b8ed3e792edf693c3247caa59",
+      "bytes": 9092
+    },
+    {
+      "file": "runtime-source/prepare-qwen-projector-prototype.py",
+      "source_run_file": "runtime-source/prepare-qwen-projector-prototype.py",
+      "sha256": "32771a395f2ece6d0dd9433941a60d0cb12af03cf607b3ce27c35374229ba8fd",
+      "bytes": 4337
+    },
+    {
+      "file": "runtime-source/probe-stock-vision.cpp",
+      "source_run_file": "runtime-source/probe-stock-vision.cpp",
+      "sha256": "88ae0db0430c58fde3dc7a0462d549255991d58be115630b6559427d191838d6",
+      "bytes": 5685
+    },
+    {
+      "file": "runtime-source/qualify-full-training.py",
+      "source_run_file": "runtime-source/qualify-full-training.py",
+      "sha256": "06eb60334fceef55e1df1505ddbd88ba0e633ea78b87419ced1edfa9dc50708c",
+      "bytes": 13639
+    },
+    {
+      "file": "runtime-source/ragged-experts.py",
+      "source_run_file": "runtime-source/ragged-experts.py",
+      "sha256": "14a891f89a9f7a09381d1789313d2b734727b254a050bf5de00b6db71fa4378c",
+      "bytes": 4687
+    },
+    {
+      "file": "runtime-source/sample-ocr-evaluation.py",
+      "source_run_file": "runtime-source/sample-ocr-evaluation.py",
+      "sha256": "9a2bfe01e9dd268748b9f4400ad592f6bb5a8895b38c0b98b81fb97a116dc4e6",
+      "bytes": 5336
+    },
+    {
+      "file": "runtime-source/sample-ocr-text-evaluation.py",
+      "source_run_file": "runtime-source/sample-ocr-text-evaluation.py",
+      "sha256": "b83f3d6b0355b3c33e83ba14c87f3a520dd0651175bf5b68a05f7167d7b2a679",
+      "bytes": 6294
+    },
+    {
+      "file": "runtime-source/sample-training-data.py",
+      "source_run_file": "runtime-source/sample-training-data.py",
+      "sha256": "68130ac55664e182872fa33d53c2f4f644f021d39916c3c7018eed7df858d5d3",
+      "bytes": 11353
+    },
+    {
+      "file": "runtime-source/transfer-pretrained-projection.py",
+      "source_run_file": "runtime-source/transfer-pretrained-projection.py",
+      "sha256": "f9374b31f681564dca5081ae56d2f404b6d0d5fd5fde32a5751a073bd035f864",
+      "bytes": 5972
+    },
+    {
+      "file": "runtime-source/update-vision-status.py",
+      "source_run_file": "runtime-source/update-vision-status.py",
+      "sha256": "67dab1084f137c42474d42829fcf167c584249696ab6e6b248536861c2830923",
+      "bytes": 12470
+    },
+    {
+      "file": "runtime-source/verify-exported-projection.py",
+      "source_run_file": "runtime-source/verify-exported-projection.py",
+      "sha256": "e581151de26325367a50c7b4d48223ab57fe22ed66276269ab06b02c01684bcd",
+      "bytes": 2718
+    },
+    {
+      "file": "runtime-source/verify-full-stock-pilot.py",
+      "source_run_file": "runtime-source/verify-full-stock-pilot.py",
+      "sha256": "7dfb9b48a439d59f39cbaeae41cd84cacaec470453e6539bb220bb32462c7bb3",
+      "bytes": 6516
+    },
+    {
+      "file": "runtime-source/verify-ragged-experts.py",
+      "source_run_file": "runtime-source/verify-ragged-experts.py",
+      "sha256": "39a4cfa6a6a2435aa003af950f1f223f1fdb5e531133c6f4ea8da1c9e7b2a8cb",
+      "bytes": 4459
+    },
+    {
+      "file": "runtime-source/verify-stock-api-interface.py",
+      "source_run_file": "runtime-source/verify-stock-api-interface.py",
+      "sha256": "018d7f14ce6ec662d5ebb40e0e3eec2b0ed8ad1c1b52c248a2dc39e38249dc7e",
+      "bytes": 6436
+    },
+    {
+      "file": "runtime-source/verify-training-parity.py",
+      "source_run_file": "runtime-source/verify-training-parity.py",
+      "sha256": "c810b4cf74c9ba89802b458bf8836e1ac824d2d1664fb6cc5ae15c8bcb19e670",
+      "bytes": 3256
+    },
+    {
+      "file": "runtime-source/vision-feature-tap.cpp",
+      "source_run_file": "runtime-source/vision-feature-tap.cpp",
+      "sha256": "8745e6adaaa1cc198a9309c26c708834656b21995df7577ba7cccc67f91775be",
+      "bytes": 6017
+    },
+    {
+      "file": "runtime-source/vision-features.py",
+      "source_run_file": "runtime-source/vision-features.py",
+      "sha256": "1042328f3f47c09b35305bb0954c9179ed99b37bf400bfacf8eec11852432929",
+      "bytes": 3054
+    }
+  ],
+  "excluded_operations": [
+    "bf16-experiment-profile.py",
+    "launch-broader-recovery.py",
+    "run-broader-alignment.py"
+  ],
+  "python": "3.12.3",
+  "observed_packages": {
+    "torch": "2.12.0",
+    "numpy": "1.26.4",
+    "tokenizers": "0.22.2",
+    "gguf": null,
+    "Pillow": "10.4.0",
+    "huggingface-hub": "1.10.1",
+    "pyarrow": "24.0.0",
+    "fsspec": "2026.2.0"
+  },
+  "compiled_binaries_included": false,
+  "weights_or_dataset_media_included": false
+}

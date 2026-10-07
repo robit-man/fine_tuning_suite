@@ -1,0 +1,10 @@
+{
+  "source_repo": "Aleph-Alpha/Kolibri-1-BF16",
+  "source_revision": "7a8f290e7858825c3cf5e4c447ba68345de9f1d3",
+  "runtime_patch_repo": "Eliasfpv28/Kolibri-1-Q3_K_S-GGUF",
+  "runtime_patch_revision": "04f6e403e0db21f5ecb9d1c142f69204a43fe1e7",
+  "requested_order": [
+    "BF16 GGUF and Ollama",
+    "Q4_K_M GGUF and Ollama"
+  ]
+}

@@ -1,0 +1,122 @@
+{
+  "utc": "2026-10-07T07:24:20.211165+00:00",
+  "scope": "bounded pretrained-projection alignment; small development cohort only",
+  "pretrained_transfer": {
+    "utc": "2026-10-06T18:57:16.857966+00:00",
+    "scope": "pretrained projector initialization through shared-token ridge alignment; vision quality unqualified",
+    "donor_language_sha256": "852922174ee4f76621df26105333f1dfe2171cdfb60ebe5a4b013836681a8a77",
+    "donor_projector_sha256": "2635637dd72b4d39a97331373a73366b69a0a6a14151b2a1da0a97b311e2461f",
+    "target_language_sha256": "1e029937d835d4dd8c2a1ee775464585403b7492b7f5e987e19b231d679fc634",
+    "shared_tokens": 40000,
+    "training_rows": 32000,
+    "heldout_vocabulary_rows": 8000,
+    "selected": {
+      "ridge_factor": 1.0,
+      "r_squared": 0.33624696731567383,
+      "rmse": 0.010028242133557796,
+      "cosine_mean": 0.6379870176315308,
+      "target_rms": 0.012632588855922222,
+      "predicted_rms": 0.006500008050352335
+    },
+    "candidates": [
+      {
+        "ridge_factor": 0.01,
+        "r_squared": 0.31435537338256836,
+        "rmse": 0.010192274115979671,
+        "cosine_mean": 0.6203501224517822,
+        "target_rms": 0.012632588855922222,
+        "predicted_rms": 0.008979803882539272
+      },
+      {
+        "ridge_factor": 0.1,
+        "r_squared": 0.330954909324646,
+        "rmse": 0.010068139992654324,
+        "cosine_mean": 0.6275975108146667,
+        "target_rms": 0.012632588855922222,
+        "predicted_rms": 0.008531237952411175
+      },
+      {
+        "ridge_factor": 1.0,
+        "r_squared": 0.33624696731567383,
+        "rmse": 0.010028242133557796,
+        "cosine_mean": 0.6379870176315308,
+        "target_rms": 0.012632588855922222,
+        "predicted_rms": 0.006500008050352335
+      }
+    ],
+    "composition_rmse": 7.96131427449609e-09,
+    "seconds": 23.91133200499462,
+    "language_weights_changed": false,
+    "training_examples_used": 0,
+    "published": false
+  },
+  "projection_calibration": {
+    "source_image_rms": 0.04389032555636143,
+    "target_text_rms": 0.008688737793865605,
+    "scale": 0.19796476065569463,
+    "training_images_only": true
+  },
+  "feature_cache": "/srv/fine_tuning_suite/training_suite/outputs/kolibri-1-vision-20261006/feature-cache-broader-2048/manifest.json",
+  "training_examples": 2,
+  "validation_examples": 2,
+  "full_validation_partition_examples": 2,
+  "epochs": 1,
+  "learning_rate": 2e-05,
+  "warm_start_checkpoint": "/srv/fine_tuning_suite/training_suite/outputs/kolibri-1-vision-20261006/aligned-best-projector.pt",
+  "language_weights_changed": false,
+  "parity": [
+    {
+      "reference": "/srv/fine_tuning_suite/training_suite/outputs/kolibri-1-vision-20261006/compatibility/stock-gpu-layer-capture/logits.f32",
+      "rmse": 0.07976523041725159,
+      "kl": 0.00017452379688620567,
+      "passed": false
+    },
+    {
+      "reference": "/srv/fine_tuning_suite/training_suite/outputs/kolibri-1-vision-20261006/compatibility/full-bf16-stock.logits.bin",
+      "rmse": 0.009176147170364857,
+      "kl": 1.995710590563249e-06,
+      "passed": true
+    },
+    {
+      "reference": "/srv/fine_tuning_suite/training_suite/outputs/kolibri-1-vision-20261006/compatibility/stock-layer-capture/logits.f32",
+      "rmse": 0.01280936412513256,
+      "kl": 1.8776308934320696e-05,
+      "passed": true
+    }
+  ],
+  "steps": [],
+  "validations": [
+    {
+      "epoch": 0,
+      "optimizer_updates": 144,
+      "mean_token_loss": 1.2166703907219139,
+      "blank_mean_token_loss": 1.4619797242654335,
+      "examples": [
+        {
+          "id": "8fa3373e37fd07d11dcdd30d58857f05ec4fdfd2cf9fd43c5662a33efb4fe7f8:textvqa",
+          "config": "textvqa",
+          "loss": 1.7797116041183472,
+          "blank_loss": 1.5033067464828491,
+          "answer_tokens": 8,
+          "image_embedding_rms": 0.012269626371562481
+        },
+        {
+          "id": "0ebbc29c6147e2a6a5eb5331bd1be0684556677a36e1613f3ed4cee9e8d741c1:screenqa",
+          "config": "screenqa",
+          "loss": 1.0613486766815186,
+          "blank_loss": 1.4505791664123535,
+          "answer_tokens": 29,
+          "image_embedding_rms": 0.014621126465499401
+        }
+      ]
+    }
+  ],
+  "gpu_uuids": [
+    "GPU-170a99ee-850f-2182-1050-4e8d3c87b6b0"
+  ],
+  "cpu_layers": 32,
+  "cpu_threads": 8,
+  "published": false,
+  "optimizer_updates": 144,
+  "stage_optimizer_updates": 0
+}

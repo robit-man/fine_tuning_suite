@@ -1,0 +1,1480 @@
+{
+  "utc": "2026-10-06T19:16:13.120955+00:00",
+  "tag": "kolibri-vision-aligned:q4_k_m-20261006",
+  "projector_sha256": "e04280d08056feb4197db272d2625b8bc18706961dc64dfce2ae85f98d4b1c0d",
+  "language_sha256": "fa6ccc6467702ea435876ed0e13f135ec268be8d7818ba66201de44eadb8181f",
+  "optimizer_updates": 144,
+  "scope": "small independent-all cohort only; not a published benchmark",
+  "published": false,
+  "examples": [
+    {
+      "id": "invoice-id",
+      "config": "document_ocr",
+      "question": "What is the invoice identifier? Return only the identifier.",
+      "reference": "KBR-5937",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "KBR-5937",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 1089,
+          "output_tokens": 8,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "INV-2024-08-04-08-20-08-20-08-20-08-20-08-20-08-20-08-20-08-20-08-20-08-20-08-20-08-20-08-20-08-20-08-20-08-20-08-20-08-20-08-20-0",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 1124,
+          "output_tokens": 128,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "invoice-total",
+      "config": "document_ocr",
+      "question": "What is the total including shipping? Return only the dollar amount.",
+      "reference": "$112.25",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "112.25",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 1091,
+          "output_tokens": 7,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "$75.00",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 1126,
+          "output_tokens": 7,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "table-lookup",
+      "config": "table_reading",
+      "question": "How many Osprey items are in the inventory? Return only the number.",
+      "reference": "47",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "47",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 778,
+          "output_tokens": 3,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "84",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 812,
+          "output_tokens": 3,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "paragraph-code",
+      "config": "document_ocr",
+      "question": "Read the access code from the notice. Return only the code.",
+      "reference": "N7Q4-Z8M2",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "N7Q4-Z8M2",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 775,
+          "output_tokens": 9,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "NQZ8M",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 810,
+          "output_tokens": 6,
+          "anls": 0.5555555555555556,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "ui-button",
+      "config": "screenshot_ocr",
+      "question": "What does the blue button say? Return only its label.",
+      "reference": "Synchronize",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Synchronize",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 808,
+          "output_tokens": 3,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Cancel",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 843,
+          "output_tokens": 2,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "bar-chart",
+      "config": "chart_understanding",
+      "question": "Which category has the tallest bar? Return only its name.",
+      "reference": "Bravo",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Bravo",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 642,
+          "output_tokens": 3,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Bravo",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 677,
+          "output_tokens": 3,
+          "anls": 1.0,
+          "normalized_exact": true
+        }
+      }
+    },
+    {
+      "id": "spatial-shape",
+      "config": "spatial_reasoning",
+      "question": "What shape is red? Return only the shape name.",
+      "reference": "circle",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "circle",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 707,
+          "output_tokens": 2,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "circle",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 742,
+          "output_tokens": 2,
+          "anls": 1.0,
+          "normalized_exact": true
+        }
+      }
+    },
+    {
+      "id": "spatial-position",
+      "config": "spatial_reasoning",
+      "question": "Is the blue object on the left or right? Return only left or right.",
+      "reference": "right",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "right",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 712,
+          "output_tokens": 2,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "left",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 747,
+          "output_tokens": 2,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "23f71f7c9d1f4db529d610cbc844cd38eae05b4d103e21b5f01bce91ed2caf5f:docvqa",
+      "config": "docvqa",
+      "question": "In which unit is time plotted in this graph?\nMake the answer very short.",
+      "reference": "(DAYS).",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Days",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3167,
+          "output_tokens": 2,
+          "anls": 0.8,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "hours",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3201,
+          "output_tokens": 2,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "50ee07dbef2bd0344c196b5e72874ffe3ee7012be60704acce0d6b8a20233b74:docvqa",
+      "config": "docvqa",
+      "question": "At What time the Closing Remarks?\nYour answer should be compact.",
+      "reference": "5:00 p.m.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "5:00 p.m.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3228,
+          "output_tokens": 8,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "12:30 PM.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3262,
+          "output_tokens": 8,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "245a84acb97a8b6dd51add69b96c59e31cba4a7d868e5a5f2a7f2ec8e7ef8105:docvqa",
+      "config": "docvqa",
+      "question": "Name the factory in which the water analysis is conducted ?\nYour answer should be compact.",
+      "reference": "Johnstown Sugar Factory.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Johnstown Sugar Factory",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3168,
+          "output_tokens": 5,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "MgCl.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3202,
+          "output_tokens": 4,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "8f33882c884c88110fb33d703540b706d19098fbd6920189818389ca53fbe157:docvqa",
+      "config": "docvqa",
+      "question": "What is the name of the person given in the form?\nOffer a very short reply.",
+      "reference": "John Victor Ostermiller.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "John Victor Ostermiller",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2529,
+          "output_tokens": 6,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Osterman.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2563,
+          "output_tokens": 5,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "5a6f6146b5115b8515ef7771af1b4e4e6f49bcc4d3f0d5c195ff1069c792070b:docvqa",
+      "config": "docvqa",
+      "question": "Where is the flight destination?\nGive a very brief answer.",
+      "reference": "Goodland.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Goodland",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3227,
+          "output_tokens": 3,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Goodland.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3261,
+          "output_tokens": 4,
+          "anls": 1.0,
+          "normalized_exact": true
+        }
+      }
+    },
+    {
+      "id": "16244eb20a75e8c1aba3584c7d6d35289d3ffe2eb0c678895ba9b955623b9b53:docvqa",
+      "config": "docvqa",
+      "question": "What is the Heading of the document ?\nGive a very brief answer.",
+      "reference": "UNITED STATES BEET SUGAR ASSOCIATION.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "UNITED STATES BEET SUGAR ASSOCIATION",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3165,
+          "output_tokens": 12,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Headline: \"FEDERAL DEPT. OF TAXES\"",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3200,
+          "output_tokens": 14,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "a102e8b4c41edd0ecd9375e81f2bef01cee6e5a500432a8783b623f8625ea79e:docvqa",
+      "config": "docvqa",
+      "question": "What is this company offering according to the picture?\nProvide a succinct answer.",
+      "reference": "FREE SUGAR COUPON.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Free sugar offers.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 1094,
+          "output_tokens": 5,
+          "anls": 0.6470588235294117,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Free Sugar.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 1128,
+          "output_tokens": 4,
+          "anls": 0.5882352941176471,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "4056a91a821b92ff92f1415c43a3ca229163db9e961a969667e7ee0c6348eee8:docvqa",
+      "config": "docvqa",
+      "question": "After how many months is the division sent to japan?\nYour answer should be very brief.",
+      "reference": "Nine months.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Nine months",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3169,
+          "output_tokens": 3,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "12 months.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3203,
+          "output_tokens": 5,
+          "anls": 0.6363636363636364,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "9bb63772893a7916e8ded0bea69d920ccd3e962bb8e05aecfe79d285d8caaef5:docvqa",
+      "config": "docvqa",
+      "question": "When is the New Scientist dated?\nMake the answer very short.",
+      "reference": "JUne 1969.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "June 1969-",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3164,
+          "output_tokens": 8,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "June 1979.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3198,
+          "output_tokens": 8,
+          "anls": 0.8888888888888888,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "fc31bc796bf1dd24ca4a103deaafc93eb300ed3419a8985abc97042f6d7a32d0:docvqa",
+      "config": "docvqa",
+      "question": "Which company is mentioned in the letterhead?\nYour response must be concise.",
+      "reference": "BETASEED, INC.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Betaseed, Inc.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3230,
+          "output_tokens": 7,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "G.W. Joint Research.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 3264,
+          "output_tokens": 7,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "4b1387cc644fadb273d08d59962fb93e4a95aa9c231c62150247906bf6d17751:textvqa",
+      "config": "textvqa",
+      "question": "What is the brand of phone?\nOffer a terse response.",
+      "reference": "Nokia.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Nokia",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 763,
+          "output_tokens": 3,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Nokia.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 798,
+          "output_tokens": 4,
+          "anls": 1.0,
+          "normalized_exact": true
+        }
+      }
+    },
+    {
+      "id": "a8e6c4d7d0e087749552f6b0cf5476a502a12fa5611d1ac67262adfcf8ca0096:textvqa",
+      "config": "textvqa",
+      "question": "What is the id number on the tail of the plane?\nProvide a short and direct response.",
+      "reference": "513.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "513",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 802,
+          "output_tokens": 4,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "59.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 836,
+          "output_tokens": 4,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "84dc148322361bd1bda2a41536634518ee8f3259453d408fb0f3845377bf2ce5:textvqa",
+      "config": "textvqa",
+      "question": "What is the identification number of the plane?\nYour response must be concise.",
+      "reference": "N10349.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "N10349",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 702,
+          "output_tokens": 7,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "N1234.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 736,
+          "output_tokens": 7,
+          "anls": 0.6666666666666667,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "16a9c03cf025cfd6d3ff8b117a06ef950a6eaf5c7e6f72f1df0f7635b77f760d:textvqa",
+      "config": "textvqa",
+      "question": "What country do these airplanes come from?\nProvide a short and direct response.",
+      "reference": "Japan.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Japan",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 734,
+          "output_tokens": 2,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Japan.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 768,
+          "output_tokens": 3,
+          "anls": 1.0,
+          "normalized_exact": true
+        }
+      }
+    },
+    {
+      "id": "f139d6780fe3c4e63ef5f4f924fc6895ac7e8dabe7f2a642bc5f63cfa4bf2b6f:textvqa",
+      "config": "textvqa",
+      "question": "What girl's name is found on the plane?\nKeep it short and to the point.",
+      "reference": "Louise.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Louise",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 705,
+          "output_tokens": 3,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Louise.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 739,
+          "output_tokens": 4,
+          "anls": 1.0,
+          "normalized_exact": true
+        }
+      }
+    },
+    {
+      "id": "c5aa8500f0acee5b2d187b9b65434497fd92131fe1d8b21c897b689eb649fb73:textvqa",
+      "config": "textvqa",
+      "question": "What branch of the military does this plane belong to?\nYour response must be concise.",
+      "reference": "Navy.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Navy",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 704,
+          "output_tokens": 3,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Air Force.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 738,
+          "output_tokens": 4,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "f4ff7c1549e6fe4ad3545d615a572734fef56a857582ff31520bcf760047b9b5:textvqa",
+      "config": "textvqa",
+      "question": "What tire brand sponsor is on this racecar?\nOffer a very short reply.",
+      "reference": "Goodyear.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Goodyear",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 639,
+          "output_tokens": 4,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Goodyear.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 673,
+          "output_tokens": 4,
+          "anls": 1.0,
+          "normalized_exact": true
+        }
+      }
+    },
+    {
+      "id": "debbfd8f9ad2e387d0723a962dd03999d13e59b8b09e3d96fd1acad91669acb2:textvqa",
+      "config": "textvqa",
+      "question": "What is the plane number?\nProvide a succinct answer.",
+      "reference": "120.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "120",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 858,
+          "output_tokens": 4,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "I01.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 892,
+          "output_tokens": 5,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "2f1df8d544cce535dd08c3e1488be9da32c23278a59808038200d9f41e924a28:textvqa",
+      "config": "textvqa",
+      "question": "What branch of the military is in this photo?\nOffer a very short reply.",
+      "reference": "Marines.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Marines",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 863,
+          "output_tokens": 3,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "US Navy.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 897,
+          "output_tokens": 4,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "b1be85f94c4fac402796c2d58efb1ec8b0cc256bf3d57ec470407ef866ab9b64:textvqa",
+      "config": "textvqa",
+      "question": "What country name is displayed on the jet?\nOffer a very short reply.",
+      "reference": "Australia.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Australia",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 702,
+          "output_tokens": 2,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "USA.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 736,
+          "output_tokens": 3,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "faf10f0ef5ac17e76a7863cac4bd6926cbf0e88b60dd19e15da6e6f8dcdff1df:screenqa",
+      "config": "screenqa",
+      "question": "In which version is the widget mode only available?",
+      "reference": "The widget mode is only available in the PLUS version.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Widget mode is only available in the PLUS version.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2064,
+          "output_tokens": 11,
+          "anls": 0.9245283018867925,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The widget mode is only available in the version \"US\".",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2099,
+          "output_tokens": 13,
+          "anls": 0.8301886792452831,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "a03ac1c27144c3493b1cd1a78ab2c4567f8101220746b08f35a696dd75576a12:screenqa",
+      "config": "screenqa",
+      "question": "Which tab has been selected?",
+      "reference": "The tab \"Artists\" has been selected.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "The **Artists** tab has been selected.\n\nThis is indicated by:\n- The tab being highlighted with a lighter gray background compared to the others (Albums, Songs, Playlists).\n- The microphone icon above \"Artists\" appearing brighter/more prominent than the icons for the other tabs.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2060,
+          "output_tokens": 64,
+          "anls": 0.0,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The selected tab is \"Top Topmobile\".",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2095,
+          "output_tokens": 10,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "b5a2dc27130c44ce78ecb0693d856f0a6de05b22e8f354c69c602c721cf81c01:screenqa",
+      "config": "screenqa",
+      "question": "What's the status of \"Station Alerts\"?",
+      "reference": "The status is \"on\".",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "\"Station Alerts\" is **enabled** (the toggle switch is on). \n\nIt displays weather alerts issued by your local TV station.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2063,
+          "output_tokens": 28,
+          "anls": 0.0,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The status of \"Station Alerts\" is \"SHOW ALERTS IN STATUS\".",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2098,
+          "output_tokens": 18,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "37bf4ea1fdf9e047dd6f918f19fe028b32d965a1583883161a1aca7ed42ac904:screenqa",
+      "config": "screenqa",
+      "question": "What is the selected country?",
+      "reference": "The selected country is the United States.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "The selected country is **United States**.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2060,
+          "output_tokens": 9,
+          "anls": 0.8780487804878049,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The selected country is United States.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2095,
+          "output_tokens": 8,
+          "anls": 0.9024390243902439,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "50d40227b3ddec2ba1087eb819bd9204bb39fa0419bd4b0630675997280cbaa7:screenqa",
+      "config": "screenqa",
+      "question": "Which option is selected?",
+      "reference": "The selected option is \"mangapark\".",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "The selected option is **mangapark**, as indicated by the filled radio button next to it.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2059,
+          "output_tokens": 22,
+          "anls": 0.0,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The selected option is \"Start Your Journey\".",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2094,
+          "output_tokens": 10,
+          "anls": 0.6190476190476191,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "3beb906438a3881ef1276a88b4ff8d3820efd45edd3adf47a70db69a358c23d9:screenqa",
+      "config": "screenqa",
+      "question": "Which date is selected?",
+      "reference": "The selected date is January 5.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "The selected date is **Thursday, 5 January**.\n\nThis is indicated by the highlighted \"THU\" and \"5\" in the date picker at the top of the screen. The other dates (Tue 3, Wed 4, Fri 6, Sat 7) are not highlighted, showing that Thursday the 5th is the chosen travel date for the Aalborg to Abu Dhabi flight.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 529,
+          "output_tokens": 83,
+          "anls": 0.0,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The selected date is 10/08/2025.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 564,
+          "output_tokens": 17,
+          "anls": 0.7096774193548387,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "4ca10cdb3b143ca6670b7258897774364c1a4b549419b5d1caa5f60c64b21c17:screenqa",
+      "config": "screenqa",
+      "question": "What model is available on the screen?",
+      "reference": "The model is \"AOSP on Shamu\".",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "The model available on the screen is **AOSP on Shamu**.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2062,
+          "output_tokens": 15,
+          "anls": 0.5294117647058824,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The model available on the screen is \"AOSP on SHAMU\".",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2097,
+          "output_tokens": 16,
+          "anls": 0.5294117647058824,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "8e836e1929867ca860263f05c0fd80f6217e61e1664c4ee991cc0fb1c2623919:screenqa",
+      "config": "screenqa",
+      "question": "What kinds of backgrounds do we have?",
+      "reference": "The kinds of backgrounds that you have are \"Default\", \"Classic\" and \"Arabesque\".",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Based on the image provided, there are three background options available:\n\n1.  **Default -** This features an ornate, dark green border with intricate scrollwork in the top corners and along the bottom edge.\n2.  **Classic -** This is a simple, textured tan or beige background with a subtle stitched-line border.\n3.  **Arabesque -** This shows a gold-colored frame with geometric patterns in the corners around a white central area.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2062,
+          "output_tokens": 95,
+          "anls": 0.0,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "We have decorative, floral, and arabesque backgrounds.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2097,
+          "output_tokens": 12,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "153e537118e268d1e6de64ec5be874e3ea5c72f57e7f0b8a1636d00e8afc4281:screenqa",
+      "config": "screenqa",
+      "question": "What are the available loud ringtones in the list?",
+      "reference": "The available loud ringtones in the list are \"Ringtone 1\", \"Ringtone 2\", \"Ringtone 3\", \"Ringtone 4\", \"Ringtone 5\", \"Ringtone 6\", \"Ringtone 7\" and \"Ringtone 8\".",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "The available loud ringtones in the list are:\n\n- Ringtone 1\n- Ringtone 2\n- Ringtone 3\n- Ringtone 4\n- Ringtone 5\n- Ringtone 6\n- Ringtone 7\n- Ringtone 8\n\nAdditionally, there is a \"Random play\" option.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 536,
+          "output_tokens": 72,
+          "anls": 0.7428571428571429,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The available loud ringtones in the list are: \"RINGTONE 1\", \"RINGTONE 2\", \"RINGTONE 3\", \"RINGTONE 4\", \"RINGTONE 5\", \"RINGTONE 6\", \"RINGTONE 7\", \"RINGTONE 8\", \"RINGTONE 9\", \"RINGTONE 10\".",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 570,
+          "output_tokens": 92,
+          "anls": 0.858974358974359,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "6326f2aa55de02ba52900e6e9e9fb0f0e4f35059f70388fb831b126447b7607f:screenqa",
+      "config": "screenqa",
+      "question": "What is the missing date of A.J. Campbell?",
+      "reference": "The missing date of A.J. Campbell is 9/6/1958.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "A.J. Campbell has been missing since **9/6/1958**.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2065,
+          "output_tokens": 19,
+          "anls": 0.0,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The missing date of A.J. Campbell is 1/25.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 2100,
+          "output_tokens": 16,
+          "anls": 0.8666666666666667,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "1712e66a5e2fd0505cc3461071ee29d58960ec4e00e3648ab9bf909e6ead164d:chartqa",
+      "config": "chartqa",
+      "question": "What's the percentage of people choosing don't know?\nKeep it brief.",
+      "reference": "6.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "6%",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 108,
+          "output_tokens": 3,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "25%.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 142,
+          "output_tokens": 4,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "7ac1e2d0204e035c6650a9309597abf76479addb3f3cde1558d42c996b73ba5e:chartqa",
+      "config": "chartqa",
+      "question": "What is the value of the smallest segment?\nBe succinct.",
+      "reference": "23.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "23%",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 99,
+          "output_tokens": 4,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "2.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 133,
+          "output_tokens": 3,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "7d22301c35e410ea9fca2adb0b33f4e4691bf7e81769700942088313859704c7:chartqa",
+      "config": "chartqa",
+      "question": "How many color are used to represent different views?\nGive a very brief answer.",
+      "reference": "4.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Four colors are used: dark gold (almost all issues), medium gold (most issues), light beige (mix of conservative and liberal on issues), and gray (liberal on all/most issues).",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 148,
+          "output_tokens": 41,
+          "anls": 0.0,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Five.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 182,
+          "output_tokens": 3,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "47ec073ecf8a23f34c4d6fedd4c6551a9c1c762c2022f1ff1ce948c21754e1b4:chartqa",
+      "config": "chartqa",
+      "question": "What Age group shows 44 percent in graph?\nAnswer briefly.",
+      "reference": "Children 13-17.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Children 13-17",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 169,
+          "output_tokens": 8,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Yes.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 203,
+          "output_tokens": 3,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "a4bc5da234826fe41b07e0025b063f1adb11c15aa242a8f136ceaabb72701542:chartqa",
+      "config": "chartqa",
+      "question": "What is the highest value in the chart?\nQuick response, please.",
+      "reference": "228671.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "The highest value in the chart is **228,671 tonnes** (Dominican Republic).",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 542,
+          "output_tokens": 23,
+          "anls": 0.0,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "27.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 576,
+          "output_tokens": 4,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "632997977226a9aca052ae7ec653743e530620e7fedc54078424e6b44ee18e77:chartqa",
+      "config": "chartqa",
+      "question": "What is the average of smallest three bars?\nConcise answer only.",
+      "reference": "351.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "364.33",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 543,
+          "output_tokens": 7,
+          "anls": 0.0,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "12.5",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 576,
+          "output_tokens": 5,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "05c0678f3c2007da634e21eff816ec4e0cd7784670ce3b4d6b50c4c95697f620:chartqa",
+      "config": "chartqa",
+      "question": "How many bars are there in the graph?\nShort answer required.",
+      "reference": "5.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "There are 5 bars in the graph.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 541,
+          "output_tokens": 10,
+          "anls": 0.0,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "20.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 575,
+          "output_tokens": 4,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "b5f40e89d762e106e6769af2ab9501b992708ca113e18e27e8b8b3fe4fa5661c:chartqa",
+      "config": "chartqa",
+      "question": "Which two countries are being compared in the given line graph?\nShort answer required.",
+      "reference": "[Lithuania, Papua New Guinea].",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Lithuania and Papua New Guinea",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 544,
+          "output_tokens": 8,
+          "anls": 0.8333333333333334,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Argentina and Uruguay.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 578,
+          "output_tokens": 5,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "c79417d6ed9546daf554d30fb3bbbca5628ff161fa9eaef86c31d3efea6e3e94:chartqa",
+      "config": "chartqa",
+      "question": "Which country has a peak value of CPA greater than 140?\nConcise answer only.",
+      "reference": "Israel.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Israel",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 468,
+          "output_tokens": 2,
+          "anls": 1.0,
+          "normalized_exact": true
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Israel.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 501,
+          "output_tokens": 3,
+          "anls": 1.0,
+          "normalized_exact": true
+        }
+      }
+    },
+    {
+      "id": "452dcf31acbce72a700578598c98703aaae0d8439c498960856e81c691c5f712:chartqa",
+      "config": "chartqa",
+      "question": "How many values in light blue bar exceeds 30?\nBe succinct.",
+      "reference": "3.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "4",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 505,
+          "output_tokens": 2,
+          "anls": 0.0,
+          "normalized_exact": false
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "25.",
+          "done": true,
+          "reason": "stop",
+          "prompt_tokens": 539,
+          "output_tokens": 4,
+          "anls": 0.0,
+          "normalized_exact": false
+        }
+      }
+    },
+    {
+      "id": "9e33fc7d9f0a920349861dfa873bf3eb95c6444e83740d4b1c8b717c6e6193cb:sharegpt4v(coco)",
+      "config": "sharegpt4v(coco)",
+      "question": "Explain the visual content of the image in great detail.",
+      "reference": "The image presents a delightful scene from a restaurant. The main focus is a cardboard takeout box placed on a white table. The box houses a delicious assortment of Italian cuisine - a medium-sized pizza and two calzones.\n\nOn the right side of the box, there's a pizza with a generous spread of red sauce, topped with cheese and sausage. The pizza appears to be of medium size and cooked to perfection.\n\nOn the left side of the box, there are two calzones. They are rolled up neatly, showcasing their golden brown crust that seems to have been baked just right.\n\nIn the background, there's a red soda cup, adding a pop of color to the scene. There's also a glimpse of a blue shirt, perhaps indicating the presence of a person outside the frame.\n\nOverall, the image captures a simple yet enticing moment at a restaurant, with the pizza and calzones taking center stage.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "This is a close-up, slightly high-angle photograph of a casual meal laid out on a table, likely taken indoors under artificial lighting. The scene has a candid, everyday quality.\n\n**Main Subjects:**\n\n1. **Pizza (right):** A round pizza sits in an open cardboard box. It appears to be a cheese or margherita-style base with a golden-brown crust that's slightly puffed and blistered at the edges. The toppings include melted, bubbly cheese (yellowish-white) and numerous dark brown chunks scattered across the surface\u2014these are most likely pieces of cooked sausage or pepperoni, though they could also",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 265,
+          "output_tokens": 128
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The image depicts a **large slice of pizza** placed on a **white plate** with a **blue rim**, which is situated on a **wooden table**. The pizza is a **classic New York-style slice**, characterized by its **thin crust** and **folded edges**. The **toppings** include **pepperoni slices** (red and slightly curled), **melted mozzarella cheese** (white and gooey), and **green bell peppers** (diced and scattered across the surface). A **small bowl of ranch dressing** sits beside the plate, likely for dipping.  \n\nThe **background** is a **",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 300,
+          "output_tokens": 128
+        }
+      }
+    },
+    {
+      "id": "c5c02973df006b8e2dc3006903272a587d6a22d59f6fc6cd8e8742090c8c5944:sharegpt4v(coco)",
+      "config": "sharegpt4v(coco)",
+      "question": "Analyze the image in a comprehensive and detailed manner.",
+      "reference": "This image captures a cozy kitchen scene, bathed in warm light. The kitchen is furnished with six wooden cabinets painted in a light orange hue, lending a rustic charm to the space. These cabinets are complemented by white appliances that include a refrigerator, a stove, and a microwave, all neatly arranged to maximize functionality.\n\nThe stove, standing proud and central, has a towel casually draped over its handle, suggesting recent use. The counter, acting as the heart of this kitchen, hosts an array of everyday items. A coffee maker, blender, and toaster stand ready for use, hinting at the delicious meals and beverages prepared in this space.\n\nThe floor beneath is a soothing light blue color, providing a cool contrast to the warm tones of the wooden cabinets. On the right side of the photo, a window punctuates the scene, perhaps offering a view to an outside world or bathing the kitchen in natural light during the day.\n\nEvery element in this image comes together to paint a picture of a well-used and loved kitchen, where food is prepared with care and shared with love.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "# Kitchen Analysis\n\n## Overview\nThis is a domestic kitchen featuring warm wood cabinetry, light-colored appliances, and a checkered wallpaper pattern. The space appears functional and lived-in with various items on the countertops.\n\n## Key Features\n\n### Cabinetry & Storage\n- **Wood cabinets** in a honey-toned finish dominate the upper and lower storage\n- Upper cabinets run along the wall above the counter\n- A distinctive **open shelf niche** houses a white microwave oven, creating built-in integration\n- Cabinet hardware consists of simple metallic handles (appears to be brass or gold-toned)\n\n### Appliances\n- **Re",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 217,
+          "output_tokens": 128
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The image depicts a **kitchen scene** with a **freestanding stove** (likely a range or cooktop) positioned against a wall. Here's a detailed breakdown of the elements:\n\n1. **Stove**:  \n   - A **white stove** with **blue knobs** and a **digital display** (likely an oven or cooktop).  \n   - The stove has **four burners** (two on the left, two on the right) and a **small oven door** at the bottom.  \n   - The stove is **freestanding** and placed against a **white wall**.  \n\n2. **Countertops**:",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 251,
+          "output_tokens": 128
+        }
+      }
+    },
+    {
+      "id": "7463277f0897a7c605778f080a858635238f00fa5f995d520c0b264de330899c:sharegpt4v(coco)",
+      "config": "sharegpt4v(coco)",
+      "question": "Describe the following image.",
+      "reference": "The image depicts the iconic clock tower at the Tsim Sha Tsui Ferry Pier in Hong Kong. The tower, constructed of brick and featuring a square base, is illuminated by warm orange lights that contrast beautifully with the dark, cloudy sky overhead. Each of the tower's four sides is adorned with a clock face, allowing the time to be seen from multiple directions. Atop the tower, a spire reaches towards the sky, completing the distinctive silhouette of this historic landmark. The image captures not only the architectural details of the tower but also the atmospheric conditions of the moment, creating a captivating visual narrative.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "This is a low-angle night photograph of an illuminated clock tower, captured against a dark, overcast sky.\n\n**The Tower:**\n- The structure is tall and rectangular, tapering slightly as it rises, with a domed cupola topped by a slender spire or antenna at its peak.\n- It appears to be built from light-colored stone or concrete on the upper sections and reddish-brown brick on the lower portions, creating a textured contrast.\n- Two large, round clock faces are visible on adjacent sides, both glowing warmly with white faces and dark Roman numerals. The hands indicate approximately 10:",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 319,
+          "output_tokens": 128
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The image depicts a classic **\"Tallest Building in the World\"** sign, a common sight in the United States. Here's a breakdown of the scene:\n\n1. **Main Structure**: A tall, rectangular sign stands upright, featuring the words **\"TALLEST BUILDING IN THE WORLD\"** in large, bold letters. The sign is mounted on a pole.\n\n2. **Sign Details**:  \n   - The text is white against a dark background (likely black or dark blue).  \n   - The letters are in a sans-serif font, clear and legible.  \n   - The phrase \"TALLEST BUILDING IN THE",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 354,
+          "output_tokens": 128
+        }
+      }
+    },
+    {
+      "id": "4d370de4d5518c68f69c2139dc0a1b04f2d14d44a4b8db34220612d99c02425b:sharegpt4v(coco)",
+      "config": "sharegpt4v(coco)",
+      "question": "What are the key elements in this picture?",
+      "reference": "The image features a **white city bus** parked on the side of a road. The bus is adorned with a **blue and green logo** on its side. It bears the number **4014** prominently displayed on both the front and side. The front of the bus also displays the route information, reading \"**41 Crosstown**\". An advertisement for \"**Lands' End**\" is visible on the side of the bus. The background of the image reveals a peaceful scene of trees and a sidewalk, suggesting that the bus is parked in a serene, possibly residential, area.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "This image shows a **public transit bus** parked on a street. Here are the key elements:\n\n## Vehicle Details\n- **Type**: Large public transit bus (articulated or standard length)\n- **Fleet number**: 4014 (shown in multiple places)\n- **Route**: Route 41 \"CROSSTOWN\" displayed on the electronic destination sign\n- **Operator**: Metro (logo visible with a blue star/asterisk symbol)\n- **Website**: www.gotransit.com visible on the side\n\n## Physical Features\n- White body with blue and green decorative graphics on the",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 323,
+          "output_tokens": 128
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "This image is a detailed description of a picture, likely a digital illustration or a photo of a bus. Here are the key elements mentioned:\n\n1. **Bus**: The main subject is a bus, specifically a \"Metropolitan Transit Authority\" (MTA) bus.\n2. **Bus Number**: The bus number is \"104\".\n3. **Destination**: The destination is \"Croston\".\n4. **Route**: The route is \"Croston\".\n5. **Bus Type**: The bus is a \"Metropolitan Transit Authority\" bus.\n6. **Bus Color**: The bus is \"Metropolitan Transit Authority\"",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 358,
+          "output_tokens": 128
+        }
+      }
+    },
+    {
+      "id": "e2804eed59a0b57a4d2a66478a27178ed35f6dbdee33ed02842786529e0433c2:sharegpt4v(coco)",
+      "config": "sharegpt4v(coco)",
+      "question": "Analyze the image in a comprehensive and detailed manner.",
+      "reference": "The image depicts a serene beach scene. In the foreground, a man is seen walking on the light brown sand of the beach. He is barefoot and dressed in black shorts. Under his arm, he carries a white surfboard adorned with a pink logo on the nose. \n\nThe man is moving towards the right side of the image, seemingly heading towards the ocean. The ocean itself is visible in the background, its surface disturbed by small waves breaking near the shore. Above, the sky is a clear blue, adding to the overall tranquility of the scene. \n\nThe image captures a moment of anticipation and peace, as the man prepares to engage with the sea. The colors, objects, and their relative positions all contribute to a sense of harmony and balance.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "I'll analyze this image comprehensively, examining its various elements and their significance.\n\n## Overall Scene\n\nThis is a serene beach scene featuring an elderly man walking along the shoreline while carrying a surfboard. The composition captures a moment of peaceful activity at what appears to be a calm day at the beach.\n\n## Subject Analysis: The Surfer\n\n**Physical Characteristics:**\n- An older man with white/gray hair, suggesting he's senior in age\n- Bare-chested, revealing a tattoo on his left upper arm\n- Wearing dark board shorts (appears black or very dark navy)\n- Walking barefoot on the",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 265,
+          "output_tokens": 128
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The image depicts a man surfing on a surfboard. He is wearing a wetsuit, a helmet, and a life jacket. The surfboard has a \"SURF\" logo on it. The man is standing on the surfboard, with his feet on the board and his hands on the surfboard's rail. The background is a beach with waves. The sky is blue with some clouds. The water is turquoise. The man is smiling. The image is a digital painting. The style is realistic. The colors are vibrant. The composition is balanced. The man is the focal point of the image. The image is well-lit",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 299,
+          "output_tokens": 128
+        }
+      }
+    },
+    {
+      "id": "996cac15cca863069ac6312465514ef0c335e0024ba19a196af67f02170d401f:sharegpt4v(coco)",
+      "config": "sharegpt4v(coco)",
+      "question": "Write a detailed description of the given image.",
+      "reference": "In the heart of the deep blue ocean, a surfer in a vibrant yellow wetsuit is caught in a moment of pure exhilaration. The surfer, perfectly balanced on a pink and orange surfboard, is riding a wave that's breaking to the right. The surfer's body leans into the turn, mirroring the curve of the wave, creating a dynamic sense of movement.\n\nThe surfer is positioned in the center of the image, serving as the focal point amidst the vast expanse of the ocean. To the right, the wave rises like a wall, its white froth contrasting with the ocean's deep blue. To the left, the calm ocean stretches out endlessly, its surface glistening under the light blue sky.\n\nEvery element in this image comes together to capture a single, fleeting moment of adventure and freedom in the heart of nature's grandeur.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "# Surfing in the Waves\n\nA dynamic scene captures a surfer mid-action as they ride a breaking wave. The image is filled with energy and movement, showcasing the raw power of the ocean.\n\n## The Surfer\n\nThe central figure is a young person with dark hair, wearing a yellow or tan wetsuit top paired with black leggings or pants. Their body is angled dramatically as they crouch low on their board, arms extended for balance\u2014one reaching forward and one back, creating an athletic pose that conveys motion and control. The surfer appears focused and determined, fully engaged in the moment.\n\n## The Wave and",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 283,
+          "output_tokens": 128
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The image captures a dynamic and vibrant scene of a surfer riding a wave under a bright blue sky. Here's a detailed breakdown:\n\n1. **Surfer**: A young man with a tan is depicted in the act of surfing. He is wearing a yellow wetsuit with a white stripe down the side, which contrasts with the blue ocean. His hair is wet and flowing, and he appears focused and exhilarated.\n\n2. **Surfboard**: The surfer is standing on a yellow surfboard with a white stripe. The board is in motion, riding a wave.\n\n3. **Wave**: The wave is a large, rolling swell with white",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 318,
+          "output_tokens": 128
+        }
+      }
+    },
+    {
+      "id": "c4a3b8023329a4fb456b5af24f3cec8643c27369759e5305c565496efa7eb12c:sharegpt4v(coco)",
+      "config": "sharegpt4v(coco)",
+      "question": "Explain the visual content of the image in great detail.",
+      "reference": "The image showcases a delightful miniature tea party setup. The scene is set against a backdrop of a pink wall, adding a touch of charm and warmth to the overall setting. \n\nThe main focus is a white wooden table, adorned with a colorful bunting that hangs from its edge. The table hosts an array of desserts and drinks, meticulously arranged to create an inviting atmosphere.\n\nThere are two glass jars, one filled with a pink liquid and the other with a green liquid, possibly representing different types of beverages for the imaginary guests. \n\nFour plates of desserts grace the table, each with a different treat. One plate holds a slice of cake, another has an assortment of cookies and macarons. A third plate features a slice of pie, and the fourth plate presents a slice of cheesecake. Each dessert is crafted with attention to detail, adding to the realism of the miniature setup.\n\nIn addition to the food and drinks, there's also a small white plate with a single pink rose on it, perhaps serving as a centerpiece or decorative element for the table.\n\nOverall, the image captures the essence of a quaint and charming tea party, where every object has been carefully placed to create an engaging and detailed scene.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "This is a beautifully crafted miniature food scene, likely dollhouse or micro-scale artistry, set against a soft pink backdrop. The composition features an array of tiny desserts and treats arranged on what appears to be a white wooden shelf or table decorated with colorful bunting flags along the front edge.\n\n**Foreground Elements:**\n\nOn the left side, there's a slice of layered cake with pink frosting on top, garnished with small colorful sprinkles (yellow, red, blue). It rests on a scalloped pink paper doily next to a delicate silver fork. Beside it sits an intricate lollipop made from swirled pink",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 325,
+          "output_tokens": 128
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The image depicts a delightful dessert spread on a white table. In the center is a **sprinkled cake** with a **sprinkled frosting** and **sprinkled fondant**. The cake is placed on a **sprinkled plate** and is surrounded by **sprinkled cookies** and **sprinkled brownies**. \n\nTo the left of the cake is a **sprinkled box** with **sprinkled text** on it. On the right side of the cake is a **sprinkled box** with **sprinkled text** on it. \n\nAbove the cake is a **sprinkled",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 360,
+          "output_tokens": 128
+        }
+      }
+    },
+    {
+      "id": "406e709b01c37611fb32552d22b4ab4b0c457e4cefb387a9e4039f910a0bc37c:sharegpt4v(coco)",
+      "config": "sharegpt4v(coco)",
+      "question": "Analyze the image in a comprehensive and detailed manner.",
+      "reference": "The image depicts a dynamic scene on a tennis court. At the center of the frame, a man is captured in the midst of a powerful serve. He is dressed in a black t-shirt and blue shorts, with white shoes providing a stark contrast against the green court. His right hand grips a white tennis racket, poised to strike the yellow tennis ball that hangs in the air above his head. The court itself is a vibrant green, enclosed by a black fence that forms the backdrop of the image. The man's focused expression and the frozen motion of the ball create a sense of anticipation, as though we are waiting for the moment of impact when racket meets ball.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "I'll analyze this image comprehensively, examining its various elements and their significance.\n\n## Overall Scene Analysis\n\nThis is a dynamic action photograph capturing a tennis player mid-serve on an outdoor court. The composition freezes a moment of athletic motion, showcasing the physical demands of the sport.\n\n## Subject: The Tennis Player\n\n**Physical Positioning:**\nThe player is captured in a dramatic, extended pose that demonstrates significant athleticism:\n- His body is stretched horizontally across the frame\n- He's leaning forward with his weight distributed for balance\n- One leg is planted while the other extends backward, creating a dynamic line\n- His torso",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 185,
+          "output_tokens": 128
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The image depicts a man in a black t-shirt and black shorts, wearing a blue cap, riding a blue and white tennis racket. He is holding a yellow tennis ball in his hand. The background is a green tennis court with a white net. The man is wearing a blue cap with a white logo. The tennis racket is blue and white, with a black grip. The tennis ball is yellow. The man is wearing a black t-shirt and black shorts. The background is a green tennis court with a white net. The man is wearing a blue cap with a white logo. The tennis racket is blue and white, with a black",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 219,
+          "output_tokens": 128
+        }
+      }
+    },
+    {
+      "id": "13e0c1b6e48cfba8a33398e17ee5789a01e1608a1d9718787207779f199f8b64:sharegpt4v(coco)",
+      "config": "sharegpt4v(coco)",
+      "question": "Write a detailed description of the given image.",
+      "reference": "The image captures a thrilling moment of a man surfing on a wave. The man, clad in a black wetsuit, is skillfully riding a white surfboard. He is crouched down on the surfboard, his gaze fixed ahead as he navigates the wave. The wave itself is a beautiful light blue color, crashing around the man in a display of nature's power. The background is filled with the vast expanse of the ocean, creating a sense of solitude and adventure. Interestingly, the sky is not visible in the photo, adding to the focus on the surfer and the wave. The image encapsulates the exhilaration and challenge of surfing, as well as the beauty of the ocean.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "Certainly! Here's a detailed description of the image:\n\n---\n\n**Surfer Riding a Wave**\n\nThe image captures an action-packed moment of a surfer riding a wave in what appears to be open ocean waters. The central figure is a man, likely in his 30s or 40s, with short dark hair and a focused expression as he navigates the surf. He\u2019s clad in a full-body black wetsuit that hugs his frame, suggesting cooler water temperatures. His posture is dynamic and balanced \u2014 knees slightly bent, arms extended for stability, one hand reaching toward the spray of water around him.",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 263,
+          "output_tokens": 128
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "The image captures a dynamic scene of a surfer riding a wave under a bright, sunny sky. Here's a detailed breakdown:\n\n1. **Surfer**: A man in a black wetsuit is depicted mid-ride, balancing on a surfboard. He appears focused and in control, with his body angled to maintain stability on the moving wave.\n\n2. **Surfboard**: The surfboard is a classic longboard, painted in vibrant colors with a bold \"SURF\" logo. It's riding a large, rolling wave with a white crest.\n\n3. **Wave**: The wave is a powerful, turquoise-blue swell with a white",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 298,
+          "output_tokens": 128
+        }
+      }
+    },
+    {
+      "id": "62843a1df9cbfd1013749367a202d820bae33ee5ee406930d9b3c4f1e91d158b:sharegpt4v(coco)",
+      "config": "sharegpt4v(coco)",
+      "question": "What are the key elements in this picture?",
+      "reference": "The image portrays a dynamic scene of oceanic adventure. At the heart of the image is a surfer, garbed in a sleek black wetsuit, skillfully riding a wave. The surfer is crouched on the surfboard, body leaning forward in anticipation, poised at the center of the image.\n\nThe wave itself is a magnificent spectacle, painted in a beautiful shade of green. It rises to the left of the surfer, capturing the raw power and beauty of the ocean. The ocean extends beyond the wave, its deep blue surface stretching out towards the horizon.\n\nIn the distance, several islands punctuate the horizon, adding a sense of depth and scale to the image. They are positioned to the right of the surfer, providing a serene contrast to the adrenaline-filled action in the foreground.\n\nOverall, this image captures a single, thrilling moment in time, where man and nature intersect in a dance of skill and power.",
+      "answers": {
+        "robit/ornith-1.5:9b": {
+          "content": "This picture captures a dynamic ocean scene with several key elements:\n\n**Main Subject:**\n- A surfer in a dark wetsuit, crouched low on their board, actively riding a wave. They're positioned on the left side of the frame, carving along the face of the breaking wave.\n\n**The Wave:**\n- A large, well-formed wave with a clean green-teal face and white foam where it's breaking. The surfer is riding in the whitewater section near the crest.\n\n**Ocean:**\n- Expansive blue-green water filling most of the frame, with visible texture from wind and",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 303,
+          "output_tokens": 128
+        },
+        "kolibri-vision-aligned:q4_k_m-20261006": {
+          "content": "Based on the description, here are the key elements in the picture:\n\n1. **Surfer**: A person riding a wave.\n2. **Wave**: The ocean wave the surfer is riding.\n3. **Beach**: The sandy shore where the surfer is standing.\n4. **Sky**: The blue sky above.\n5. **Ocean**: The large body of water.\n6. **Sun**: The bright sun in the sky.\n7. **Palm trees**: The palm trees along the beach.\n8. **People**: Other people on the beach (possibly spectators).\n9. **Surfer's board**: The surfboard the surfer is using",
+          "done": true,
+          "reason": "length",
+          "prompt_tokens": 338,
+          "output_tokens": 128
+        }
+      }
+    }
+  ],
+  "completed": true
+}

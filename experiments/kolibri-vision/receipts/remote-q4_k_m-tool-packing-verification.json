@@ -1,0 +1,21 @@
+{
+  "tag": "robit/kolibri-1:q4_k_m",
+  "verified_utc": "2026-10-06T09:17:02.519858+00:00",
+  "wire_manifest_sha256": "571c984143f23f8f829c9d96fdc7db5a5ea129d3e23335bed64970a4f550a6c9",
+  "remote_config_blob_verified": true,
+  "remote_template_blob_verified": true,
+  "remote_weight_blob_head_verified": true,
+  "remote_weight_bytes": 65413489696,
+  "remote_weight_digest": "sha256:fa6ccc6467702ea435876ed0e13f135ec268be8d7818ba66201de44eadb8181f",
+  "remote_weight_digest_header_present": false,
+  "capabilities": [
+    "completion",
+    "tools",
+    "thinking"
+  ],
+  "requires": "0.35.0",
+  "config_digest": "sha256:b75e2ff22ec0cb117c824eac7221e620beeec6dd9d5fbd6024055d0e7003eb0f",
+  "template_digest": "sha256:ff2dfb254372142df2f30d56c2238f801d698168d7e10aaac01c9129c88c4320",
+  "complete_tool_packing": true,
+  "weight_download_performed": false
+}

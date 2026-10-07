@@ -34,6 +34,11 @@ their gates.
 “Implemented” means the suite contains executable code and tests. It does not
 mean every external model server is installed or running on a given host.
 
+The [Kolibri vision experiment](experiments/kolibri-vision/README.md) preserves
+the source and pause handoff for pretrained projector adaptation. Its stock
+Ollama packaging works, but measured vision quality has failed the release
+gate; no Kolibri vision tag has been published.
+
 ## Architecture
 
 The repository has two related execution surfaces:

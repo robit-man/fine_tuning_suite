@@ -1,5 +1,12 @@
 # Phonon Echo: official Ollama TTS and optional cloning/ASR
 
+The current companion is **`robit/phonon-echo:clone-asr-v2`**, with baked
+`female`, `robot`, and `male` profiles plus `default`. Install adapter 0.2.0
+from the [standalone public repository](https://github.com/robit-man/phonon-echo-ollama).
+Its [model README](https://github.com/robit-man/phonon-echo-ollama/blob/main/OLLAMA_README.md)
+contains the current voice list and API examples. The v1 companion setup below
+documents the preceding release and has no baked profiles.
+
 **`robit/phonon-echo:hybrid-v1` now works in unmodified official Ollama 0.40.11
 for TTS.** `:tts-v1` and `:latest` name the same native speech model. The original
 extension-only composite is preserved separately as **`:clone-asr-v1`**.

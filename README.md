@@ -689,8 +689,9 @@ tracked separately from the suite's adapter `audio-output` capability.
 Ollama 0.40.11 as `robit/phonon-echo:hybrid-v1` (`:tts-v1` and `:latest` aliases).
 The actual official executable and its own Phonon/Mimi runner passed WAV/PCM
 and three-sentence fidelity checks. On this host its leased GPU service listens
-on 11470. The separate `:clone-asr-v1` composite adds reference voice conversion
-and Whisper ASR through the optional runtime extension on 11471. Those extra
+on 11470. The separate `:clone-asr-v2` composite adds baked `female`, `robot`,
+and `male` profiles, reference voice conversion, and Whisper ASR through the
+[optional runtime extension](https://github.com/robit-man/phonon-echo-ollama) on 11471. Those extra
 capabilities remain unsupported by the official binary; see the linked guide.
 
 | Variable | Default | Purpose |

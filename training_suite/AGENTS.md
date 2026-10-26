@@ -139,6 +139,16 @@ POST /api/omni/cascade              → execute configured audio/language/TTS st
 
 ### Current operator direction: official Ollama must generate TTS, 2026-10-26
 
+The operator requested pre-cloned profiles named `female`, `robot`, and `male`.
+They are baked as model buffers in `robit/phonon-echo:clone-asr-v2`; `default`
+is also available. This companion requires public adapter 0.2.0 / runtime
+`0.40.11+phonon-echo.2` from https://github.com/robit-man/phonon-echo-ollama .
+The updated `phonon-hybrid.service` runs that standalone runtime on 11471.
+Use its `phonon_echo.bake_voices` module for future preparation. The user
+authorized reupload and speaker playback after cloning. Public documentation
+must use only the profile names and must not include original recording filenames.
+The official TTS tags still use their supported native Phonon default voice.
+
 The operator explicitly rejected extension-only delivery and reaffirmed that
 the unmodified official binary must at least generate TTS. That requirement was
 never waived by "just build it." Do not substitute an Ollama-compatible Python

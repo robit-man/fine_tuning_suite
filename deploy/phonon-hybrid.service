@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 User=roko
-WorkingDirectory=/srv/fine_tuning_suite
+WorkingDirectory=/srv/fine_tuning_suite/training_suite/outputs/phonon-echo-ollama
 Environment=CUDA_VISIBLE_DEVICES=-1
 Environment=HIP_VISIBLE_DEVICES=-1
 Environment=ROCR_VISIBLE_DEVICES=-1
@@ -19,11 +19,11 @@ Environment=OLLAMA_MODELS=/srv/ollama/models
 Environment=OLLAMA_NOPRUNE=1
 Environment=OLLAMA_VULKAN=0
 Environment=GGML_VK_VISIBLE_DEVICES=-1
-Environment=OLLAMA_PHONON_HYBRID_PYTHON=/srv/fine_tuning_suite/.venv-phonon/bin/python
-Environment=OLLAMA_PHONON_HYBRID_ROOT=/srv/fine_tuning_suite
+Environment=OLLAMA_PHONON_HYBRID_PYTHON=/srv/fine_tuning_suite/training_suite/outputs/phonon-echo-ollama/.venv/bin/python
+Environment=OLLAMA_PHONON_HYBRID_ROOT=/srv/fine_tuning_suite/training_suite/outputs/phonon-echo-ollama
 DevicePolicy=closed
 StateDirectory=phonon-hybrid
-ExecStart=/srv/fine_tuning_suite/training_suite/outputs/phonon-hybrid/ollama-runtime/bin/ollama serve
+ExecStart=/srv/fine_tuning_suite/training_suite/outputs/phonon-echo-ollama/bin/ollama serve
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30

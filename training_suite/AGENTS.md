@@ -137,27 +137,32 @@ POST /api/omni/cascade              → execute configured audio/language/TTS st
 
 ## Qwen3-Omni Logical Ollama Bundles
 
-### Current operator direction: build the working hybrid, 2026-10-26
+### Current operator direction: official Ollama must generate TTS, 2026-10-26
 
-The operator superseded the stock-runtime/tag restriction and authorized
-building the working hybrid. Proceed with
-the Phonon-based ASR and reference-voice-cloning hybrid using a new local
-runtime where necessary. Preserve the Ollama-compatible speech request format,
-but identify the hybrid runtime honestly and do not call it an unmodified
-official Ollama implementation. A single composite checkpoint may contain
-Phonon, its Mimi decoder, a trained reference-conditioned voice converter,
-and ASR. All components execute in one process; do not route through the old
-Omni adapter. Earlier stock-only requirements below document the preceding
-experiment and do not require asking the operator again. Validate actual
-transcription, text fidelity, speaker similarity, and speaker-state isolation.
-The existing GPU negotiation and operator pauses still apply.
+The operator explicitly rejected extension-only delivery and reaffirmed that
+the unmodified official binary must at least generate TTS. That requirement was
+never waived by "just build it." Do not substitute an Ollama-compatible Python
+server or a patched Ollama binary for the official speech fixture. Native
+Phonon flow/Mimi weights and default voice now pass that fixture. The optional
+Phonon/OpenVoice/Whisper composite remains separate and must be identified as
+requiring an extension for reference cloning and ASR. Existing GPU negotiation
+and operator pauses apply. Do not route through the old Omni adapter.
 
-Phonon Echo is implemented as `robit/phonon-echo:hybrid-v1`, using Ollama
-0.40.11 plus the checked-in Phonon hybrid runner patch. Its actual Ollama
+`robit/phonon-echo:hybrid-v1`, `:tts-v1`, and `:latest` are the corrected official
+TTS tags. `phonon-official-tts.service` uses unmodified `/usr/local/bin/ollama`
+and its official MLX runtime on 127.0.0.1:11470 under a 4096 MiB GPU lease. It
+passed WAV/PCM and three-sentence fidelity checks. The broker's CPU metadata
+daemon must not execute CUDA speech. Read `docs/phonon-hybrid.md` and use
+`python -m training_suite.phonon_native_tts prepare` for native preparation.
+Official Phonon supports speech only, with no per-request reference audio or
+ASR graph.
+
+The full composite is preserved as `robit/phonon-echo:clone-asr-v1`, using Ollama
+0.40.11 plus the checked-in Phonon hybrid runner patch. Its extended Ollama
 speech and transcription endpoints passed WAV/PCM, text fidelity, reference
-conditioning, and A/B/A speaker checks. Read `docs/phonon-hybrid.md` and use
-`training_suite/build_phonon_ollama.sh`; do not claim that the unmodified
-official binary supports this new architecture. The public checkpoint contains
+conditioning, and A/B/A speaker checks. Use `training_suite/build_phonon_ollama.sh`
+only for this optional composite; never claim that the unmodified official
+binary supports its new architecture. The public checkpoint contains
 pretrained components and the default public Phonon voice, not test recordings
 or private reference speaker embeddings. The operator authorized publishing
 the model to Ollama after native API tests pass. No extra approval is needed

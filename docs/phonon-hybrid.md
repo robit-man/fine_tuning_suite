@@ -1,8 +1,60 @@
-# Phonon Echo: speech cloning and ASR in one Ollama model
+# Phonon Echo: official Ollama TTS and optional cloning/ASR
 
-Model: **`robit/phonon-echo:hybrid-v1`**.
+**`robit/phonon-echo:hybrid-v1` now works in unmodified official Ollama 0.40.11
+for TTS.** `:tts-v1` and `:latest` name the same native speech model. The original
+extension-only composite is preserved separately as **`:clone-asr-v1`**.
 
-Phonon Echo combines Gradium Phonon text-to-speech, its Mimi waveform decoder,
+The earlier extension-only publication did not meet the operator's requirement.
+The corrected TTS tag uses the actual supported Phonon flow/Mimi graph, its
+canonical tensors, and public default speaker latents. The official binary
+executes those weights directly; it needs no custom runner or Python inference
+worker. This TTS variant is prepared from the published Phonon checkpoint, not
+a jointly trained new model. Its generation temperature is set to zero.
+
+## TTS with the official binary
+
+Use official Ollama 0.40.11 with its official MLX runtime. On Linux the latter is
+also distributed as `ollama-linux-amd64-mlx.tar.zst` in the
+[official release](https://github.com/ollama/ollama/releases/tag/v0.40.11).
+The official Linux speech graph currently uses CUDA, so this host runs it under
+a scoped GPU lease on port **11470**. The broker's CPU metadata daemon on 11436
+must not be used for speech inference. On a normal single-daemon installation,
+use its usual port 11434 instead.
+
+```bash
+OLLAMA_HOST=127.0.0.1:11470 /usr/local/bin/ollama pull robit/phonon-echo:hybrid-v1
+curl http://127.0.0.1:11470/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"robit/phonon-echo:hybrid-v1","input":"The small robot speaks clearly.","voice":"default"}' \
+  --output speech.wav
+```
+
+`response_format: "pcm"` produces raw 24 kHz mono PCM16 samples. The default
+response is streaming WAV. The official endpoint has no per-request reference
+recording field; the native tag advertises only `speech`, not ASR or cloning.
+
+Reproduce the prepared native tag without installing the extension:
+
+```bash
+python -m training_suite.phonon_native_tts prepare --out training_suite/outputs/phonon-official-tts
+OLLAMA_HOST=127.0.0.1:11470 /usr/local/bin/ollama create robit/phonon-echo:hybrid-v1 \
+  -f training_suite/outputs/phonon-official-tts/Modelfile
+```
+
+Preparation verifies five pinned source SHA-256 digests and retains the Apache
+license. [deploy/phonon-official-tts.service](../deploy/phonon-official-tts.service)
+shows this host's official-binary service and GPU lease. Adapt the host paths
+and GPU UUID for another machine; discover leases before starting CUDA work.
+
+The official executable and its actual MLX runner generated WAV and PCM from
+the corrected tag. An independent Whisper evaluation recovered three held-out
+sentences exactly after case/punctuation normalization. The executable's SHA-256
+remained `b0a4becfaf872e3ad5d2e9051244e0dfe55409f03d6e2cd9bd9c34400e201b4c`.
+These tests establish native TTS, not native reference cloning or ASR.
+
+## Optional cloning and ASR composite
+
+The separate `robit/phonon-echo:clone-asr-v1` combines Gradium Phonon text-to-speech, its Mimi waveform decoder,
 OpenVoice V2 reference-conditioned voice conversion, and Whisper English ASR.
 It is a composite of pretrained components, with 111.6 million unique parameters;
 it has not been jointly trained. The export is one safetensors checkpoint.
@@ -23,7 +75,7 @@ process. Its parameter weights come from the installed model tag, not the
 original source checkpoint folders. The helper Python environment contains
 runtime code and dependencies; it is not an alternate source of model weights.
 
-## Install the runtime
+## Install the optional composite runtime
 
 Use Python 3.12 or newer and a Go toolchain supporting Ollama's `go 1.26.10`
 directive. From a checkout of this repository:
@@ -56,7 +108,7 @@ From another terminal, use that daemon to pull the model:
 ```bash
 OLLAMA_HOST=127.0.0.1:11471 \
   training_suite/outputs/phonon-hybrid/ollama-runtime/bin/ollama \
-  pull robit/phonon-echo:hybrid-v1
+  pull robit/phonon-echo:clone-asr-v1
 ```
 
 The host service example is [deploy/phonon-hybrid.service](../deploy/phonon-hybrid.service).
@@ -69,7 +121,7 @@ The existing speech request fields work unchanged for the model's default voice:
 ```bash
 curl http://127.0.0.1:11471/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model":"robit/phonon-echo:hybrid-v1","input":"Hello from Phonon Echo.","voice":"default"}' \
+  -d '{"model":"robit/phonon-echo:clone-asr-v1","input":"Hello from Phonon Echo.","voice":"default"}' \
   --output speech.wav
 ```
 
@@ -85,7 +137,7 @@ import httpx
 reference = base64.b64encode(Path("reference.wav").read_bytes()).decode()
 with httpx.Client(timeout=180) as client:
     with client.stream("POST", "http://127.0.0.1:11471/v1/audio/speech", json={
-        "model": "robit/phonon-echo:hybrid-v1",
+        "model": "robit/phonon-echo:clone-asr-v1",
         "input": "The small robot speaks clearly.",
         "voice": "default",
         "reference_audio": {"format": "wav", "data": reference},
@@ -113,7 +165,7 @@ stream format is audio, matching the base speech API's current controls.
 
 ```bash
 curl http://127.0.0.1:11471/v1/audio/transcriptions \
-  -F model=robit/phonon-echo:hybrid-v1 \
+  -F model=robit/phonon-echo:clone-asr-v1 \
   -F file=@recording.wav
 ```
 

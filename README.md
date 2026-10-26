@@ -685,13 +685,13 @@ Original Qwen Omni speech weights remain unsupported by stock Ollama 0.40.11;
 distillation into Phonon would create a separate student. Native `speech` is
 tracked separately from the suite's adapter `audio-output` capability.
 
-**[Phonon Echo](docs/phonon-hybrid.md)** now combines Phonon speech, trained
-reference-voice conversion, and Whisper ASR in one model. Its Ollama 0.40.11
-runtime extension executes the requested tag's tensors in an Ollama-managed
-worker and serves `/v1/audio/speech` and `/v1/audio/transcriptions`. Native
-WAV/PCM, transcription, and alternating-speaker checks passed. The unmodified
-official binary does not implement the new hybrid architecture; setup and API
-examples are in the linked guide.
+**[Phonon Echo](docs/phonon-hybrid.md)** provides TTS through unmodified official
+Ollama 0.40.11 as `robit/phonon-echo:hybrid-v1` (`:tts-v1` and `:latest` aliases).
+The actual official executable and its own Phonon/Mimi runner passed WAV/PCM
+and three-sentence fidelity checks. On this host its leased GPU service listens
+on 11470. The separate `:clone-asr-v1` composite adds reference voice conversion
+and Whisper ASR through the optional runtime extension on 11471. Those extra
+capabilities remain unsupported by the official binary; see the linked guide.
 
 | Variable | Default | Purpose |
 |---|---|---|

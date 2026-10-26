@@ -1,0 +1,24 @@
+[Unit]
+Description=Official Ollama Phonon speech with a scoped GPU lease
+After=network-online.target ollama-unify-negotiator.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=roko
+WorkingDirectory=/srv/fine_tuning_suite
+Environment=OLLAMA_HOST=127.0.0.1:11470
+Environment=OLLAMA_MODELS=/srv/ollama/models
+Environment=OLLAMA_NOPRUNE=1
+Environment=OLLAMA_KEEP_ALIVE=-1
+Environment=OLLAMA_MAX_LOADED_MODELS=1
+Environment=OLLAMA_NUM_PARALLEL=1
+Environment=OLLAMA_VULKAN=0
+ExecStart=/usr/bin/docker gpu run --owner fine-tuning-suite/phonon-official-tts --justification "Official Ollama native Phonon speech" --vram-mib 4096 --gpu GPU-3538758b-6ba7-fa1b-a80c-e315a606c3f0 --ready-timeout 300 --ready-command "/srv/fine_tuning_suite/.venv-phonon/bin/python -m training_suite.phonon_native_tts ready" -- /usr/local/bin/ollama serve
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

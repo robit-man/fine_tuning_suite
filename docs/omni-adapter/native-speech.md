@@ -2,10 +2,11 @@
 
 Assessed against **official Ollama 0.40.11**, 2026-10-26.
 
-This records the earlier stock-binary assessment. The operator subsequently
-authorized a hybrid runtime extension. The working successor is
-[Phonon Echo](../phonon-hybrid.md), tested through Ollama's own speech and
-transcription endpoints with an Ollama-managed runner.
+The operator reaffirmed that official unmodified Ollama must at least generate
+TTS. [Phonon Echo](../phonon-hybrid.md) now provides a native Phonon TTS tag,
+tested with that actual executable and its own MLX runner. The separate cloning
+and ASR composite requires an extension and does not satisfy that native
+delivery requirement for those capabilities.
 
 The deployment requirement is **an unmodified official Ollama binary plus the
 weights we prepare**. `POST /v1/audio/speech` must execute the selected tag's

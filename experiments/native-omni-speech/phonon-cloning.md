@@ -1,7 +1,7 @@
 # Phonon cloning and ASR with official Ollama
 
-This is the historical prompt-inversion experiment. The working successor,
-[Phonon Echo](../../docs/phonon-hybrid.md), uses pretrained reference voice
+This is the historical prompt-inversion experiment. The optional successor,
+[Phonon Echo :clone-asr-v1](../../docs/phonon-hybrid.md), uses pretrained reference voice
 conversion and ASR inside an Ollama-managed hybrid runner. It passed native
 speech, transcription, and speaker-state checks; the failed results below
 belong to the earlier approach.

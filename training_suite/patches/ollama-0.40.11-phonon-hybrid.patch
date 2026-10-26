@@ -452,16 +452,18 @@ index 20fe65d..47edef2 100644
  // SupportsDraftArchitecture reports whether the MLX runner has a draft constructor for arch.
 diff --git a/server/hybrid_test.go b/server/hybrid_test.go
 new file mode 100644
-index 0000000..a46c30d
+index 0000000..0b57959
 --- /dev/null
 +++ b/server/hybrid_test.go
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,32 @@
 +package server
 +
 +import (
++	"context"
 +	"testing"
 +
 +	"github.com/ollama/ollama/manifest"
++	"github.com/ollama/ollama/types/model"
 +)
 +
 +func TestPhononHybridPullDoesNotRequireMLX(t *testing.T) {
@@ -473,6 +475,32 @@ index 0000000..a46c30d
 +		t.Fatal("MLX pull must retain its runtime check")
 +	}
 +}
++
++func TestPhononHybridAppearsInModelList(t *testing.T) {
++	t.Setenv("OLLAMA_MODELS", t.TempDir())
++	writeShowManifestVariant(t, "hybrid-list", manifest.RunnerPhononHybrid, manifest.FormatSafetensors,
++		model.ConfigV2{ModelFormat: "safetensors", ModelFamily: "phonon_hybrid"}, nil)
++	rows, err := listModels(context.Background())
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(rows) != 1 || rows[0].Details.Runner != manifest.RunnerPhononHybrid {
++		t.Fatalf("hybrid must remain visible in /api/tags: %+v", rows)
++	}
++}
+diff --git a/server/routes.go b/server/routes.go
+index fdf7a18..2a98629 100644
+--- a/server/routes.go
++++ b/server/routes.go
+@@ -229,6 +229,8 @@ func normalizeRunner(runner string) (string, error) {
+ 		return "", nil
+ 	case manifest.RunnerMLX, "mlxrunner":
+ 		return manifest.RunnerMLX, nil
++	case manifest.RunnerPhononHybrid:
++		return manifest.RunnerPhononHybrid, nil
+ 	case manifest.RunnerGGML:
+ 		return manifest.RunnerGGML, nil
+ 	case manifest.RunnerLlamaCPP, "llama.cpp", "llama-cpp", "llama_cpp":
 diff --git a/server/speech.go b/server/speech.go
 index 26b043e..1badcef 100644
 --- a/server/speech.go

@@ -137,6 +137,60 @@ POST /api/omni/cascade              → execute configured audio/language/TTS st
 
 ## Qwen3-Omni Logical Ollama Bundles
 
+### Current operator direction: build the working hybrid, 2026-10-26
+
+The operator superseded the stock-runtime/tag restriction and authorized
+building the working hybrid. Proceed with
+the Phonon-based ASR and reference-voice-cloning hybrid using a new local
+runtime where necessary. Preserve the Ollama-compatible speech request format,
+but identify the hybrid runtime honestly and do not call it an unmodified
+official Ollama implementation. A single composite checkpoint may contain
+Phonon, its Mimi decoder, a trained reference-conditioned voice converter,
+and ASR. All components execute in one process; do not route through the old
+Omni adapter. Earlier stock-only requirements below document the preceding
+experiment and do not require asking the operator again. Validate actual
+transcription, text fidelity, speaker similarity, and speaker-state isolation.
+The existing GPU negotiation and operator pauses still apply.
+
+Phonon Echo is implemented as `robit/phonon-echo:hybrid-v1`, using Ollama
+0.40.11 plus the checked-in Phonon hybrid runner patch. Its actual Ollama
+speech and transcription endpoints passed WAV/PCM, text fidelity, reference
+conditioning, and A/B/A speaker checks. Read `docs/phonon-hybrid.md` and use
+`training_suite/build_phonon_ollama.sh`; do not claim that the unmodified
+official binary supports this new architecture. The public checkpoint contains
+pretrained components and the default public Phonon voice, not test recordings
+or private reference speaker embeddings. The operator authorized publishing
+the model to Ollama after native API tests pass. No extra approval is needed
+for that authorized publication.
+
+Native speech delivery requires the **unmodified official Ollama binary** and
+prepared weights only. Ollama's own `/v1/audio/speech` must execute the selected
+tag's speech weights. A fork, custom runner, Python inference worker, adapter,
+or external TTS service does not satisfy that requirement. Ollama 0.40.11 runs
+Phonon's flow/Mimi graph, not Qwen Omni's Talker/codec/code2wav graph. No direct
+weights-only conversion is implemented. Keep native Omni delivery blocked;
+do not treat matching text dimensions, a renamed architecture, or a capability
+flag as graph compatibility. Offline distillation into a supported architecture
+would create a different student model and is not conversion of Omni's weights.
+Use `python -m training_suite ollama-speech-smoke MODEL` as the structural
+native gate, and read `docs/omni-adapter/native-speech.md` before claiming
+Qwen speech or reference-audio cloning works inside Ollama. The stock API has
+no reference-audio field. Phonon can import prepared named voice latents, but
+its speaker encoder is unreleased and its published audio codec is decoder-only.
+Do not promise offline enrollment or training targets from recordings with those
+weights. Keep `speech` separate from adapter `audio-output`.
+
+The official voice API is a hard fixture for the new Phonon cloning/ASR work.
+Read `experiments/native-omni-speech/phonon-cloning.md`. The offline prompt
+inversion tool can export and import native voice tensors, and official
+0.40.11 generated WAV/PCM from one candidate. That candidate failed independent
+word-fidelity/voice checks and is not release-ready. Native Phonon ASR was
+tested and rejected; no complete single-tag hybrid exists. Do not substitute
+two tags or an external ASR/TTS runtime without resolving that delivery choice.
+The separate official Linux MLX payload is installed; the executable is
+unchanged. Its CUDA allocator needs a leased GPU even when a CPU fixture can
+load the library. Never load the CUDA speech graph in the CPU metadata service.
+
 Do not splice Qwen3-Omni audio/Talker hidden-state paths directly into Qwen3.8
 or Ornith. The architectures, widths, vocabularies, layers, special tokens, and
 speech conditioning differ. Run the compatibility planner:

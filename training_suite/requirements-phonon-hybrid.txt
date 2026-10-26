@@ -1,0 +1,6 @@
+-r requirements-phonon.txt
+flask>=3.0
+waitress>=3.0
+httpx>=0.27
+# Install the pinned OpenVoice architecture separately without its optional demo
+# dependencies (see docs/phonon-hybrid.md). Inference needs its torch core only.

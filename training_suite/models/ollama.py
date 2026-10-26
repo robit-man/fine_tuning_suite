@@ -13,6 +13,7 @@ from training_suite.core.config import DEFAULT_PARSER, DEFAULT_RENDERER
 SECTION_NAMES = {
     "Model",
     "Capabilities",
+    "Voices",
     "Parameters",
     "Metadata",
     "Tensors",
@@ -30,6 +31,7 @@ class OllamaShow:
     embedding_length: int | None = None
     quantization: str | None = None
     capabilities: list[str] = field(default_factory=list)
+    voices: list[str] = field(default_factory=list)
     model: dict[str, str] = field(default_factory=dict)
     runtime_parameters: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, str] = field(default_factory=dict)
@@ -46,6 +48,7 @@ class OllamaShow:
             "embedding_length": self.embedding_length,
             "quantization": self.quantization,
             "capabilities": self.capabilities,
+            "voices": self.voices,
             "model": self.model,
             "runtime_parameters": self.runtime_parameters,
             "metadata": self.metadata,
@@ -84,9 +87,9 @@ def parse_ollama_show(text: str, name: str = "") -> OllamaShow:
         if stripped in SECTION_NAMES:
             section = stripped
             continue
-        if section == "Capabilities":
+        if section in {"Capabilities", "Voices"}:
             if not re.search(r"\s{2,}", stripped) and stripped not in SECTION_NAMES:
-                result.capabilities.append(stripped)
+                (result.capabilities if section == "Capabilities" else result.voices).append(stripped)
             continue
         if section in {"Model", "Parameters", "Metadata"}:
             m = re.match(r"^\s*([A-Za-z0-9_. -]+?)\s{2,}(.+?)\s*$", line)

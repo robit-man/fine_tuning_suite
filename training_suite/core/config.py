@@ -47,6 +47,7 @@ TARGET_CAPABILITIES = (
     "vision",
     "audio-input",
     "audio-output",
+    "speech",
     "video-input",
     "tools",
     "thinking",

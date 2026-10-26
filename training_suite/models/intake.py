@@ -156,6 +156,21 @@ def build_repair_plan(
         actions.append(
             "attach independently text-conditioned TTS model/projector views under s.t.m.*/s.t.p.* and return tagged base64 PCM WAV"
         )
+    if "speech" in delta["missing"]:
+        actions.append(
+            "prepare weights for a speech architecture supported by the unmodified official Ollama binary; "
+            "require /api/show speech and a passing ollama-speech-smoke probe; "
+            "custom runners and external adapters do not satisfy native speech"
+        )
+        if source_architecture not in {
+            "phonon", "gradium_phonon_tts", "GradiumPhononTTSForConditionalGeneration"
+        }:
+            blockers.append(
+                "No direct weights-only speech conversion is implemented for "
+                f"{source_architecture or 'an unknown architecture'} on official Ollama 0.40.11; "
+                "its native speech graph is Phonon, while Qwen Omni requires a different graph. "
+                "Distillation would produce a separate student and remains unverified."
+            )
     if "video-input" in delta["missing"]:
         actions.append("preserve the Omni vision/video projector and frame-interleave contract")
 
@@ -172,6 +187,8 @@ def build_repair_plan(
         mode = "blocked"
     elif not delta["missing"]:
         mode = "verified"
+    elif "speech" in delta["missing"]:
+        mode = "native-speech-verification"
     elif any("Modelfile" in action for action in actions) and "vision" not in delta["missing"]:
         mode = "package-only"
     elif gguf_has_vision:

@@ -15,9 +15,11 @@ from training_suite.models.ollama import ModelfileSpec, write_modelfile
 OMNI_SCHEMA_VERSION = 1
 QWEN3_OMNI_INSTRUCT = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
 OLLAMA_AUDIO_LIMITATION = (
-    "Ollama 0.32.x can store the language GGUF and multimodal projector, but its "
-    "public chat response has no native generated-audio field and it cannot execute "
-    "the Qwen3-Omni Talker plus code2wav chain."
+    "Official Ollama 0.40.11 exposes /v1/audio/speech through its Phonon flow/Mimi "
+    "graph. It does not execute Qwen Omni's Talker/codec/code2wav graph or this custom "
+    "bundle layer. No direct weights-only Qwen speech conversion is implemented. "
+    "Phonon Echo uses a separately documented Ollama runner extension; it is not a "
+    "direct conversion of these Omni tensors. The stock request has no reference-audio field."
 )
 
 
@@ -430,6 +432,34 @@ def plan_omni_bundle(
         },
         "native_fusion_blockers": list(compatibility["mismatches"]),
         "stock_ollama_audio_blockers": [OLLAMA_AUDIO_LIMITATION],
+        "native_speech_delivery": {
+            "endpoint": "/v1/audio/speech",
+            "execution_owner": "ollama",
+            "official_binary_unmodified": True,
+            "assessed_ollama_version": "0.40.11",
+            "supported_speech_architecture": "GradiumPhononTTSForConditionalGeneration",
+            "weights_must_resolve_from_requested_tag": True,
+            "external_tts_service_satisfies_requirement": False,
+            "custom_runner_satisfies_requirement": False,
+            "ready": False,
+            "status": "blocked-unsupported-qwen-speech-graph",
+            "blocker": OLLAMA_AUDIO_LIMITATION,
+            "direct_weights_conversion_available": False,
+            "distillation": {
+                "status": "unproven-separate-student-experiment",
+                "target": "Phonon-compatible speech student",
+                "preserves_original_omni_weights": False,
+                "blockers": [
+                    "no compatible target-audio encoder in the published Phonon codec",
+                    "Phonon speaker encoder is unreleased; recordings cannot be enrolled offline with published weights",
+                    "student training, export parity, and native endpoint quality are unverified",
+                ],
+            },
+            "verification_command": "python -m training_suite ollama-speech-smoke MODEL",
+            "reference_audio": "not defined by the stock Ollama speech request",
+            "prepared_voices": "Phonon accepts precomputed named voice latents; Qwen speaker embeddings are incompatible",
+            "details": "docs/omni-adapter/native-speech.md",
+        },
         "source_signatures": {
             "text": compatibility["source"],
             "omni": compatibility["omni"],

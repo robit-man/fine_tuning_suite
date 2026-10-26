@@ -1,0 +1,426 @@
+diff --git a/create/hybrid_test.go b/create/hybrid_test.go
+new file mode 100644
+index 0000000..5bd5311
+--- /dev/null
++++ b/create/hybrid_test.go
+@@ -0,0 +1,47 @@
++package create
++
++import (
++	"os"
++	"path/filepath"
++	"slices"
++	"testing"
++)
++
++func TestPhononHybridImportCapabilitiesAndNestedAssets(t *testing.T) {
++	dir := t.TempDir()
++	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"architectures":["PhononHybrid"],"model_type":"phonon_hybrid"}`), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.MkdirAll(filepath.Join(dir, "asr_processor"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(dir, "asr_processor", "processor_config.json"), []byte(`{}`), 0600); err != nil {
++		t.Fatal(err)
++	}
++	cfg, _, err := readSourceModelConfig(dir)
++	if err != nil {
++		t.Fatal(err)
++	}
++	metadata, err := inferSafetensorsConfig(dir, cfg, "", "")
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, cap := range []string{"speech", "completion", "audio"} {
++		if !slices.Contains(metadata.Capabilities, cap) {
++			t.Fatalf("missing %s", cap)
++		}
++	}
++	if metadata.ModelFamily != "phonon_hybrid" {
++		t.Fatal(metadata)
++	}
++	if err := validateMLXSource(cfg, false, MLXValidationOptions{}); err != nil {
++		t.Fatal(err)
++	}
++	files, err := SafetensorsConfigFiles(dir)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !slices.Contains(files, "asr_processor/processor_config.json") {
++		t.Fatal(files)
++	}
++}
+diff --git a/create/inventory.go b/create/inventory.go
+index 11cedeb..b627735 100644
+--- a/create/inventory.go
++++ b/create/inventory.go
+@@ -186,6 +186,26 @@ func appendWeightSidecar(dir string, files []string, name, modelName string) ([]
+ // SafetensorsConfigFiles lists source metadata for remote transfer and local
+ // JSON import. Auxiliary checkpoint subfolders are excluded.
+ func SafetensorsConfigFiles(dir string) ([]string, error) {
++	if cfg, _, err := readSourceModelConfig(dir); err == nil && cfg.Architecture() == "PhononHybrid" {
++		var files []string
++		err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
++			if err != nil {
++				return err
++			}
++			if entry.IsDir() {
++				return nil
++			}
++			if filepath.Ext(path) == ".json" || filepath.Ext(path) == ".jinja" {
++				rel, err := filepath.Rel(dir, path)
++				if err != nil {
++					return err
++				}
++				files = append(files, filepath.ToSlash(rel))
++			}
++			return nil
++		})
++		return files, err
++	}
+ 	entries, err := os.ReadDir(dir)
+ 	if err != nil {
+ 		return nil, err
+diff --git a/create/metadata.go b/create/metadata.go
+index a170ab6..06e796a 100644
+--- a/create/metadata.go
++++ b/create/metadata.go
+@@ -17,6 +17,9 @@ import (
+ // server-side safetensors imports. Explicit parser and renderer values take
+ // precedence when compatible with the source model's scoring format.
+ func inferSafetensorsConfig(modelDir string, cfg sourceModelConfig, parserOverride, rendererOverride string) (model.ConfigV2, error) {
++	if cfg.Architecture() == "PhononHybrid" {
++		return model.ConfigV2{ModelFormat: "safetensors", ModelFamily: "phonon_hybrid", FileType: "F32", ContextLen: 8192, EmbedLen: 512, Capabilities: []string{"completion", "audio", "speech"}, Requires: "0.40.11"}, nil
++	}
+ 	chatTemplate, err := readChatTemplateStrict(modelDir)
+ 	if err != nil {
+ 		return model.ConfigV2{}, err
+diff --git a/create/pipeline.go b/create/pipeline.go
+index 638acd8..dda3d0d 100644
+--- a/create/pipeline.go
++++ b/create/pipeline.go
+@@ -94,6 +94,9 @@ func Create(ctx context.Context, modelName, modelDir string, opts PipelineOption
+ 	if isPhononArchitecture(inv.Config.Architecture()) && opts.Quantize != "" {
+ 		return fmt.Errorf("Phonon currently requires unquantized weights")
+ 	}
++	if inv.Config.Architecture() == "PhononHybrid" && opts.Quantize != "" {
++		return fmt.Errorf("PhononHybrid currently requires unquantized weights")
++	}
+ 	class, err := Classify(inv, opts.Quantize)
+ 	if err != nil {
+ 		return err
+@@ -152,6 +155,19 @@ func Create(ctx context.Context, modelName, modelDir string, opts PipelineOption
+ 		return err
+ 	}
+ 
++	if inv.Config.Architecture() == "PhononHybrid" {
++		for _, name := range []string{"Apache-2.0.txt", "OpenVoice-MIT.txt", "Whisper-MIT.txt"} {
++			data, err := os.ReadFile(filepath.Join(modelDir, "licenses", name))
++			if err != nil {
++				return fmt.Errorf("hybrid license %s: %w", name, err)
++			}
++			license, err := store.WriteBlob(bytes.NewReader(data), "application/vnd.ollama.image.license", name)
++			if err != nil {
++				return err
++			}
++			layers = append(layers, license)
++		}
++	}
+ 	fn(fmt.Sprintf("writing manifest for %s", modelName))
+ 	if err := writeManifest(ctx, modelName, ManifestInfo{ModelConfig: modelConfig, ConfigLayer: configLayer, Layers: layers, Class: class}); err != nil {
+ 		return fmt.Errorf("write manifest: %w", err)
+diff --git a/create/verify.go b/create/verify.go
+index 3a55dd4..830e338 100644
+--- a/create/verify.go
++++ b/create/verify.go
+@@ -18,6 +18,9 @@ type MLXValidationOptions struct {
+ }
+ 
+ func validateMLXSource(cfg sourceModelConfig, draft bool, opts MLXValidationOptions) error {
++	if !draft && cfg.Architecture() == "PhononHybrid" {
++		return nil // The hybrid uses Ollama's CPU-managed tensor runner, not MLX.
++	}
+ 	var arch string
+ 	if len(cfg.Architectures) > 0 {
+ 		arch = cfg.Architectures[0]
+diff --git a/llm/speech.go b/llm/speech.go
+index b08fdce..9561b79 100644
+--- a/llm/speech.go
++++ b/llm/speech.go
+@@ -2,10 +2,13 @@ package llm
+ 
+ import "context"
+ 
++import "encoding/json"
++
+ // SpeechRequest asks a speech model to read Input aloud.
+ type SpeechRequest struct {
+-	Input string `json:"input"`
+-	Voice string `json:"voice,omitempty"`
++	Input          string          `json:"input"`
++	Voice          string          `json:"voice,omitempty"`
++	ReferenceAudio json.RawMessage `json:"reference_audio,omitempty"`
+ }
+ 
+ // Speaker is implemented by runners that serve speech models. Speech streams
+diff --git a/mlxrunner/client.go b/mlxrunner/client.go
+index 0d46c83..9daf624 100644
+--- a/mlxrunner/client.go
++++ b/mlxrunner/client.go
+@@ -48,6 +48,8 @@ type Client struct {
+ 	mu                  sync.Mutex
+ 	cmd                 *exec.Cmd
+ 	closed              bool
++	hybrid              bool
++	hybridDirectory     string
+ }
+ 
+ var ErrRuntimeUnavailable = errors.New("MLX runtime is not available")
+@@ -55,10 +57,6 @@ var ErrRuntimeUnavailable = errors.New("MLX runtime is not available")
+ // NewClient prepares a new MLX runner client for LLM models.
+ // The subprocess is not started until Load() is called.
+ func NewClient(modelName string, softContextLength int) (*Client, error) {
+-	if err := CheckRuntime(); err != nil {
+-		return nil, err
+-	}
+-
+ 	c := &Client{
+ 		modelName:         modelName,
+ 		softContextLength: softContextLength,
+@@ -70,6 +68,18 @@ func NewClient(modelName string, softContextLength int) (*Client, error) {
+ 	if err != nil {
+ 		return nil, err
+ 	}
++	var architecture struct {
++		Architectures []string `json:"architectures"`
++	}
++	if err := modelManifest.ReadConfigJSON("config.json", &architecture); err != nil {
++		return nil, err
++	}
++	c.hybrid = len(architecture.Architectures) > 0 && architecture.Architectures[0] == "PhononHybrid"
++	if !c.hybrid {
++		if err := CheckRuntime(); err != nil {
++			return nil, err
++		}
++	}
+ 	var tensorBytes int64
+ 	for _, layer := range modelManifest.TensorLayers() {
+ 		tensorBytes += layer.Size
+@@ -147,6 +157,11 @@ func (c *Client) Close() error {
+ 	defer c.mu.Unlock()
+ 
+ 	c.closed = true
++	defer func() {
++		if c.hybridDirectory != "" {
++			_ = os.RemoveAll(c.hybridDirectory)
++		}
++	}()
+ 	if c.cmd != nil && c.cmd.Process != nil {
+ 		slog.Info("stopping mlx runner subprocess", "pid", c.cmd.Process.Pid)
+ 		c.cmd.Process.Kill()
+@@ -391,6 +406,9 @@ func (c *Client) HasExited() bool {
+ 
+ // Load checks whether the model fits in GPU memory and starts the subprocess.
+ func (c *Client) Load(ctx context.Context, systemInfo ml.SystemInfo, gpus []ml.DeviceInfo, requireFull bool) ([]ml.DeviceID, error) {
++	if c.hybrid {
++		return c.loadHybrid(ctx)
++	}
+ 	if len(gpus) > 0 {
+ 		modelSize := c.memory.Load()
+ 		// We currently only use the first GPU with MLX
+@@ -630,11 +648,17 @@ func (c *Client) currentMemory() uint64 {
+ // MemorySize implements llm.LlamaServer.
+ func (c *Client) MemorySize() (total, vram uint64) {
+ 	mem := c.currentMemory()
++	if c.hybrid {
++		return mem, 0
++	}
+ 	return mem, mem
+ }
+ 
+ // VRAMByGPU implements llm.LlamaServer.
+ func (c *Client) VRAMByGPU(id ml.DeviceID) uint64 {
++	if c.hybrid {
++		return 0
++	}
+ 	return c.currentMemory()
+ }
+ 
+diff --git a/mlxrunner/hybrid.go b/mlxrunner/hybrid.go
+new file mode 100644
+index 0000000..18722f5
+--- /dev/null
++++ b/mlxrunner/hybrid.go
+@@ -0,0 +1,110 @@
++package mlxrunner
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"log/slog"
++	"net"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strconv"
++
++	"github.com/ollama/ollama/llm"
++	"github.com/ollama/ollama/manifest"
++	"github.com/ollama/ollama/ml"
++	"github.com/ollama/ollama/types/model"
++)
++
++func (c *Client) SupportsReferenceAudio() bool { return c.hybrid }
++
++// loadHybrid starts a supervised runner from the requested tag's actual tensor
++// and metadata blobs. It never forwards to an independently configured service.
++func (c *Client) loadHybrid(ctx context.Context) ([]ml.DeviceID, error) {
++	python := os.Getenv("OLLAMA_PHONON_HYBRID_PYTHON")
++	if python == "" {
++		return nil, errors.New("PhononHybrid requires OLLAMA_PHONON_HYBRID_PYTHON pointing to its installed runtime interpreter")
++	}
++	mf, err := manifest.ParseNamedManifest(model.ParseName(c.modelName))
++	if err != nil {
++		return nil, err
++	}
++	dir, err := os.MkdirTemp("", "ollama-phonon-hybrid-")
++	if err != nil {
++		return nil, err
++	}
++	c.hybridDirectory = dir
++	tensors := []map[string]string{}
++	seen := map[string]bool{}
++	for _, layer := range mf.Layers {
++		path, err := manifest.BlobsPath(layer.Digest)
++		if err != nil {
++			return nil, err
++		}
++		if layer.MediaType == manifest.MediaTypeImageTensor {
++			if !seen[layer.Digest] {
++				tensors = append(tensors, map[string]string{"path": path, "digest": layer.Digest})
++				seen[layer.Digest] = true
++			}
++		} else if layer.MediaType == manifest.MediaTypeImageJSON {
++			if !filepath.IsLocal(layer.Name) {
++				return nil, fmt.Errorf("invalid hybrid asset path %q", layer.Name)
++			}
++			target := filepath.Join(dir, filepath.FromSlash(layer.Name))
++			if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
++				return nil, err
++			}
++			if err := os.Symlink(path, target); err != nil {
++				return nil, err
++			}
++		}
++	}
++	data, err := json.Marshal(map[string]any{"model": c.modelName, "directory": dir, "tensor_blobs": tensors})
++	if err != nil {
++		return nil, err
++	}
++	descriptor := filepath.Join(dir, "ollama-runner.json")
++	if err := os.WriteFile(descriptor, data, 0600); err != nil {
++		return nil, err
++	}
++	listener, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		return nil, err
++	}
++	c.port = listener.Addr().(*net.TCPAddr).Port
++	_ = listener.Close()
++	cmd := exec.Command(python, "-m", "training_suite.phonon_ollama_runner", "--descriptor", descriptor, "--port", strconv.Itoa(c.port))
++	cmd.Env = os.Environ()
++	// The first hybrid implementation is a CPU runner, including when the
++	// parent Ollama server has CUDA lanes for unrelated model architectures.
++	for _, key := range []string{"CUDA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES"} {
++		setEnv(cmd, key, "-1")
++	}
++	setEnv(cmd, "HF_HUB_OFFLINE", "1")
++	setEnv(cmd, "TOKENIZERS_PARALLELISM", "false")
++	if root := os.Getenv("OLLAMA_PHONON_HYBRID_ROOT"); root != "" {
++		cmd.Dir = root
++	}
++	status := llm.NewStatusWriter(os.Stderr)
++	cmd.Stdout, cmd.Stderr = status, status
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if c.closed {
++		return nil, errors.New("hybrid runner client is closed")
++	}
++	c.status = status
++	if err := cmd.Start(); err != nil {
++		return nil, err
++	}
++	if err := llm.AddRunnerToJob(cmd.Process.Pid); err != nil {
++		_ = cmd.Process.Kill()
++		_ = cmd.Wait()
++		return nil, err
++	}
++	c.cmd = cmd
++	slog.Info("starting Ollama-managed Phonon hybrid runner", "model", c.modelName, "pid", cmd.Process.Pid, "port", c.port)
++	go func() { c.doneErr = cmd.Wait(); close(c.done) }()
++	return nil, nil
++}
+diff --git a/mlxrunner/verify.go b/mlxrunner/verify.go
+index 20fe65d..47edef2 100644
+--- a/mlxrunner/verify.go
++++ b/mlxrunner/verify.go
+@@ -6,7 +6,7 @@ import (
+ 
+ // SupportsArchitecture reports whether the MLX runner has a constructor for arch.
+ func SupportsArchitecture(arch string) bool {
+-	return model.SupportsArchitecture(arch)
++	return arch == "PhononHybrid" || model.SupportsArchitecture(arch)
+ }
+ 
+ // SupportsDraftArchitecture reports whether the MLX runner has a draft constructor for arch.
+diff --git a/server/speech.go b/server/speech.go
+index 26b043e..1badcef 100644
+--- a/server/speech.go
++++ b/server/speech.go
+@@ -3,6 +3,7 @@ package server
+ import (
+ 	"cmp"
+ 	"encoding/binary"
++	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"log/slog"
+@@ -27,13 +28,14 @@ const speechSampleRate = 24000
+ // audio as the model generates it.
+ func (s *Server) SpeechHandler(c *gin.Context) {
+ 	var req struct {
+-		Model          string   `json:"model"`
+-		Input          string   `json:"input"`
+-		Voice          string   `json:"voice"`
+-		ResponseFormat string   `json:"response_format"`
+-		Speed          *float64 `json:"speed"`
+-		Instructions   string   `json:"instructions"`
+-		StreamFormat   string   `json:"stream_format"`
++		Model          string          `json:"model"`
++		Input          string          `json:"input"`
++		Voice          string          `json:"voice"`
++		ResponseFormat string          `json:"response_format"`
++		Speed          *float64        `json:"speed"`
++		Instructions   string          `json:"instructions"`
++		StreamFormat   string          `json:"stream_format"`
++		ReferenceAudio json.RawMessage `json:"reference_audio"`
+ 	}
+ 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
+ 	if err := c.ShouldBindJSON(&req); err != nil {
+@@ -77,7 +79,12 @@ func (s *Server) SpeechHandler(c *gin.Context) {
+ 		return
+ 	}
+ 
+-	streamSpeech(c, speaker, llm.SpeechRequest{Input: req.Input, Voice: req.Voice}, format)
++	reference, acceptsReference := r.(interface{ SupportsReferenceAudio() bool })
++	if len(req.ReferenceAudio) > 0 && (!acceptsReference || !reference.SupportsReferenceAudio()) {
++		speechError(c, http.StatusBadRequest, "reference_audio requires a PhononHybrid model")
++		return
++	}
++	streamSpeech(c, speaker, llm.SpeechRequest{Input: req.Input, Voice: req.Voice, ReferenceAudio: req.ReferenceAudio}, format)
+ }
+ 
+ func streamSpeech(c *gin.Context, speaker llm.Speaker, req llm.SpeechRequest, format string) {

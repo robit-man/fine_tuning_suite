@@ -12,6 +12,8 @@ from training_suite.evals.runner import (
     tool_smoke,
     write_eval_report,
 )
+from training_suite.evals.speech import ollama_speech_smoke
+from training_suite.evals.transcription import ollama_transcription_smoke
 from training_suite.models.audio_bridge_projector import build_audio_bridge_projector
 from training_suite.models.audio_bridge_release import (
     AudioBridgeReleaseSpec,
@@ -139,6 +141,41 @@ def cmd_omni_audio_smoke(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2, sort_keys=True))
     if not report.get("ok"):
         raise SystemExit(1)
+
+
+def cmd_ollama_speech_smoke(args: argparse.Namespace) -> None:
+    report = ollama_speech_smoke(
+        args.model,
+        ollama_url=args.ollama_url,
+        text=args.text,
+        voice=args.voice,
+        response_format=args.response_format,
+        timeout=args.timeout,
+        audio_out=Path(args.audio_out) if args.audio_out else None,
+    )
+    if args.out:
+        write_eval_report(Path(args.out), report)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    if not report["ok"]:
+        raise SystemExit(1)
+
+
+def cmd_ollama_transcription_smoke(args: argparse.Namespace) -> None:
+    report = ollama_transcription_smoke(
+        args.model, audio=Path(args.audio), expected_text=args.expected_text,
+        ollama_url=args.ollama_url, max_wer=args.max_wer, timeout=args.timeout,
+    )
+    if args.out:
+        write_eval_report(Path(args.out), report)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    if not report["ok"]:
+        raise SystemExit(1)
+
+
+def cmd_phonon_hybrid(args: argparse.Namespace) -> None:
+    from training_suite.phonon_hybrid import main
+
+    main(["--help"] if args.hybrid_help else args.hybrid_args)
 
 
 def cmd_ornith_seed(args: argparse.Namespace) -> None:
@@ -694,6 +731,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     audio_smoke.add_argument("--timeout", type=float, default=900)
     audio_smoke.set_defaults(func=cmd_omni_audio_smoke)
+
+    speech_smoke = sub.add_parser(
+        "ollama-speech-smoke", help="Verify native /v1/audio/speech against an Ollama tag"
+    )
+    speech_smoke.add_argument("model")
+    speech_smoke.add_argument("--ollama-url", default="http://127.0.0.1:11434")
+    speech_smoke.add_argument("--text", default="Ollama is generating this speech from the selected model weights.")
+    speech_smoke.add_argument("--voice", default="default")
+    speech_smoke.add_argument("--response-format", choices=["wav", "pcm"], default="wav")
+    speech_smoke.add_argument("--audio-out", help="Save the native audio bytes")
+    speech_smoke.add_argument("--out", help="Save the JSON gate report")
+    speech_smoke.add_argument("--timeout", type=float, default=180)
+    speech_smoke.set_defaults(func=cmd_ollama_speech_smoke)
+
+    transcription = sub.add_parser("ollama-transcription-smoke", help="Verify native ASR against a recorded fixture")
+    transcription.add_argument("model")
+    transcription.add_argument("--audio", required=True)
+    transcription.add_argument("--expected-text", required=True)
+    transcription.add_argument("--ollama-url", default="http://127.0.0.1:11434")
+    transcription.add_argument("--max-wer", type=float, default=0.1)
+    transcription.add_argument("--timeout", type=float, default=180)
+    transcription.add_argument("--out")
+    transcription.set_defaults(func=cmd_ollama_transcription_smoke)
+
+    hybrid = sub.add_parser("phonon-hybrid", add_help=False, help="Build or serve the Phonon cloning/ASR hybrid")
+    hybrid.add_argument("--help", action="store_true", dest="hybrid_help")
+    hybrid.add_argument("hybrid_args", nargs=argparse.REMAINDER)
+    hybrid.set_defaults(func=cmd_phonon_hybrid)
 
     return parser
 

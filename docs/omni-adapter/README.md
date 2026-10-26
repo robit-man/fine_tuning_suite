@@ -150,6 +150,7 @@ session can reconstruct it from the tag's sidecar layer.
 - [Wire protocol](protocol.md)
 - [GGUF and Ollama layer ABI](gguf-abi.md)
 - [Runtime guide](runtime.md)
+- [Native Ollama speech and Qwen compatibility](native-speech.md)
 - [Build and release runbook](build-and-release.md)
 - [Test plan](testing.md)
 - [First release record](qwen38-27b-e03-release.md)

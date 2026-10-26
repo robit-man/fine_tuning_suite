@@ -1,0 +1,16 @@
+{
+  "official_release": "0.40.11",
+  "release_url": "https://github.com/ollama/ollama/releases/tag/v0.40.11",
+  "endpoint": "/v1/audio/speech",
+  "request_fields": ["model", "input", "voice", "response_format", "speed", "instructions", "stream_format"],
+  "required_fields": ["model", "input"],
+  "runner_fields": ["input", "voice"],
+  "max_input_characters": 4096,
+  "response_formats": ["wav", "pcm"],
+  "sample_rate_hz": 24000,
+  "channels": 1,
+  "sample_width_bits": 16,
+  "reference_audio_field": null,
+  "asr_endpoint": "/v1/audio/transcriptions",
+  "asr_request_encoding": "multipart/form-data"
+}

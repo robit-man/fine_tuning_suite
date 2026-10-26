@@ -1,0 +1,32 @@
+[Unit]
+Description=Phonon hybrid speech cloning and ASR
+After=network.target
+
+[Service]
+Type=simple
+User=roko
+WorkingDirectory=/srv/fine_tuning_suite
+Environment=CUDA_VISIBLE_DEVICES=-1
+Environment=HIP_VISIBLE_DEVICES=-1
+Environment=ROCR_VISIBLE_DEVICES=-1
+Environment=HF_HUB_OFFLINE=1
+Environment=TOKENIZERS_PARALLELISM=false
+Environment=OMP_NUM_THREADS=4
+Environment=OPENBLAS_NUM_THREADS=4
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=OLLAMA_HOST=127.0.0.1:11471
+Environment=OLLAMA_MODELS=/srv/ollama/models
+Environment=OLLAMA_NOPRUNE=1
+Environment=OLLAMA_VULKAN=0
+Environment=GGML_VK_VISIBLE_DEVICES=-1
+Environment=OLLAMA_PHONON_HYBRID_PYTHON=/srv/fine_tuning_suite/.venv-phonon/bin/python
+Environment=OLLAMA_PHONON_HYBRID_ROOT=/srv/fine_tuning_suite
+DevicePolicy=closed
+StateDirectory=phonon-hybrid
+ExecStart=/srv/fine_tuning_suite/training_suite/outputs/phonon-hybrid/ollama-runtime/bin/ollama serve
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

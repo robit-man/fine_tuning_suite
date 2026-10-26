@@ -676,6 +676,23 @@ The full checklist is in
 
 ## Configuration
 
+Native Ollama TTS uses `/v1/audio/speech`; the existing Omni adapter TTS service
+does not satisfy native execution from the installed tag's speech weights.
+See the [native speech compatibility assessment](docs/omni-adapter/native-speech.md)
+for the unmodified official binary constraint, tensor graph incompatibilities,
+reference-voice limitations, and the `ollama-speech-smoke` acceptance command.
+Original Qwen Omni speech weights remain unsupported by stock Ollama 0.40.11;
+distillation into Phonon would create a separate student. Native `speech` is
+tracked separately from the suite's adapter `audio-output` capability.
+
+**[Phonon Echo](docs/phonon-hybrid.md)** now combines Phonon speech, trained
+reference-voice conversion, and Whisper ASR in one model. Its Ollama 0.40.11
+runtime extension executes the requested tag's tensors in an Ollama-managed
+worker and serves `/v1/audio/speech` and `/v1/audio/transcriptions`. Native
+WAV/PCM, transcription, and alternating-speaker checks passed. The unmodified
+official binary does not implement the new hybrid architecture; setup and API
+examples are in the linked guide.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `TRAINING_SUITE_DB` | `training_suite/state/suite.sqlite3` | SQLite database path |

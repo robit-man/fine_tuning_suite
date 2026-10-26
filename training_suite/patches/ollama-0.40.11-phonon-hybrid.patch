@@ -1,16 +1,20 @@
 diff --git a/create/hybrid_test.go b/create/hybrid_test.go
 new file mode 100644
-index 0000000..5bd5311
+index 0000000..7e8a95a
 --- /dev/null
 +++ b/create/hybrid_test.go
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,66 @@
 +package create
 +
 +import (
++	"context"
 +	"os"
 +	"path/filepath"
 +	"slices"
 +	"testing"
++
++	"github.com/ollama/ollama/manifest"
++	"github.com/ollama/ollama/types/model"
 +)
 +
 +func TestPhononHybridImportCapabilitiesAndNestedAssets(t *testing.T) {
@@ -51,6 +55,21 @@ index 0000000..5bd5311
 +		t.Fatal(files)
 +	}
 +}
++
++func TestPhononHybridManifestUsesIndependentRunner(t *testing.T) {
++	t.Setenv("OLLAMA_MODELS", t.TempDir())
++	write := NewSafetensorsManifestWriter(SafetensorsManifestOptions{MinVersion: "0.40.11"})
++	if err := write(context.Background(), "hybrid-test", ManifestInfo{ModelConfig: model.ConfigV2{ModelFamily: "phonon_hybrid"}}); err != nil {
++		t.Fatal(err)
++	}
++	m, err := manifest.ParseNamedManifest(model.ParseName("hybrid-test"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if m.Runner != manifest.RunnerPhononHybrid || m.Format != manifest.FormatSafetensors {
++		t.Fatalf("hybrid metadata: runner=%s format=%s", m.Runner, m.Format)
++	}
++}
 diff --git a/create/inventory.go b/create/inventory.go
 index 11cedeb..b627735 100644
 --- a/create/inventory.go
@@ -82,6 +101,20 @@ index 11cedeb..b627735 100644
  	entries, err := os.ReadDir(dir)
  	if err != nil {
  		return nil, err
+diff --git a/create/manifest.go b/create/manifest.go
+index ba3adc1..1692c9d 100644
+--- a/create/manifest.go
++++ b/create/manifest.go
+@@ -102,7 +102,8 @@ func NewSafetensorsManifestWriter(opts SafetensorsManifestOptions) ManifestWrite
+ 		if err := checkContext(ctx); err != nil {
+ 			return err
+ 		}
+-		return manifest.WriteManifestWithMetadata(name, configLayer, manifestLayers, manifest.RunnerMLX, manifest.FormatSafetensors)
++		runner, format := manifest.MetadataForConfig(config)
++		return manifest.WriteManifestWithMetadata(name, configLayer, manifestLayers, runner, format)
+ 	}
+ }
+ 
 diff --git a/create/metadata.go b/create/metadata.go
 index a170ab6..06e796a 100644
 --- a/create/metadata.go
@@ -164,6 +197,47 @@ index b08fdce..9561b79 100644
  }
  
  // Speaker is implemented by runners that serve speech models. Speech streams
+diff --git a/manifest/manifest.go b/manifest/manifest.go
+index 93766ad..524c17b 100644
+--- a/manifest/manifest.go
++++ b/manifest/manifest.go
+@@ -32,9 +32,10 @@ const (
+ 	MediaTypeManifest     = "application/vnd.docker.distribution.manifest.v2+json"
+ 	MediaTypeManifestList = "application/vnd.ollama.manifest.list.v2+json"
+ 
+-	RunnerMLX      = "mlx"
+-	RunnerGGML     = "ggml"
+-	RunnerLlamaCPP = "llamacpp"
++	RunnerMLX          = "mlx"
++	RunnerGGML         = "ggml"
++	RunnerLlamaCPP     = "llamacpp"
++	RunnerPhononHybrid = "phonon_hybrid"
+ 
+ 	FormatSafetensors = "safetensors"
+ 	FormatGGUF        = "gguf"
+@@ -853,10 +854,10 @@ func selectManifestReferenceWithPreferences(manifests []Manifest, preferences []
+ 
+ func runnerPreferences() []string {
+ 	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+-		return []string{RunnerMLX, RunnerLlamaCPP, RunnerGGML}
++		return []string{RunnerMLX, RunnerLlamaCPP, RunnerGGML, RunnerPhononHybrid}
+ 	}
+ 
+-	return []string{RunnerLlamaCPP, RunnerGGML, RunnerMLX}
++	return []string{RunnerLlamaCPP, RunnerGGML, RunnerMLX, RunnerPhononHybrid}
+ }
+ 
+ // IsTopRunnerPreference reports whether runner is the first runner the
+@@ -883,6 +884,9 @@ func canonicalRunner(runner string) string {
+ // the legacy path are tagged ggml, while converted GGUF manifests can override
+ // the runner to llamacpp when they are written.
+ func MetadataForConfig(config model.ConfigV2) (runner, format string) {
++	if config.ModelFamily == "phonon_hybrid" && config.ModelFormat == FormatSafetensors {
++		return RunnerPhononHybrid, FormatSafetensors
++	}
+ 	switch strings.ToLower(config.ModelFormat) {
+ 	case FormatSafetensors:
+ 		return RunnerMLX, FormatSafetensors
 diff --git a/mlxrunner/client.go b/mlxrunner/client.go
 index 0d46c83..9daf624 100644
 --- a/mlxrunner/client.go
@@ -376,6 +450,29 @@ index 20fe65d..47edef2 100644
  }
  
  // SupportsDraftArchitecture reports whether the MLX runner has a draft constructor for arch.
+diff --git a/server/hybrid_test.go b/server/hybrid_test.go
+new file mode 100644
+index 0000000..a46c30d
+--- /dev/null
++++ b/server/hybrid_test.go
+@@ -0,0 +1,17 @@
++package server
++
++import (
++	"testing"
++
++	"github.com/ollama/ollama/manifest"
++)
++
++func TestPhononHybridPullDoesNotRequireMLX(t *testing.T) {
++	layers := []manifest.Layer{{MediaType: manifest.MediaTypeImageTensor}}
++	if requiresMLX(&manifest.Manifest{Runner: manifest.RunnerPhononHybrid, Layers: layers}) {
++		t.Fatal("CPU hybrid pull must not initialize MLX")
++	}
++	if !requiresMLX(&manifest.Manifest{Runner: manifest.RunnerMLX, Layers: layers}) {
++		t.Fatal("MLX pull must retain its runtime check")
++	}
++}
 diff --git a/server/speech.go b/server/speech.go
 index 26b043e..1badcef 100644
 --- a/server/speech.go

@@ -15,6 +15,8 @@ Ollama's model resolution, scheduler, speech handler, PCM/WAV transport,
 streaming, and transcription route. Ollama starts and owns the hybrid runner;
 the runner loads the requested tag's blobs and verifies their SHA-256 digests.
 It does not call the old Omni adapter or an independently configured service.
+Its manifest declares the `phonon_hybrid` runner; downloading and executing it
+does not require MLX or a GPU.
 
 The first runtime executes all four neural components on CPU in one managed
 process. Its parameter weights come from the installed model tag, not the

@@ -1,11 +1,13 @@
 # Phonon Echo: official Ollama TTS and optional cloning/ASR
 
 The current companion is **`robit/phonon-echo:clone-asr-v2`**, with baked
-`female`, `robot`, and `male` profiles plus `default`. Install adapter 0.2.0
-from the [standalone public repository](https://github.com/robit-man/phonon-echo-ollama).
-Its [model README](https://github.com/robit-man/phonon-echo-ollama/blob/main/OLLAMA_README.md)
-contains the current voice list and API examples. The v1 companion setup below
-documents the preceding release and has no baked profiles.
+`female`, `robot`, and `male` profiles plus `default`. This suite includes the
+profile baker, checkpoint loader, and updated Ollama runner patch. The
+[standalone public repository](https://github.com/robit-man/phonon-echo-ollama)
+provides the same runtime as a separate installation. Its
+[model README](https://github.com/robit-man/phonon-echo-ollama/blob/main/OLLAMA_README.md)
+is intended for the published Ollama model page. `:clone-asr-v1` remains
+compatible and has only `default` baked in.
 
 **`robit/phonon-echo:hybrid-v1` now works in unmodified official Ollama 0.40.11
 for TTS.** `:tts-v1` and `:latest` name the same native speech model. The original
@@ -43,7 +45,7 @@ recording field; the native tag advertises only `speech`, not ASR or cloning.
 Reproduce the prepared native tag without installing the extension:
 
 ```bash
-python -m training_suite.phonon_native_tts prepare --out training_suite/outputs/phonon-official-tts
+python -m training_suite phonon-native-tts prepare --out training_suite/outputs/phonon-official-tts
 OLLAMA_HOST=127.0.0.1:11470 /usr/local/bin/ollama create robit/phonon-echo:hybrid-v1 \
   -f training_suite/outputs/phonon-official-tts/Modelfile
 ```
@@ -61,12 +63,12 @@ These tests establish native TTS, not native reference cloning or ASR.
 
 ## Optional cloning and ASR composite
 
-The separate `robit/phonon-echo:clone-asr-v1` combines Gradium Phonon text-to-speech, its Mimi waveform decoder,
+The separate `robit/phonon-echo:clone-asr-v2` combines Gradium Phonon text-to-speech, its Mimi waveform decoder,
 OpenVoice V2 reference-conditioned voice conversion, and Whisper English ASR.
 It is a composite of pretrained components, with 111.6 million unique parameters;
 it has not been jointly trained. The export is one safetensors checkpoint.
-Ollama stores that checkpoint as 853 named tensor layers plus its tokenizer,
-processor, configuration, and license layers.
+Ollama stores the component weights as 853 named tensors, plus three baked
+speaker buffers in v2 and its tokenizer, processor, configuration, and licenses.
 
 **It requires the Phonon hybrid extension to Ollama 0.40.11.** The official
 unmodified binary does not implement this architecture. The extension retains
@@ -97,7 +99,9 @@ bash training_suite/build_phonon_ollama.sh
 
 OpenVoice's Torch architecture is used directly. Its optional TTS/demo packages
 are unnecessary; Phonon supplies the speech. The build script applies the
-checked-in patch to the official `v0.40.11` source and creates a separate binary.
+checked-in patch to the pinned official `v0.40.11` commit and creates a separate
+`0.40.11+phonon-echo.2` binary. Source directories are keyed by the patch digest,
+so an updated patch gets its own checkout rather than conflicting with an older build.
 It does not overwrite an existing official Ollama installation.
 
 Run the extended Ollama daemon, substituting absolute paths for your checkout:
@@ -115,7 +119,7 @@ From another terminal, use that daemon to pull the model:
 ```bash
 OLLAMA_HOST=127.0.0.1:11471 \
   training_suite/outputs/phonon-hybrid/ollama-runtime/bin/ollama \
-  pull robit/phonon-echo:clone-asr-v1
+  pull robit/phonon-echo:clone-asr-v2
 ```
 
 The host service example is [deploy/phonon-hybrid.service](../deploy/phonon-hybrid.service).
@@ -123,12 +127,12 @@ Adapt its paths and account before installing it on another host.
 
 ## Generate and clone speech
 
-The existing speech request fields work unchanged for the model's default voice:
+Choose `default`, `female`, `robot`, or `male` with the existing `voice` field:
 
 ```bash
 curl http://127.0.0.1:11471/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model":"robit/phonon-echo:clone-asr-v1","input":"Hello from Phonon Echo.","voice":"default"}' \
+  -d '{"model":"robit/phonon-echo:clone-asr-v2","input":"Hello from Phonon Echo.","voice":"female"}' \
   --output speech.wav
 ```
 
@@ -144,7 +148,7 @@ import httpx
 reference = base64.b64encode(Path("reference.wav").read_bytes()).decode()
 with httpx.Client(timeout=180) as client:
     with client.stream("POST", "http://127.0.0.1:11471/v1/audio/speech", json={
-        "model": "robit/phonon-echo:clone-asr-v1",
+        "model": "robit/phonon-echo:clone-asr-v2",
         "input": "The small robot speaks clearly.",
         "voice": "default",
         "reference_audio": {"format": "wav", "data": reference},
@@ -156,9 +160,10 @@ with httpx.Client(timeout=180) as client:
                 output.write(chunk)
 ```
 
-Reference recordings are processed locally. They and their derived enrollment
-embeddings are not included in the public checkpoint. No transcript of the
-reference is required. Short, clean recordings work best; the speech handler
+Per-request reference recordings are processed locally and are not persisted
+in the checkpoint. The three pre-cloned profiles are included as speaker
+embeddings; their source recordings are absent. No transcript of the reference
+is required. Short, clean recordings work best; the speech handler
 has a 1 MiB request limit, so use a short mono WAV. The reference decoder also
 rejects silence, invalid samples, and recordings outside its duration bounds.
 
@@ -172,7 +177,7 @@ stream format is audio, matching the base speech API's current controls.
 
 ```bash
 curl http://127.0.0.1:11471/v1/audio/transcriptions \
-  -F model=robit/phonon-echo:clone-asr-v1 \
+  -F model=robit/phonon-echo:clone-asr-v2 \
   -F file=@recording.wav
 ```
 
@@ -181,6 +186,44 @@ transcription, not general chat, tools, or reasoning. Speech generation is also
 English. The exported model is not Qwen Omni and does not claim its modalities.
 
 ## Preparation and validation
+
+Bake additional named voices from an installed hybrid tag on CPU:
+
+```bash
+CUDA_VISIBLE_DEVICES=-1 .venv-phonon/bin/python -m training_suite phonon-bake-voices \
+  --models-directory /srv/ollama/models \
+  --source-model robit/phonon-echo:clone-asr-v1 \
+  --voice female=/path/to/female-reference.wav \
+  --voice robot=/path/to/robot-reference.wav \
+  --voice male=/path/to/male-reference.wav \
+  --out training_suite/outputs/my-voices/model
+```
+
+`--models-directory` defaults to `OLLAMA_MODELS`, then `~/.ollama/models`.
+The loader verifies SHA-256 digests of the installed manifest and tensor blobs;
+no original component checkpoints are required. The baker trims outer silence,
+normalizes reference amplitude, and stores `[1,256,1]` OpenVoice embeddings as
+`voices.NAME` buffers. Export includes the full graph, licenses, a model card,
+and a file-integrity manifest. The receipt beside the export records source
+hashes and profile statistics without recording filenames or copying audio.
+Use a new output directory. Existing baked names cannot be overwritten; start
+from v1 for a fresh set, or extend v2 with new names. `default` is reserved.
+
+Create a local tag from the export with the extended daemon:
+
+```bash
+printf 'FROM %s\n' "$PWD/training_suite/outputs/my-voices/model" \
+  > training_suite/outputs/my-voices/Modelfile
+OLLAMA_HOST=127.0.0.1:11471 \
+  training_suite/outputs/phonon-hybrid/ollama-runtime/bin/ollama create my-voices \
+  -f training_suite/outputs/my-voices/Modelfile
+```
+
+Named profiles survive checkpoint reloads and appear in Ollama's speech voice
+inventory. The development server's `/v1/audio/voices` also lists them and
+rejects attempts to overwrite them through enrollment. Before publishing a new
+tag, run the suite's `ollama-speech-smoke` and `ollama-transcription-smoke`
+commands against that daemon, plus reference-speaker fidelity checks.
 
 `python -m training_suite phonon-hybrid download --out SOURCES` downloads the
 pinned source checkpoints. `phonon-hybrid build` combines them, and the optional

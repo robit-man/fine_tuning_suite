@@ -95,7 +95,8 @@ def _converter(config):
 
 
 class PhononHybrid(torch.nn.Module):
-    def __init__(self, phonon, codec, converter, asr, tokenizer, processor, converter_config, default_voice):
+    def __init__(self, phonon, codec, converter, asr, tokenizer, processor, converter_config, default_voice,
+                 voice_profiles=None):
         super().__init__()
         self.phonon = phonon
         self.codec = codec
@@ -105,6 +106,9 @@ class PhononHybrid(torch.nn.Module):
         self.processor = processor
         self.converter_config = converter_config
         self.register_buffer("default_voice", default_voice)
+        self.voices = torch.nn.Module()
+        for name, embedding in (voice_profiles or {}).items():
+            self.add_voice_profile(name, embedding)
         self.lock = threading.RLock()
         self.eval().requires_grad_(False)
 
@@ -112,11 +116,34 @@ class PhononHybrid(torch.nn.Module):
     def device(self):
         return self.default_voice.device
 
+    def add_voice_profile(self, name, embedding):
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", name) or name == "default":
+            raise ValueError("invalid baked voice name")
+        if name in self.voices._buffers:
+            raise ValueError("baked voice already exists")
+        value = torch.as_tensor(embedding, dtype=torch.float32).detach().clone()
+        if tuple(value.shape) != (1, 256, 1) or not torch.isfinite(value).all() or value.norm() == 0:
+            raise ValueError("baked voice requires a finite, nonzero [1,256,1] speaker embedding")
+        self.voices.register_buffer(name, value)
+
+    def voice_names(self):
+        return ["default", *sorted(self.voices._buffers)]
+
+    def voice_embedding(self, name):
+        if name not in self.voices._buffers:
+            raise ValueError(f"unknown baked voice: {name}")
+        return self.voices._buffers[name].detach().clone()
+
     @classmethod
     def from_components(cls, *, phonon_dir: Path, codec_dir: Path, converter_dir: Path, asr_dir: Path):
         from safetensors.torch import load_file
-        from transformers import (AutoProcessor, AutoTokenizer, GradiumPhononTTSForConditionalGeneration,
-                                  PocketTTSAudioTokenizerModel, WhisperForConditionalGeneration)
+        from transformers import (
+            AutoProcessor,
+            AutoTokenizer,
+            GradiumPhononTTSForConditionalGeneration,
+            PocketTTSAudioTokenizerModel,
+            WhisperForConditionalGeneration,
+        )
 
         options = {"local_files_only": True, "dtype": torch.float32, "attn_implementation": "eager"}
         phonon = GradiumPhononTTSForConditionalGeneration.from_pretrained(phonon_dir, **options)
@@ -145,8 +172,9 @@ class PhononHybrid(torch.nn.Module):
                   "phonon_generation": self.phonon.generation_config.to_dict(),
                   "asr_generation": self.asr.generation_config.to_dict(),
                   "default_voice_shape": list(self.default_voice.shape),
+                  "baked_voices": sorted(self.voices._buffers),
                   "composition": ["phonon", "mimi_decoder", "openvoice_v2", "whisper"],
-                  "ollama_runtime": {"base_version": "0.40.11", "extension": "phonon-hybrid.1",
+                  "ollama_runtime": {"base_version": "0.40.11", "extension": "phonon-echo.2",
                                      "setup": "https://github.com/robit-man/fine_tuning_suite/blob/main/docs/phonon-hybrid.md"},
                   "jointly_trained": False, "official_ollama_loader_supported": False}
         (directory / "config.json").write_text(json.dumps(config, indent=2) + "\n")
@@ -177,9 +205,17 @@ class PhononHybrid(torch.nn.Module):
 
     @classmethod
     def from_state(cls, directory, config, weights, *, device="cpu"):
-        from transformers import (AutoProcessor, AutoTokenizer, GenerationConfig, GradiumPhononTTSConfig,
-                                  GradiumPhononTTSForConditionalGeneration, PocketTTSAudioTokenizerConfig,
-                                  PocketTTSAudioTokenizerModel, WhisperConfig, WhisperForConditionalGeneration)
+        from transformers import (
+            AutoProcessor,
+            AutoTokenizer,
+            GenerationConfig,
+            GradiumPhononTTSConfig,
+            GradiumPhononTTSForConditionalGeneration,
+            PocketTTSAudioTokenizerConfig,
+            PocketTTSAudioTokenizerModel,
+            WhisperConfig,
+            WhisperForConditionalGeneration,
+        )
 
         phonon = GradiumPhononTTSForConditionalGeneration(GradiumPhononTTSConfig.from_dict(config["phonon"]))
         codec = PocketTTSAudioTokenizerModel(PocketTTSAudioTokenizerConfig.from_dict(config["codec"]))
@@ -189,7 +225,8 @@ class PhononHybrid(torch.nn.Module):
         model = cls(phonon, codec, _converter(config["converter"]), asr,
                     AutoTokenizer.from_pretrained(directory / "phonon_tokenizer", local_files_only=True),
                     AutoProcessor.from_pretrained(directory / "asr_processor", local_files_only=True),
-                    config["converter"], torch.zeros(config["default_voice_shape"]))
+                    config["converter"], torch.zeros(config["default_voice_shape"]),
+                    voice_profiles={name: torch.ones(1, 256, 1) for name in config.get("baked_voices", [])})
         model.load_state_dict(weights, strict=True)
         return model.to(device).eval().requires_grad_(False)
 

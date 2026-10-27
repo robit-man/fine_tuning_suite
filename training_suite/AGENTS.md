@@ -143,8 +143,12 @@ The operator requested pre-cloned profiles named `female`, `robot`, and `male`.
 They are baked as model buffers in `robit/phonon-echo:clone-asr-v2`; `default`
 is also available. This companion requires public adapter 0.2.0 / runtime
 `0.40.11+phonon-echo.2` from https://github.com/robit-man/phonon-echo-ollama .
-The updated `phonon-hybrid.service` runs that standalone runtime on 11471.
-Use its `phonon_echo.bake_voices` module for future preparation. The user
+The suite now includes that runner patch and profile baking mechanism directly.
+Use `python -m training_suite phonon-bake-voices` for future preparation, backed
+by `training_suite/training/phonon_presets.py` and the verified installed-model
+loader in `training_suite/models/phonon_hybrid_storage.py`. The checked-in
+`phonon-hybrid.service` template uses the suite checkout and its optional venv
+on 11471. Updating the template does not change an installed live service. The user
 authorized reupload and speaker playback after cloning. Public documentation
 must use only the profile names and must not include original recording filenames.
 The official TTS tags still use their supported native Phonon default voice.

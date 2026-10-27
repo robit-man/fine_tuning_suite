@@ -8,11 +8,11 @@ from pathlib import Path
 
 import torch
 from flask import Response, jsonify, request
-from safetensors.torch import load_file
 from waitress import serve
 
-from training_suite.models.phonon_hybrid import PhononHybrid, digest, read_audio
 from training_suite.phonon_hybrid import create_app
+from training_suite.models.phonon_hybrid import read_audio
+from training_suite.models.phonon_hybrid_storage import load_descriptor
 
 
 def main():
@@ -23,19 +23,7 @@ def main():
     torch.set_num_threads(4)
     descriptor = json.loads(args.descriptor.read_text())
     directory = Path(descriptor["directory"])
-    weights = {}
-    for blob in descriptor["tensor_blobs"]:
-        path = Path(blob["path"])
-        if "sha256:" + digest(path) != blob["digest"]:
-            raise ValueError("Ollama tensor blob failed integrity verification")
-        for name, value in load_file(str(path)).items():
-            if name in weights:
-                raise ValueError("duplicate tensor in Ollama hybrid model: " + name)
-            weights[name] = value
-    config = json.loads((directory / "config.json").read_text())
-    model = PhononHybrid.from_state(directory, config, weights)
-    memory = sum(t.numel() * t.element_size() for t in weights.values())
-    del weights
+    model, memory = load_descriptor(descriptor)
     app = create_app(model, voices_dir=directory / "voices", managed_by_ollama=True)
 
     @app.get("/v1/status")

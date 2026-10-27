@@ -323,7 +323,7 @@ index 0d46c83..9daf624 100644
  
 diff --git a/mlxrunner/hybrid.go b/mlxrunner/hybrid.go
 new file mode 100644
-index 0000000..18722f5
+index 0000000..02d2c0f
 --- /dev/null
 +++ b/mlxrunner/hybrid.go
 @@ -0,0 +1,110 @@
@@ -452,14 +452,15 @@ index 20fe65d..47edef2 100644
  // SupportsDraftArchitecture reports whether the MLX runner has a draft constructor for arch.
 diff --git a/server/hybrid_test.go b/server/hybrid_test.go
 new file mode 100644
-index 0000000..0b57959
+index 0000000..fcdea62
 --- /dev/null
 +++ b/server/hybrid_test.go
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,44 @@
 +package server
 +
 +import (
 +	"context"
++	"slices"
 +	"testing"
 +
 +	"github.com/ollama/ollama/manifest"
@@ -488,6 +489,17 @@ index 0000000..0b57959
 +		t.Fatalf("hybrid must remain visible in /api/tags: %+v", rows)
 +	}
 +}
++
++func TestPhononHybridListsBakedVoices(t *testing.T) {
++	mf := &manifest.Manifest{Runner: manifest.RunnerPhononHybrid, Layers: []manifest.Layer{
++		{Name: "voices.female", MediaType: manifest.MediaTypeImageTensor},
++		{Name: "voices.robot", MediaType: manifest.MediaTypeImageTensor},
++		{Name: "voices.male", MediaType: manifest.MediaTypeImageTensor},
++	}}
++	if got := speechVoices(mf); !slices.Equal(got, []string{"default", "female", "male", "robot"}) {
++		t.Fatalf("baked voice catalog: %v", got)
++	}
++}
 diff --git a/server/routes.go b/server/routes.go
 index fdf7a18..2a98629 100644
 --- a/server/routes.go
@@ -502,7 +514,7 @@ index fdf7a18..2a98629 100644
  		return manifest.RunnerGGML, nil
  	case manifest.RunnerLlamaCPP, "llama.cpp", "llama-cpp", "llama_cpp":
 diff --git a/server/speech.go b/server/speech.go
-index 26b043e..1badcef 100644
+index 26b043e..b9aedb3 100644
 --- a/server/speech.go
 +++ b/server/speech.go
 @@ -3,6 +3,7 @@ package server
@@ -549,3 +561,26 @@ index 26b043e..1badcef 100644
  }
  
  func streamSpeech(c *gin.Context, speaker llm.Speaker, req llm.SpeechRequest, format string) {
+@@ -149,11 +156,14 @@ func speechError(c *gin.Context, status int, message string) {
+ // speechVoices lists the voices create stored as voices.<name> tensors.
+ func speechVoices(mf *manifest.Manifest) []string {
+-	var voices []string
+-	for _, layer := range mf.Layers {
+-		if name, ok := strings.CutPrefix(layer.Name, "voices."); ok && layer.MediaType == manifest.MediaTypeImageTensor {
+-			voices = append(voices, name)
+-		}
+-	}
+-	slices.SortFunc(voices, func(a, b string) int { return cmp.Compare(strings.ToLower(a), strings.ToLower(b)) })
+-	return voices
++	var voices []string
++	if mf.Runner == manifest.RunnerPhononHybrid {
++		voices = append(voices, "default")
++	}
++	for _, layer := range mf.Layers {
++		if name, ok := strings.CutPrefix(layer.Name, "voices."); ok && layer.MediaType == manifest.MediaTypeImageTensor && !slices.Contains(voices, name) {
++			voices = append(voices, name)
++		}
++	}
++	slices.SortFunc(voices, func(a, b string) int { return cmp.Compare(strings.ToLower(a), strings.ToLower(b)) })
++	return voices
+ }

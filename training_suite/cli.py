@@ -178,6 +178,18 @@ def cmd_phonon_hybrid(args: argparse.Namespace) -> None:
     main(["--help"] if args.hybrid_help else args.hybrid_args)
 
 
+def cmd_phonon_bake_voices(args: argparse.Namespace) -> None:
+    from training_suite.training.phonon_presets import run
+
+    run(args)
+
+
+def cmd_phonon_native_tts(args: argparse.Namespace) -> None:
+    from training_suite.phonon_native_tts import main
+
+    main(["--help"] if args.native_help else args.native_args)
+
+
 def cmd_ornith_seed(args: argparse.Namespace) -> None:
     """Register the canonical Ornith 9B test case without downloading weights."""
     result = inspect_intake(
@@ -759,6 +771,17 @@ def build_parser() -> argparse.ArgumentParser:
     hybrid.add_argument("--help", action="store_true", dest="hybrid_help")
     hybrid.add_argument("hybrid_args", nargs=argparse.REMAINDER)
     hybrid.set_defaults(func=cmd_phonon_hybrid)
+
+    from training_suite.training.phonon_presets import add_arguments
+
+    presets = sub.add_parser("phonon-bake-voices", help="Bake named speaker profiles into hybrid model weights")
+    add_arguments(presets)
+    presets.set_defaults(func=cmd_phonon_bake_voices)
+
+    native = sub.add_parser("phonon-native-tts", add_help=False, help="Prepare or check TTS for official Ollama")
+    native.add_argument("--help", action="store_true", dest="native_help")
+    native.add_argument("native_args", nargs=argparse.REMAINDER)
+    native.set_defaults(func=cmd_phonon_native_tts)
 
     return parser
 

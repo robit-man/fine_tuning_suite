@@ -694,6 +694,13 @@ and `male` profiles, reference voice conversion, and Whisper ASR through the
 [optional runtime extension](https://github.com/robit-man/phonon-echo-ollama) on 11471. Those extra
 capabilities remain unsupported by the official binary; see the linked guide.
 
+The suite now prepares these models directly: `phonon-native-tts` prepares
+official Ollama TTS, `phonon-hybrid` builds the cloning/ASR composite, and
+`phonon-bake-voices` embeds named reference profiles into its weights. The
+profile baker reads verified tensors from an installed Ollama tag and exports
+a complete checkpoint with licenses and a preparation receipt. See the
+[preparation commands](docs/phonon-hybrid.md#preparation-and-validation).
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `TRAINING_SUITE_DB` | `training_suite/state/suite.sqlite3` | SQLite database path |

@@ -104,6 +104,12 @@ def create_app(engine, *, voices_dir: Path, model_id=MODEL_ID, managed_by_ollama
     app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
     store = VoiceStore(voices_dir)
 
+    def baked_voices():
+        return engine.voice_names() if hasattr(engine, "voice_names") else ["default"]
+
+    def available_voices():
+        return ["default", *sorted((set(store.names()) | set(baked_voices())) - {"default"})]
+
     def model_requested(value):
         if value != model_id:
             raise ValueError(f"model must be {model_id}")
@@ -122,7 +128,7 @@ def create_app(engine, *, voices_dir: Path, model_id=MODEL_ID, managed_by_ollama
     def health():
         return jsonify({"status": "ready", "model": model_id, "runtime": "phonon-hybrid",
                         "official_ollama": False, "device": str(engine.device),
-                        "capabilities": ["speech", "voice-cloning", "transcription"], "voices": store.names()})
+                        "capabilities": ["speech", "voice-cloning", "transcription"], "voices": available_voices()})
 
     @app.get("/v1/models")
     def models():
@@ -131,8 +137,10 @@ def create_app(engine, *, voices_dir: Path, model_id=MODEL_ID, managed_by_ollama
     @app.route("/v1/audio/voices", methods=["GET", "POST"])
     def voices():
         if request.method == "GET":
-            return jsonify({"voices": store.names()})
+            return jsonify({"voices": available_voices()})
         name = VoiceStore.validate_id(request.form.get("name", ""))
+        if name in baked_voices():
+            raise FileExistsError("voice name belongs to a baked model profile")
         upload = request.files.get("file")
         if upload is None:
             raise ValueError("file is required")
@@ -191,7 +199,7 @@ def create_app(engine, *, voices_dir: Path, model_id=MODEL_ID, managed_by_ollama
             audio, rate = read_audio(_reference_bytes(body["reference_audio"]), max_seconds=30)
             speaker = engine.speaker_embedding(audio, rate)
         elif voice != "default":
-            speaker = store.get(voice)
+            speaker = engine.voice_embedding(voice) if voice in baked_voices() else store.get(voice)
         started = time.monotonic()
         chunks = iter(engine.iter_speech(text, speaker=speaker)) if hasattr(engine, "iter_speech") else iter([engine.synthesize(text, speaker=speaker)])
         # Generate the first chunk before committing HTTP 200, so inference
@@ -242,6 +250,7 @@ def main(argv=None):
         download_components(args.out)
         return
     import torch
+
     from training_suite.models.phonon_hybrid import PhononHybrid
 
     torch.set_num_threads(4 if args.command == "build" else args.threads)

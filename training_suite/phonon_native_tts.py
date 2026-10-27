@@ -87,7 +87,7 @@ def main(argv=None):
     build.add_argument("--out", type=Path, required=True)
     check = commands.add_parser("ready")
     check.add_argument("--url", default="http://127.0.0.1:11470")
-    check.add_argument("--model", default="robit/phonon-echo:hybrid")
+    check.add_argument("--model", default="robit/phonon-echo:hybrid-v1")
     args = parser.parse_args(argv)
     print(json.dumps(prepare(args.out) if args.command == "prepare" else ready(args.url, args.model), indent=2))
 

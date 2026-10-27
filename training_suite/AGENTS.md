@@ -140,7 +140,7 @@ POST /api/omni/cascade              → execute configured audio/language/TTS st
 ### Current operator direction: official Ollama must generate TTS, 2026-10-26
 
 The operator requested pre-cloned profiles named `female`, `robot`, and `male`.
-They are baked as model buffers in `robit/phonon-echo:clone-asr-v2`; `default`
+They are baked as model buffers in `robit/phonon-echo:clone`; `default`
 is also available. This companion requires public adapter 0.2.0 / runtime
 `0.40.11+phonon-echo.2` from https://github.com/robit-man/phonon-echo-ollama .
 The updated `phonon-hybrid.service` runs that standalone runtime on 11471.
@@ -158,7 +158,7 @@ Phonon/OpenVoice/Whisper composite remains separate and must be identified as
 requiring an extension for reference cloning and ASR. Existing GPU negotiation
 and operator pauses apply. Do not route through the old Omni adapter.
 
-`robit/phonon-echo:hybrid-v1`, `:tts-v1`, and `:latest` are the corrected official
+`robit/phonon-echo:hybrid` and `:tts` are the corrected official
 TTS tags. `phonon-official-tts.service` uses unmodified `/usr/local/bin/ollama`
 and its official MLX runtime on 127.0.0.1:11470 under a 4096 MiB GPU lease. It
 passed WAV/PCM and three-sentence fidelity checks. The broker's CPU metadata
@@ -167,14 +167,14 @@ daemon must not execute CUDA speech. Read `docs/phonon-hybrid.md` and use
 Official Phonon supports speech only, with no per-request reference audio or
 ASR graph.
 
-The full composite is preserved as `robit/phonon-echo:clone-asr-v1`, using Ollama
+The full composite is preserved as `robit/phonon-echo:clone`, using Ollama
 0.40.11 plus the checked-in Phonon hybrid runner patch. Its extended Ollama
 speech and transcription endpoints passed WAV/PCM, text fidelity, reference
 conditioning, and A/B/A speaker checks. Use `training_suite/build_phonon_ollama.sh`
 only for this optional composite; never claim that the unmodified official
 binary supports its new architecture. The public checkpoint contains
-pretrained components and the default public Phonon voice, not test recordings
-or private reference speaker embeddings. The operator authorized publishing
+pretrained components, the default public Phonon voice, and the requested
+baked profile embeddings. Original reference recordings are not distributed. The operator authorized publishing
 the model to Ollama after native API tests pass. No extra approval is needed
 for that authorized publication.
 
